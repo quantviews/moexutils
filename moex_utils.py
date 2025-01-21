@@ -5,7 +5,22 @@ import apimoex
 import pandas as pd
 from datetime import datetime
 
-def get_moex_stock(ticker, start='2023-01-01', end=None, session=None):
+def get_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> pd.DataFrame:
+    """
+    Fetches stock data from the Moscow Exchange (MOEX) for a given ticker symbol within a specified date range.
+    Parameters:
+    ticker (str): The ticker symbol of the stock to fetch data for.
+    start (str): The start date for the data in 'YYYY-MM-DD' format. Default is '2023-01-01'.
+    end (str): The end date for the data in 'YYYY-MM-DD' format. Default is None, which sets the end date to today.
+    session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
+    Returns:
+    pd.DataFrame: A DataFrame containing the stock data with columns 'date', 'value_rub', and 'volume'.
+    Raises:
+    ValueError: If the date format for 'start' or 'end' is invalid, or if the start date is after the end date.
+    KeyError: If the expected columns ('begin' or 'volume') are missing in the API response.
+    ConnectionError: If there is an error while making the API request.
+    RuntimeError: If there is an error during data processing.
+    """
     # Set the default end date to today if not provided
     if end is None:
         end = datetime.today().strftime('%Y-%m-%d')
@@ -29,7 +44,11 @@ def get_moex_stock(ticker, start='2023-01-01', end=None, session=None):
         # Fetch data from the MOEX API
         data = apimoex.get_market_candles(session=session, security=ticker, start=start, end=end)
         
-        # Convert to DataFrame and process the data
+        # Check if the response data is empty
+        if not data:
+            raise ValueError("The API response is empty.")
+        
+            df.rename(columns={'begin': 'date', 'value': 'value_rub'}, inplace=True)
         df = pd.DataFrame(data)
         if 'begin' in df.columns:
             df['begin'] = pd.to_datetime(df['begin'])
@@ -41,7 +60,8 @@ def get_moex_stock(ticker, start='2023-01-01', end=None, session=None):
         
         # Handle data type conversion
         if 'volume' in df.columns:
-            df['volume'] = df['volume'].astype('float64')
+            if df['volume'].dtype != 'float64':
+                df['volume'] = df['volume'].astype('float64')
         else:
             raise KeyError("The expected 'volume' column is missing in the response.")
         
@@ -52,13 +72,13 @@ def get_moex_stock(ticker, start='2023-01-01', end=None, session=None):
     except Exception as e:
         raise RuntimeError(f"An error occurred during data processing: {e}")
 
-def get_moex_index(ticker, start='2023-01-01', end=None):
+def get_moex_index(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> pd.DataFrame:
     """
     Fetch historical data for a specified index from the Moscow Exchange (MOEX) API.
 
     This function retrieves index data for the specified index (defined by ticker) over a defined time range. 
     The data is returned as a pandas DataFrame with relevant columns such as the trade date, 
-    index value, and closing price.
+    index volume, and closing price (index value).
 
     Parameters:
     ----------
@@ -72,13 +92,12 @@ def get_moex_index(ticker, start='2023-01-01', end=None):
         The end date for the data retrieval period in 'YYYY-MM-DD' format. 
         If not provided, the current date will be used.
 
+    session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
     Returns:
-    -------
-    pandas.DataFrame
-        A DataFrame containing the historical index data with the following columns:
-        - 'index_value': The index value for the day (corresponding to the VALUE field in the MOEX API).
-        - 'close': The closing price of the index for that date.
-        - 'date': The date of the trade, which serves as the DataFrame index.
+    pd.DataFrame: A DataFrame containing the historical index data with the following columns:
+    - 'index_value': The index value for the day (corresponding to the VALUE field in the MOEX API).
+    - 'close': The closing price of the index for that date.
+    - 'date': The date of the trade, which serves as the DataFrame index.
 
     Raises:
     -------
@@ -118,7 +137,9 @@ def get_moex_index(ticker, start='2023-01-01', end=None):
     if start_date > end_date:
         raise ValueError("The start date cannot be after the end date.")
     
-    with requests.Session() as session:
+    # Use the session if provided, otherwise create a new one
+    if session is None:
+        session = requests.Session()
         try:
             # Fetch data from MOEX API
             data = apimoex.get_market_history(
@@ -130,17 +151,18 @@ def get_moex_index(ticker, start='2023-01-01', end=None):
                 engine='stock'
             )
             
-            # Convert data to DataFrame
+            # Check if the response data is empty
+            if not data:
+                raise ValueError("The API response is empty.")
+                
             df = pd.DataFrame(data)
-            
-            # Check if the expected columns are present
             required_columns = ['TRADEDATE', 'VALUE', 'CLOSE']
             if not all(col in df.columns for col in required_columns):
                 raise KeyError("The expected columns are missing in the API response.")
             
             # Convert date column to datetime and rename columns
             df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE']).dt.date
-            df.rename({'TRADEDATE': 'date', 'VALUE': 'index_value', 'CLOSE': 'close'}, axis='columns', inplace=True)
+            df.rename({'TRADEDATE': 'date', 'VALUE': 'volume', 'CLOSE': 'close'}, axis='columns', inplace=True)
             
             # Set the 'date' column as the index
             df.set_index('date', inplace=True)
