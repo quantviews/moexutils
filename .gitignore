@@ -1,0 +1,10 @@
+data/
+metadata
+
+# Игнорировать все Excel файлы
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+*.ods
+*.parquet
