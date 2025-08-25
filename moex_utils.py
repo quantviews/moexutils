@@ -352,9 +352,18 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     Returns:
     pd.DataFrame: The DataFrame with an added 'adj_close' column. Returns the original DataFrame if no dividend data is found.
     """
-    if 'ticker' not in df.columns or df.empty:
-        print("Warning: DataFrame is empty or does not contain a 'ticker' column.")
+    if df.empty or 'ticker' not in df.columns or 'close' not in df.columns:
+        print("Warning: DataFrame пуст или нет колонок 'ticker'/'close'. Возвращаю как есть.")
         return df
+    # Убедимся, что индекс — даты
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df = df.copy()
+            df.index = pd.to_datetime(df.index)
+        except Exception:
+            print("Warning: индекс не преобразуется в даты. Возвращаю без корректировки.")
+            df['adj_close'] = df['close']
+            return df
 
     ticker = df['ticker'].iloc[0]
     div_file = os.path.join(div_folder, f"{ticker}.csv")
@@ -366,6 +375,10 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
 
     try:
         div_df = pd.read_csv(div_file, parse_dates=['closing_date'])
+        div_df.dropna(subset=['closing_date'], inplace=True)
+        div_df = div_df[div_df['dividend_value'] > 0]
+        div_df.sort_values(by='closing_date', inplace=True)
+        dividends_df = div_df
     except Exception as e:
         print(f"Error reading dividend file for {ticker}: {e}")
         df['adj_close'] = df['close']
@@ -380,29 +393,35 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         return df
 
     # Calculate adjusted close prices using a proportional adjustment factor
-    adj_close = df['close'].copy()
+    #adj_close = df['close'].copy()
+    adj = df['close'].astype(float).copy()
 
-    # Process dividends in reverse chronological order
-    for _, row in div_df.iloc[::-1].iterrows():
-        closing_date = row['closing_date']
-        dividend = row['dividend_value']
+    # Идём от последних дивидендов к ранним
+    for row in div_df.iloc[::-1].itertuples(index=False):
+        ex_dividend_date = row.closing_date
+        dividend_value = float(row.dividend_value)
 
-        price_lookup_date_series = df.index[df.index < closing_date]
-        if price_lookup_date_series.empty:
+        # позиция справа: всё строго ДО экс-даты попадает под корректировку
+        pos = adj.index.searchsorted(ex_dividend_date, side='right')
+
+        # если экс-дата раньше всех наших данных — пропускаем
+        if pos == 0:
             continue
 
-        price_before_div_date = price_lookup_date_series.max()
-        price_before_div = df.loc[price_before_div_date, 'close']
-
-        if price_before_div <= 0:
+        close_before = df['close'].iloc[pos - 1]
+        if pd.isna(close_before) or close_before <= 0:
+            # защита от деления на ноль/NaN
             continue
 
-        adj_factor = 1 - (dividend / price_before_div)
-        
-        mask = df.index <= price_before_div_date
-        adj_close.loc[mask] *= adj_factor
+        adjustment_factor = 1.0 - (dividend_value / float(close_before))
+        # опционально: защита от странных значений
+        # if adjustment_factor <= 0:
+        #     continue
 
-    df['adj_close'] = adj_close
+        # применяем ко ВСЕМ прошлым ценам (по индексам до pos)
+        adj.iloc[:pos] = adj.iloc[:pos] * adjustment_factor
+
+    df['adj_close'] = adj
     return df
 
 def add_adj_close_to_all_stocks(div_folder: str) -> None:
