@@ -188,30 +188,100 @@ def get_moex_index(ticker: str, start: str = '2023-01-01', end: str = None, sess
     
     return df
 
-def save_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> None:
-    """
-    Downloads stock data for a given ticker symbol and saves it in Parquet format.
+# def save_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> None:
+#     """
+#     Downloads stock data for a given ticker symbol and saves it in Parquet format.
     
-    Parameters:
-    ticker (str): The ticker symbol of the stock to fetch data for.
-    start (str): The start date for the data in 'YYYY-MM-DD' format. Default is '2023-01-01'.
-    end (str): The end date for the data in 'YYYY-MM-DD' format. Default is None, which sets the end date to today.
-    session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
-    """
-    # Fetch the stock data using the existing function
-    df = get_moex_stock(ticker, start, end, session)
+#     Parameters:
+#     ticker (str): The ticker symbol of the stock to fetch data for.
+#     start (str): The start date for the data in 'YYYY-MM-DD' format. Default is '2023-01-01'.
+#     end (str): The end date for the data in 'YYYY-MM-DD' format. Default is None, which sets the end date to today.
+#     session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
+#     """
+#     # Fetch the stock data using the existing function
+#     df = get_moex_stock(ticker, start, end, session)
     
-    # Print message with ticker name, start date, and end date
-    print(f"Downloading data for ticker: {ticker}, from {start} to {end if end else 'today'}")
+#     # Print message with ticker name, start date, and end date
+#     print(f"Downloading data for ticker: {ticker}, from {start} to {end if end else 'today'}")
     
-    # Create a directory named after the ticker if it doesn't exist
-    os.makedirs(os.path.join(DATA_FOLDER, ticker), exist_ok=True)
+#     # Create a directory named after the ticker if it doesn't exist
+#     os.makedirs(os.path.join(DATA_FOLDER, ticker), exist_ok=True)
 
-    # Define the file path for the Parquet file
-    file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
+#     # Define the file path for the Parquet file
+#     file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
     
-    # Save the DataFrame to Parquet format
-    df.to_parquet(file_path)
+#     # Save the DataFrame to Parquet format
+#     df.to_parquet(file_path)
+
+
+def save_moex_stock(
+    ticker: str,
+    start: str = "2023-01-01",
+    end: str | None = None,
+    session: requests.Session | None = None,
+    frequency: int = 24,
+    out_dir: str = DATA_FOLDER,
+) -> str | None:
+    """
+    Скачивает данные по тикеру и сохраняет в Parquet: DATA_FOLDER/<TICKER>/<TICKER>.parquet
+    Возвращает путь к файлу или None (если данных нет / ошибка).
+    Не роняет пакетный цикл: проблемные тикеры (например, POLY) пропускаются.
+    """
+    # нормализуем даты
+    if end is None:
+        end = datetime.today().strftime("%Y-%m-%d")
+
+    # информативный лог
+    print(f"[INFO] {ticker}: fetching {start} → {end}, freq={frequency}")
+
+    try:
+        df = get_moex_stock(
+            ticker=ticker,
+            start=start,
+            end=end,
+            session=session,
+            frequency=frequency
+        )
+        if df is None or df.empty:
+            print(f"[SKIP] {ticker}: пустой датафрейм от ISS MOEX (делистинг/нет торгов/не та доска).")
+            return None
+
+    except ValueError as e:
+        # типично: пустой ответ (например, POLY), неверный период, несуществующий тикер
+        print(f"[SKIP] {ticker}: {e}")
+        return None
+    except requests.RequestException as e:
+        # сетевые/HTTP проблемы
+        print(f"[ERROR] {ticker}: сетевой сбой — {e}")
+        return None
+    except Exception as e:
+        # любая иная ошибка — не валим цикл
+        print(f"[ERROR] {ticker}: неожиданная ошибка — {e}")
+        return None
+
+    # подготовка пути
+    tdir = os.path.join(out_dir, ticker.upper())
+    os.makedirs(tdir, exist_ok=True)
+    file_path = os.path.join(tdir, f"{ticker.upper()}.parquet")
+
+    # атомарная запись
+    tmp_path = file_path + ".tmp"
+    try:
+        df.to_parquet(tmp_path, index=True)
+        os.replace(tmp_path, file_path)
+        print(f"[OK] {ticker}: {len(df):,} rows → {file_path}")
+        return file_path
+    except Exception as e:
+        # если запись сорвалась — удалим tmp и продолжим
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        print(f"[ERROR] {ticker}: не удалось сохранить Parquet — {e}")
+        return None
+
+
 
 def update_moex_stock(ticker: str, session: requests.Session = None) -> None:
     """

@@ -3,14 +3,16 @@ import moex_utils as moex
 import pandas as pd
 import matplotlib.pyplot as plt
 
-
 #moex.update_all_stocks()
 
 ticker = "LKOH"
 
 df = moex.get_moex_stock(ticker, start='2000-01-01')
+df = moex.calculate_adj_close(df, div_folder = "../dividends\\data\\")
 df
-#df = get_moex_index('RGBI', start='2023-01-01')
+
+moex.add_adj_close_to_all_stocks(div_folder= "../dividends\\data\\")
+df_index = moex.get_moex_index('RGBI', start='2023-01-01')
 
 dividends_df  = pd.read_csv(f"../dividends\\data\\{ticker}.csv", parse_dates= ['closing_date'])
 
@@ -25,31 +27,6 @@ dividends_df.sort_values(by='closing_date', inplace=True)
 # Создаем новый столбец для скорректированной цены и инициализируем его ценами закрытия
 df['adj_close'] = df['close']
 
-# --- 3. Расчет скорректированной цены ---
-# Итерируемся по дивидендам в обратном порядке (от новых к старым)
-for _, dividend in dividends_df.iloc[::-1].iterrows():
-    ex_dividend_date = dividend['closing_date']
-    dividend_value = dividend['dividend_value']
-
-    # Находим позицию, куда была бы вставлена экс-дивидендная дата
-    # Это позволяет найти последний торговый день, даже если сама дата - выходной
-    position = df.index.searchsorted(ex_dividend_date)
-
-    # Если див. отсечка раньше, чем наши исторические данные, пропускаем ее
-    if position == 0:
-        continue
-    
-    # Индекс предыдущего дня - это позиция минус один
-    previous_day_index = position - 1
-    close_before_dividend = df.iloc[previous_day_index]['close']
-
-    # Рассчитываем коэффициент корректировки
-    adjustment_factor = 1 - (dividend_value / close_before_dividend)
-
-    # Применяем коэффициент ко всем ценам до экс-дивидендной даты
-    df.loc[df.index < ex_dividend_date, 'adj_close'] *= adjustment_factor
-
-# --- 4. Просмотр результата ---
 print(df.head())
 print("\n")
 print(df.tail())
