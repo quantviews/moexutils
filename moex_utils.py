@@ -9,6 +9,7 @@ import numpy as np
 
 # Constant for the data folder
 DATA_FOLDER = "data"
+METADATA_FILE = "metadata/stock-index-base.xlsx"
 
 def get_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None, frequency: int = 24) -> pd.DataFrame:
     """
@@ -78,6 +79,11 @@ def get_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, sess
         else:
             raise KeyError("The expected 'volume' column is missing in the response.")
         df["ticker"] = ticker
+        
+        # Добавляем колонку 'close' для совместимости (если её нет)
+        if 'close' not in df.columns and 'value_rub' in df.columns:
+            df['close'] = df['value_rub']
+        
         # df["frequency"] = frequency  # Add frequency column to the DataFrame
         return df
     
@@ -221,11 +227,25 @@ def save_moex_stock(
     session: requests.Session | None = None,
     frequency: int = 24,
     out_dir: str = DATA_FOLDER,
+    calculate_market_cap_flag: bool = True,
+    metadata_file: str = METADATA_FILE,
 ) -> str | None:
     """
     Скачивает данные по тикеру и сохраняет в Parquet: DATA_FOLDER/<TICKER>/<TICKER>.parquet
-    Возвращает путь к файлу или None (если данных нет / ошибка).
-    Не роняет пакетный цикл: проблемные тикеры (например, POLY) пропускаются.
+    Автоматически рассчитывает и сохраняет market cap, если calculate_market_cap_flag=True.
+    
+    Parameters:
+    ticker (str): Тикер акции.
+    start (str): Начальная дата в формате 'YYYY-MM-DD'.
+    end (str | None): Конечная дата в формате 'YYYY-MM-DD'. Если None, используется сегодняшняя дата.
+    session (requests.Session | None): Опциональная сессия для HTTP запросов.
+    frequency (int): Частота свечей (24 = дневные данные).
+    out_dir (str): Директория для сохранения данных.
+    calculate_market_cap_flag (bool): Если True, рассчитывает и сохраняет market cap.
+    metadata_file (str): Путь к Excel файлу с метаданными о количестве акций.
+    
+    Returns:
+    str | None: Путь к сохраненному файлу или None в случае ошибки.
     """
     # нормализуем даты
     if end is None:
@@ -259,6 +279,15 @@ def save_moex_stock(
         print(f"[ERROR] {ticker}: неожиданная ошибка — {e}")
         return None
 
+    # Рассчитываем market cap, если требуется
+    if calculate_market_cap_flag:
+        try:
+            df = calculate_market_cap(df, ticker, metadata_file)
+            if 'market_cap' in df.columns:
+                print(f"[INFO] {ticker}: market cap рассчитан")
+        except Exception as e:
+            print(f"[WARNING] {ticker}: не удалось рассчитать market cap — {e}")
+
     # подготовка пути
     tdir = os.path.join(out_dir, ticker.upper())
     os.makedirs(tdir, exist_ok=True)
@@ -283,14 +312,22 @@ def save_moex_stock(
 
 
 
-def update_moex_stock(ticker: str, session: requests.Session = None) -> None:
+def update_moex_stock(
+    ticker: str, 
+    session: requests.Session = None,
+    calculate_market_cap_flag: bool = True,
+    metadata_file: str = METADATA_FILE,
+) -> None:
     """
     Updates the stock data for a given ticker symbol by checking the local Parquet file.
     If the file exists, it fetches new data from the last date in the file to the current date.
+    Автоматически пересчитывает market cap, если calculate_market_cap_flag=True.
     
     Parameters:
     ticker (str): The ticker symbol of the stock to update data for.
     session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
+    calculate_market_cap_flag (bool): Если True, пересчитывает market cap для всех данных.
+    metadata_file (str): Путь к Excel файлу с метаданными о количестве акций.
     """
     # Define the file path for the Parquet file
     file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
@@ -311,6 +348,19 @@ def update_moex_stock(ticker: str, session: requests.Session = None) -> None:
         
         # Append the new data to the existing DataFrame
         df_updated = pd.concat([df_existing, new_data])
+        
+        # Удаляем дубликаты по индексу (если есть)
+        df_updated = df_updated[~df_updated.index.duplicated(keep='last')]
+        df_updated = df_updated.sort_index()
+        
+        # Пересчитываем market cap для всех данных, если требуется
+        if calculate_market_cap_flag:
+            try:
+                df_updated = calculate_market_cap(df_updated, ticker, metadata_file)
+                if 'market_cap' in df_updated.columns:
+                    print(f"[INFO] {ticker}: market cap пересчитан")
+            except Exception as e:
+                print(f"[WARNING] {ticker}: не удалось пересчитать market cap — {e}")
         
         # Save the updated DataFrame back to Parquet format
         df_updated.to_parquet(file_path)
@@ -385,6 +435,138 @@ def combine_moex_stocks() -> pd.DataFrame:
         return combined_df
     else:
         raise ValueError("No parquet files found in data directory")
+
+def load_shares_data(metadata_file: str = METADATA_FILE) -> pd.DataFrame:
+    """
+    Загружает данные о количестве акций из Excel файла metadata/stock-index-base.xlsx.
+    
+    Parameters:
+    metadata_file (str): Путь к Excel файлу с метаданными. По умолчанию METADATA_FILE.
+    
+    Returns:
+    pd.DataFrame: DataFrame с колонками Code, date, Number of issued shares.
+    """
+    if not os.path.exists(metadata_file):
+        print(f"Warning: Metadata file not found: {metadata_file}")
+        return pd.DataFrame()
+    
+    try:
+        xls = pd.ExcelFile(metadata_file)
+        sheets = xls.sheet_names
+        
+        # Фильтруем листы с датами
+        date_sheets = []
+        for s in sheets:
+            try:
+                pd.to_datetime(s, format="%d.%m.%Y", errors="raise")
+                date_sheets.append(s)
+            except Exception:
+                pass
+        
+        # Читаем все листы в один DataFrame
+        all_data = []
+        for sheet in date_sheets:
+            df = pd.read_excel(metadata_file, sheet_name=sheet, skiprows=3)
+            df["date"] = pd.to_datetime(sheet, format="%d.%m.%Y")
+            all_data.append(df)
+        
+        if not all_data:
+            return pd.DataFrame()
+        
+        shares_df = pd.concat(all_data, ignore_index=True)
+        
+        # Оставляем только нужные колонки
+        if 'Code' in shares_df.columns and 'Number of issued shares' in shares_df.columns:
+            shares_df = shares_df[['Code', 'date', 'Number of issued shares']].copy()
+            shares_df = shares_df.dropna(subset=['Number of issued shares'])
+            shares_df = shares_df.sort_values(['Code', 'date'])
+            return shares_df
+        else:
+            print(f"Warning: Required columns not found in {metadata_file}")
+            return pd.DataFrame()
+            
+    except Exception as e:
+        print(f"Error loading shares data from {metadata_file}: {e}")
+        return pd.DataFrame()
+
+
+def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: str = METADATA_FILE) -> pd.DataFrame:
+    """
+    Рассчитывает market cap для DataFrame с данными о ценах акций.
+    Использует данные о количестве акций из metadata файла.
+    
+    Parameters:
+    df (pd.DataFrame): DataFrame с данными о ценах акций (должен содержать 'close' или 'value_rub').
+    ticker (str): Тикер акции.
+    metadata_file (str): Путь к Excel файлу с метаданными.
+    
+    Returns:
+    pd.DataFrame: DataFrame с добавленными колонками 'shares' и 'market_cap'.
+    """
+    if df.empty:
+        return df
+    
+    # Определяем колонку с ценой
+    price_col = 'close' if 'close' in df.columns else 'value_rub'
+    if price_col not in df.columns:
+        print(f"Warning: No price column found for {ticker}. Skipping market cap calculation.")
+        return df
+    
+    # Загружаем данные о количестве акций
+    shares_data = load_shares_data(metadata_file)
+    if shares_data.empty:
+        print(f"Warning: No shares data available. Skipping market cap calculation for {ticker}.")
+        return df
+    
+    # Фильтруем данные для конкретного тикера
+    ticker_shares = shares_data[shares_data['Code'] == ticker].copy()
+    if ticker_shares.empty:
+        print(f"Warning: No shares data found for {ticker}. Skipping market cap calculation.")
+        return df
+    
+    # Создаем временной ряд количества акций
+    ticker_shares = ticker_shares.set_index('date')
+    ticker_shares = ticker_shares[['Number of issued shares']]
+    ticker_shares.columns = ['shares']
+    
+    # Создаем полный временной ряд от первой до последней даты в df
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index)
+        except Exception:
+            print(f"Warning: Cannot convert index to datetime for {ticker}.")
+            return df
+    
+    date_range = pd.date_range(
+        start=df.index.min(),
+        end=df.index.max(),
+        freq='D'
+    )
+    shares_series = pd.Series(index=date_range, dtype=float)
+    
+    # Заполняем известные значения
+    for date, row in ticker_shares.iterrows():
+        shares_series.loc[date] = row['shares']
+    
+    # Forward fill: используем последнее известное значение
+    shares_series = shares_series.ffill()
+    
+    # Backward fill для начала периода
+    shares_series = shares_series.bfill()
+    
+    # Объединяем с данными о ценах
+    df = df.copy()
+    shares_aligned = shares_series.reindex(df.index).ffill().bfill()
+    df['shares'] = shares_aligned
+    
+    # Рассчитываем market cap = цена * количество акций
+    df['market_cap'] = df[price_col] * df['shares']
+    
+    # Удаляем строки где нет данных о количестве акций
+    df = df.dropna(subset=['market_cap'])
+    
+    return df
+
 
 def update_all_stocks():
     """
@@ -534,5 +716,50 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
         except Exception as e:
             print(f"Error processing {ticker}: {e}")
 
+    print(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
+
+
+def add_market_cap_to_all_stocks(metadata_file: str = METADATA_FILE) -> None:
+    """
+    Рассчитывает и добавляет колонки 'shares' и 'market_cap' для всех акций в папке данных.
+    
+    Эта функция проходит по всем файлам данных акций, рассчитывает market cap
+    на основе данных о количестве акций из metadata файла и перезаписывает
+    оригинальные Parquet файлы с обновленными данными.
+    
+    Parameters:
+    metadata_file (str): Путь к Excel файлу с метаданными о количестве акций.
+    """
+    ticker_dirs = [
+        item for item in os.listdir(DATA_FOLDER)
+        if os.path.isdir(os.path.join(DATA_FOLDER, item)) and
+           os.path.exists(os.path.join(DATA_FOLDER, item, f"{item}.parquet"))
+    ]
+    
+    if not ticker_dirs:
+        print("No stock data found in the data folder.")
+        return
+    
+    print(f"Found {len(ticker_dirs)} stocks to process for market cap calculation.")
+    
+    for ticker in ticker_dirs:
+        try:
+            print(f"Processing {ticker}...")
+            file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
+            
+            df = pd.read_parquet(file_path)
+            
+            # Calculate market cap (will overwrite if columns already exist)
+            df_mc = calculate_market_cap(df, ticker, metadata_file)
+            
+            if 'market_cap' in df_mc.columns:
+                df_mc.to_parquet(file_path)
+                print(f"Successfully updated {ticker} with market cap data.")
+            else:
+                print(f"Warning: Could not calculate market cap for {ticker}.")
+            
+        except Exception as e:
+            print(f"Error processing {ticker}: {e}")
+    
     print(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
         
