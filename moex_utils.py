@@ -524,11 +524,7 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
             
             df = pd.read_parquet(file_path)
             
-            # Check if adj_close already exists
-            if 'adj_close' in df.columns:
-                print(f"adj_close column already exists for {ticker}. Skipping.")
-                continue
-
+            # Calculate adjusted close (will overwrite if column already exists)
             df_adj = calculate_adj_close(df, div_folder)
             
             df_adj.to_parquet(file_path)
