@@ -192,7 +192,7 @@ Fetches index data from MOEX API.
 
 **Returns:** pandas.DataFrame with columns: date, volume, close
 
-#### `save_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24, out_dir='data', calculate_market_cap_flag=True, metadata_file='metadata/stock-index-base.xlsx')`
+#### `save_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24, out_dir=None, calculate_market_cap_flag=True, metadata_file=None)`
 
 Downloads and saves stock data to local Parquet file. Automatically calculates and saves market cap if `calculate_market_cap_flag=True`.
 
@@ -202,9 +202,9 @@ Downloads and saves stock data to local Parquet file. Automatically calculates a
 - `end` (str): End date in 'YYYY-MM-DD' format (default: today)
 - `session` (requests.Session): Optional session object
 - `frequency` (int): Candle frequency (1=1min, 10=10min, 60=1hour, 24=1day, 7=1week, 31=1month, 4=1quarter)
-- `out_dir` (str): Output directory (default: 'data')
+- `out_dir` (str | None): Output directory (default: project `data/` folder)
 - `calculate_market_cap_flag` (bool): If True, calculates and saves market cap (default: True)
-- `metadata_file` (str): Path to Excel file with shares metadata (default: 'metadata/stock-index-base.xlsx')
+- `metadata_file` (str | None): Path to Excel file with shares metadata (default: project `metadata/stock-index-base.xlsx`)
 
 **Returns:** str | None: Path to saved file or None on error
 
@@ -214,7 +214,7 @@ Reads local stock data, creates file if it doesn't exist.
 
 **Returns:** pandas.DataFrame with stock data
 
-#### `update_moex_stock(ticker, session=None, calculate_market_cap_flag=True, metadata_file='metadata/stock-index-base.xlsx')`
+#### `update_moex_stock(ticker, session=None, calculate_market_cap_flag=True, metadata_file=None, frequency=24)`
 
 Updates existing local stock data from last date to current date. Automatically recalculates market cap if `calculate_market_cap_flag=True`.
 
@@ -224,24 +224,24 @@ Updates existing local stock data from last date to current date. Automatically 
 - `calculate_market_cap_flag` (bool): If True, recalculates market cap for all data (default: True)
 - `metadata_file` (str): Path to Excel file with shares metadata
 
-#### `update_all_stocks()`
+#### `update_all_stocks(calculate_market_cap_flag=True)`
 
-Updates data for all stocks that have existing local files.
+Updates data for all stocks that have existing local files (single shared HTTP session).
 
-#### `combine_moex_stocks()`
+#### `combine_moex_stocks(data_folder=None)`
 
 Combines all local stock data files into one unified dataset.
 
-#### `load_shares_data(metadata_file='metadata/stock-index-base.xlsx')`
+#### `load_shares_data(metadata_file=None)`
 
-Loads shares data from Excel metadata file.
+Loads shares data from Excel metadata file. Result is cached in memory until the file changes (mtime).
 
 **Parameters:**
 - `metadata_file` (str): Path to Excel file with metadata
 
 **Returns:** pandas.DataFrame with columns: Code, date, Number of issued shares
 
-#### `calculate_market_cap(df, ticker, metadata_file='metadata/stock-index-base.xlsx')`
+#### `calculate_market_cap(df, ticker, metadata_file=None)`
 
 Calculates market cap for a DataFrame with stock price data.
 
@@ -252,7 +252,7 @@ Calculates market cap for a DataFrame with stock price data.
 
 **Returns:** pandas.DataFrame with added 'shares' and 'market_cap' columns
 
-#### `add_market_cap_to_all_stocks(metadata_file='metadata/stock-index-base.xlsx')`
+#### `add_market_cap_to_all_stocks(metadata_file=None)`
 
 Calculates and adds 'shares' and 'market_cap' columns for all stocks in data folder.
 

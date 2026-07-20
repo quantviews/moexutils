@@ -2,10 +2,15 @@
 
 ## Константы (moex_utils)
 
+Все пути привязаны к папке модуля `moex_utils.py` (константа `BASE_DIR`) и не зависят от текущего рабочего каталога — импорт из `nb/`, `scripts/`, `marimo/` работает одинаково.
+
 | Константа | По умолчанию | Описание |
 |-----------|--------------|----------|
-| `DATA_FOLDER` | `"data"` | Каталог с подпапками по тикерам и Parquet-файлами |
-| `METADATA_FILE` | `"metadata/stock-index-base.xlsx"` | Excel с количеством акций по датам |
+| `DATA_FOLDER` | `<корень проекта>/data` | Каталог с подпапками по тикерам и Parquet-файлами |
+| `METADATA_FILE` | `<корень проекта>/metadata/stock-index-base.xlsx` | Excel с количеством акций по датам |
+| `BONDS_FOLDER` | `<корень проекта>/bonds` | Parquet-файлы облигаций (`<SECID>.parquet`) |
+
+Сообщения о ходе работы идут через логгер `moex_utils` (по умолчанию — в stdout, как обычный print; приглушить: `logging.getLogger("moex_utils").setLevel(logging.WARNING)`).
 
 ---
 
@@ -39,11 +44,11 @@ get_moex_index(ticker, start='2023-01-01', end=None, session=None) -> pd.DataFra
 
 ```python
 save_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24,
-                out_dir=DATA_FOLDER, calculate_market_cap_flag=True,
-                metadata_file=METADATA_FILE) -> Optional[str]
+                out_dir=None, calculate_market_cap_flag=True,
+                metadata_file=None) -> Optional[str]
 ```
 
-Скачивает данные и сохраняет в `out_dir/<TICKER>/<TICKER>.parquet`. При `calculate_market_cap_flag=True` добавляет `shares`, `market_cap`.
+Скачивает данные и сохраняет в `out_dir/<TICKER>/<TICKER>.parquet` (запись атомарная: tmp-файл + `os.replace`). Тикер нормализуется к верхнему регистру. `out_dir=None` / `metadata_file=None` означают «текущие `DATA_FOLDER` / `METADATA_FILE`» (разрешаются в момент вызова). При `calculate_market_cap_flag=True` добавляет `shares`, `market_cap`.
 
 ---
 
@@ -61,30 +66,30 @@ read_moex_stock(ticker, start='2023-01-01', end=None, session=None) -> pd.DataFr
 
 ```python
 update_moex_stock(ticker, session=None, calculate_market_cap_flag=True,
-                  metadata_file=METADATA_FILE) -> None
+                  metadata_file=None, frequency=24) -> None
 ```
 
-Дозагрузка с последней даты в файле до текущей даты. Пересчёт market_cap при `calculate_market_cap_flag=True`.
+Дозагрузка с последней даты в файле до текущей даты (запись атомарная). `frequency` должна совпадать с частотой, с которой файл сохранялся изначально. Пересчёт market_cap при `calculate_market_cap_flag=True`.
 
 ---
 
 ### update_all_stocks
 
 ```python
-update_all_stocks() -> None
+update_all_stocks(calculate_market_cap_flag=True) -> None
 ```
 
-Обновляет все тикеры, для которых есть `data/<TICKER>/<TICKER>.parquet`.
+Обновляет все тикеры, для которых есть `data/<TICKER>/<TICKER>.parquet`. Использует одну HTTP-сессию на весь прогон. При `calculate_market_cap_flag=False` пропускает пересчёт капитализации (так делает `update_data.py`, когда пересчёт всё равно выполняется отдельным шагом).
 
 ---
 
 ### combine_moex_stocks
 
 ```python
-combine_moex_stocks() -> pd.DataFrame
+combine_moex_stocks(data_folder=None) -> pd.DataFrame
 ```
 
-Объединяет все Parquet из `DATA_FOLDER` в один DataFrame.
+Объединяет все Parquet из `data_folder` (по умолчанию `DATA_FOLDER`) в один DataFrame.
 
 ---
 
@@ -93,17 +98,17 @@ combine_moex_stocks() -> pd.DataFrame
 ### load_shares_data
 
 ```python
-load_shares_data(metadata_file=METADATA_FILE) -> pd.DataFrame
+load_shares_data(metadata_file=None) -> pd.DataFrame
 ```
 
-Читает из Excel количество акций. Листы с датами в формате DD.MM.YYYY, колонки: `Code`, `Number of issued shares`.
+Читает из Excel количество акций. Листы с датами в формате DD.MM.YYYY, колонки: `Code`, `Number of issued shares`. Результат кэшируется в памяти до изменения файла (по mtime) — повторные вызовы Excel не перечитывают.
 
 ---
 
 ### calculate_market_cap
 
 ```python
-calculate_market_cap(df, ticker, metadata_file=METADATA_FILE) -> pd.DataFrame
+calculate_market_cap(df, ticker, metadata_file=None) -> pd.DataFrame
 ```
 
 Добавляет колонки `shares` и `market_cap`. В `df` нужны индекс-даты и колонка `close` или `value_rub`.
@@ -113,7 +118,7 @@ calculate_market_cap(df, ticker, metadata_file=METADATA_FILE) -> pd.DataFrame
 ### add_market_cap_to_all_stocks
 
 ```python
-add_market_cap_to_all_stocks(metadata_file=METADATA_FILE) -> None
+add_market_cap_to_all_stocks(metadata_file=None) -> None
 ```
 
 Пересчитывает и сохраняет `shares` и `market_cap` для всех Parquet в `DATA_FOLDER`.
@@ -139,6 +144,80 @@ add_adj_close_to_all_stocks(div_folder) -> None
 ```
 
 Для всех тикеров в `DATA_FOLDER` вычисляет `adj_close` и перезаписывает Parquet.
+
+---
+
+## Облигации
+
+### get_moex_bonds_list
+
+```python
+get_moex_bonds_list(segment='TQCB', session=None) -> pd.DataFrame
+```
+
+Список облигаций доски (TQCB — корпоративные, TQOB — государственные и др.). Фильтрация по доске идёт через путь `/boards/<board>/` ISS API.
+
+---
+
+### get_moex_bond_params
+
+```python
+get_moex_bond_params(secid, session=None) -> pd.DataFrame
+```
+
+Параметры облигации: `FACEVALUE` (номинал), `COUPONPERCENT` (купон, %), `MATDATE` (погашение), ISIN и др.
+
+---
+
+### get_moex_bond_prices
+
+```python
+get_moex_bond_prices(secid, start='2023-01-01', end=None, session=None) -> pd.DataFrame
+```
+
+Исторические цены. ISS отдаёт историю страницами (~100 строк) — функция листает все страницы по курсору и склеивает результат. **Возвращает:** DataFrame с индексом `TRADEDATE`, колонками истории торгов (в т.ч. `CLOSE`, `WAPRICE` — цены в % от номинала) и `secid`.
+
+---
+
+### save_moex_bond / read_moex_bond / update_moex_bond
+
+```python
+save_moex_bond(secid, start='2023-01-01', end=None, session=None) -> None
+read_moex_bond(secid) -> pd.DataFrame
+update_moex_bond(secid, session=None) -> None
+```
+
+Сохранение в `BONDS_FOLDER/<SECID>.parquet` (атомарная запись), чтение и инкрементальное обновление со следующего дня после последней сохранённой даты (дедупликация по дате, `keep='last'`).
+
+---
+
+### calculate_ytm
+
+```python
+calculate_ytm(price, face_value, coupon_rate, years_to_maturity, coupon_freq=2) -> float
+```
+
+Доходность к погашению, %. `price` — в % от номинала. Решается бисекцией в диапазоне ставок [-50%, 500%] — сходится при любом номинале и сроке.
+
+---
+
+### calculate_duration
+
+```python
+calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm, coupon_freq=2) -> float
+```
+
+Модифицированная дюрация в годах (через дюрацию Маколея по заданной YTM).
+
+---
+
+### add_bond_metrics
+
+```python
+add_bond_metrics(df, params) -> pd.DataFrame
+```
+
+Добавляет `years_to_maturity`, `ytm`, `duration` к ряду цен. `params` — строка из `get_moex_bond_params` (нужны `FACEVALUE`, `COUPONPERCENT`, `MATDATE`). Цена берётся из `CLOSE`, при отсутствии — из `WAPRICE`. Если `MATDATE` отсутствует, метрики заполняются NaN.
 
 ---
 
