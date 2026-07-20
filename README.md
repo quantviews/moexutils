@@ -338,14 +338,13 @@ The `metadata/stock-index-base.xlsx` file should contain:
 
 ## Testing
 
-Модуль тестов `tests/test_moex_utils.py` покрывает:
+Тесты в `tests/test_moex_utils.py` полностью офлайновые (MOEX API замокан) и покрывают основные рабочие пути:
 
-- скачивание и парсинг списка облигаций (`get_moex_bonds_list`)
-- получение параметров облигации (`get_moex_bond_params`)
-- исторические цены облигаций (`get_moex_bond_prices`)
-- сохранение/чтение/обновление облигаций (`save_moex_bond`, `read_moex_bond`, `update_moex_bond`)
-- расчеты метрик (`calculate_ytm`, `calculate_duration`, `add_bond_metrics`)
-- основной путь сохранения акций (`save_moex_stock`)
+- парсинг ответов API по акциям и индексам (`get_moex_stock`, `get_moex_index`)
+- сохранение/чтение/инкрементальное обновление Parquet (`save/read/update_moex_stock`, `update_all_stocks`, `combine_moex_stocks`)
+- разбор Excel-метаданных и расчет капитализации (`load_shares_data`, `calculate_market_cap`, ffill/bfill между срезами)
+- математику корректировки на дивиденды (`calculate_adj_close`, включая составные дивиденды)
+- облигации: API, хранение, YTM/дюрация против эталонных значений
 
 Запуск тестов:
 

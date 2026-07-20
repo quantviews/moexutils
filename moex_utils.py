@@ -164,38 +164,39 @@ def get_moex_index(ticker: str, start: str = '2023-01-01', end: str = None, sess
     # Use the session if provided, otherwise create a new one
     if session is None:
         session = requests.Session()
-        try:
-            # Fetch data from MOEX API
-            data = apimoex.get_market_history(
-                session=session,
-                security=ticker,
-                start=start,
-                end=end,
-                market='index',
-                engine='stock'
-            )
-            
-            # Check if the response data is empty
-            if not data:
-                raise ValueError("The API response is empty.")
-                
-            df = pd.DataFrame(data)
-            required_columns = ['TRADEDATE', 'VALUE', 'CLOSE']
-            if not all(col in df.columns for col in required_columns):
-                raise KeyError("The expected columns are missing in the API response.")
-            
-            # Convert date column to datetime and rename columns
-            df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE']).dt.date
-            df.rename({'TRADEDATE': 'date', 'VALUE': 'volume', 'CLOSE': 'close'}, axis='columns', inplace=True)
-            
-            # Set the 'date' column as the index
-            df.set_index('date', inplace=True)
-        
-        except requests.RequestException as e:
-            raise ConnectionError(f"An error occurred while fetching data from MOEX API: {e}")
-        except Exception as e:
-            raise RuntimeError(f"An error occurred during data processing: {e}")
-    
+
+    try:
+        # Fetch data from MOEX API
+        data = apimoex.get_market_history(
+            session=session,
+            security=ticker,
+            start=start,
+            end=end,
+            market='index',
+            engine='stock'
+        )
+
+        # Check if the response data is empty
+        if not data:
+            raise ValueError("The API response is empty.")
+
+        df = pd.DataFrame(data)
+        required_columns = ['TRADEDATE', 'VALUE', 'CLOSE']
+        if not all(col in df.columns for col in required_columns):
+            raise KeyError("The expected columns are missing in the API response.")
+
+        # Convert date column to datetime and rename columns
+        df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE']).dt.date
+        df.rename({'TRADEDATE': 'date', 'VALUE': 'volume', 'CLOSE': 'close'}, axis='columns', inplace=True)
+
+        # Set the 'date' column as the index
+        df.set_index('date', inplace=True)
+
+    except requests.RequestException as e:
+        raise ConnectionError(f"An error occurred while fetching data from MOEX API: {e}")
+    except Exception as e:
+        raise RuntimeError(f"An error occurred during data processing: {e}")
+
     return df
 
 # def save_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> None:
@@ -230,9 +231,9 @@ def save_moex_stock(
     end: Optional[str] = None,
     session: Optional[requests.Session] = None,
     frequency: int = 24,
-    out_dir: str = DATA_FOLDER,
+    out_dir: Optional[str] = None,
     calculate_market_cap_flag: bool = True,
-    metadata_file: str = METADATA_FILE,
+    metadata_file: Optional[str] = None,
 ) -> Optional[str]:
     """
     Скачивает данные по тикеру и сохраняет в Parquet: DATA_FOLDER/<TICKER>/<TICKER>.parquet
@@ -251,6 +252,13 @@ def save_moex_stock(
     Returns:
     str | None: Путь к сохраненному файлу или None в случае ошибки.
     """
+    # Дефолты путей разрешаем в момент вызова, чтобы работало переопределение
+    # moex.DATA_FOLDER / moex.METADATA_FILE (например, из update_data.py)
+    if out_dir is None:
+        out_dir = DATA_FOLDER
+    if metadata_file is None:
+        metadata_file = METADATA_FILE
+
     # нормализуем даты
     if end is None:
         end = datetime.today().strftime("%Y-%m-%d")
@@ -320,7 +328,7 @@ def update_moex_stock(
     ticker: str, 
     session: requests.Session = None,
     calculate_market_cap_flag: bool = True,
-    metadata_file: str = METADATA_FILE,
+    metadata_file: Optional[str] = None,
 ) -> None:
     """
     Updates the stock data for a given ticker symbol by checking the local Parquet file.
@@ -445,7 +453,7 @@ def combine_moex_stocks(data_folder: str | None = None) -> pd.DataFrame:
     else:
         raise ValueError("No parquet files found in data directory")
 
-def load_shares_data(metadata_file: str = METADATA_FILE) -> pd.DataFrame:
+def load_shares_data(metadata_file: Optional[str] = None) -> pd.DataFrame:
     """
     Загружает данные о количестве акций из Excel файла metadata/stock-index-base.xlsx.
     
@@ -455,6 +463,9 @@ def load_shares_data(metadata_file: str = METADATA_FILE) -> pd.DataFrame:
     Returns:
     pd.DataFrame: DataFrame с колонками Code, date, Number of issued shares.
     """
+    if metadata_file is None:
+        metadata_file = METADATA_FILE
+
     if not os.path.exists(metadata_file):
         print(f"Warning: Metadata file not found: {metadata_file}")
         return pd.DataFrame()
@@ -499,7 +510,7 @@ def load_shares_data(metadata_file: str = METADATA_FILE) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: str = METADATA_FILE) -> pd.DataFrame:
+def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[str] = None) -> pd.DataFrame:
     """
     Рассчитывает market cap для DataFrame с данными о ценах акций.
     Использует данные о количестве акций из metadata файла.
@@ -546,20 +557,22 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: str = MET
             print(f"Warning: Cannot convert index to datetime for {ticker}.")
             return df
     
+    # Полный диапазон охватывает и ценовой ряд, и срезы метаданных: срез,
+    # датированный раньше начала цен, должен действовать на начало периода (ffill),
+    # а не теряться.
+    shares_known = ticker_shares['shares']
+    shares_known = shares_known[~shares_known.index.duplicated(keep='last')].sort_index()
+
     date_range = pd.date_range(
-        start=df.index.min(),
-        end=df.index.max(),
+        start=min(df.index.min(), shares_known.index.min()),
+        end=max(df.index.max(), shares_known.index.max()),
         freq='D'
     )
-    shares_series = pd.Series(index=date_range, dtype=float)
-    
-    # Заполняем известные значения
-    for date, row in ticker_shares.iterrows():
-        shares_series.loc[date] = row['shares']
-    
+    shares_series = shares_known.reindex(date_range)
+
     # Forward fill: используем последнее известное значение
     shares_series = shares_series.ffill()
-    
+
     # Backward fill для начала периода
     shares_series = shares_series.bfill()
     
@@ -728,7 +741,7 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
     print(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
 
 
-def add_market_cap_to_all_stocks(metadata_file: str = METADATA_FILE) -> None:
+def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
     """
     Рассчитывает и добавляет колонки 'shares' и 'market_cap' для всех акций в папке данных.
     
