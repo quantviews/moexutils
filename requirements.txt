@@ -1,0 +1,6 @@
+requests
+apimoex
+pandas
+pyarrow
+openpyxl
+numpy<2

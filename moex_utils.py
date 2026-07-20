@@ -1,11 +1,14 @@
 # moex_utils.py
 
-import requests
+from __future__ import annotations
+
+import os
+from datetime import datetime
+from typing import Optional
+
 import apimoex
 import pandas as pd
-from datetime import datetime
-import os
-import numpy as np
+import requests
 
 # Constant for the data folder
 DATA_FOLDER = "data"
@@ -223,13 +226,13 @@ def get_moex_index(ticker: str, start: str = '2023-01-01', end: str = None, sess
 def save_moex_stock(
     ticker: str,
     start: str = "2023-01-01",
-    end: str | None = None,
-    session: requests.Session | None = None,
+    end: Optional[str] = None,
+    session: Optional[requests.Session] = None,
     frequency: int = 24,
     out_dir: str = DATA_FOLDER,
     calculate_market_cap_flag: bool = True,
     metadata_file: str = METADATA_FILE,
-) -> str | None:
+) -> Optional[str]:
     """
     Скачивает данные по тикеру и сохраняет в Parquet: DATA_FOLDER/<TICKER>/<TICKER>.parquet
     Автоматически рассчитывает и сохраняет market cap, если calculate_market_cap_flag=True.
@@ -762,4 +765,285 @@ def add_market_cap_to_all_stocks(metadata_file: str = METADATA_FILE) -> None:
             print(f"Error processing {ticker}: {e}")
     
     print(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
+
+# Bonds functions
+
+BONDS_FOLDER = "bonds"
+
+def get_moex_bonds_list(segment: str = 'TQCB', session: requests.Session = None) -> pd.DataFrame:
+    """
+    Fetches list of bonds from MOEX by segment.
+    
+    Parameters:
+    segment (str): Bond segment, e.g., 'TQCB' (corporate), 'TQOB' (government).
+    
+    Returns:
+    pd.DataFrame: DataFrame with bond securities data.
+    """
+    if session is None:
+        session = requests.Session()
+    
+    url = f"https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json"
+    params = {
+        'iss.only': 'securities',
+        'limit': 100,
+        'boardid': segment
+    }
+    
+    try:
+        resp = session.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        securities = data.get('securities', [])
+        if not securities:
+            return pd.DataFrame()
+
+        # MOEX may return two formats: list-of-lists or list-of-dicts
+        if isinstance(securities, list) and len(securities) > 0 and isinstance(securities[0], dict):
+            return pd.DataFrame(securities)
+        if isinstance(securities, list) and len(securities) > 1 and isinstance(securities[0], list):
+            columns = securities[0]
+            rows = securities[1:]
+            return pd.DataFrame(rows, columns=columns)
+
+        return pd.DataFrame(securities)
+    except Exception as e:
+        raise RuntimeError(f"Error fetching bonds list: {e}")
+
+def get_moex_bond_params(secid: str, session: requests.Session = None) -> pd.DataFrame:
+    """
+    Fetches parameters for a specific bond.
+    
+    Parameters:
+    secid (str): Bond security ID.
+    
+    Returns:
+    pd.DataFrame: DataFrame with bond parameters.
+    """
+    if session is None:
+        session = requests.Session()
+    
+    url = f"https://iss.moex.com/iss/engines/stock/markets/bonds/securities/{secid}.json"
+    params = {'iss.only': 'securities'}
+    
+    try:
+        resp = session.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        securities = data.get('securities', [])
+        if not securities:
+            return pd.DataFrame()
+
+        if isinstance(securities, list) and len(securities) > 0 and isinstance(securities[0], dict):
+            return pd.DataFrame(securities)
+        if isinstance(securities, list) and len(securities) > 1 and isinstance(securities[0], list):
+            columns = securities[0]
+            rows = securities[1:]
+            return pd.DataFrame(rows, columns=columns)
+
+        return pd.DataFrame(securities)
+    except Exception as e:
+        raise RuntimeError(f"Error fetching bond params for {secid}: {e}")
+
+def get_moex_bond_prices(secid: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> pd.DataFrame:
+    """
+    Fetches historical price data for a bond.
+    
+    Parameters:
+    secid (str): Bond security ID.
+    start (str): Start date.
+    end (str): End date.
+    
+    Returns:
+    pd.DataFrame: DataFrame with historical prices.
+    """
+    if end is None:
+        end = datetime.today().strftime('%Y-%m-%d')
+    
+    if session is None:
+        session = requests.Session()
+    
+    url = f"https://iss.moex.com/iss/history/engines/stock/markets/bonds/securities/{secid}.json"
+    params = {
+        'from': start,
+        'till': end,
+        'limit': 100
+    }
+    
+    try:
+        resp = session.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        history = data['history']
+        if not history:
+            return pd.DataFrame()
+        
+        columns = history[0]
+        rows = history[1:]
+        
+        df = pd.DataFrame(rows, columns=columns)
+        df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE'])
+        df.set_index('TRADEDATE', inplace=True)
+        df['secid'] = secid
+        
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Error fetching bond prices for {secid}: {e}")
+
+def save_moex_bond(secid: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> None:
+    """
+    Saves bond data to Parquet file.
+    """
+    df = get_moex_bond_prices(secid, start, end, session)
+    if df.empty:
+        print(f"[WARN] No data for bond {secid}")
+        return
+    
+    os.makedirs(BONDS_FOLDER, exist_ok=True)
+    file_path = os.path.join(BONDS_FOLDER, f"{secid}.parquet")
+    
+    # Atomic write
+    temp_path = file_path + ".tmp"
+    df.to_parquet(temp_path)
+    os.replace(temp_path, file_path)
+    
+    print(f"[OK] Saved bond {secid} to {file_path}")
+
+def read_moex_bond(secid: str) -> pd.DataFrame:
+    """
+    Reads bond data from Parquet file.
+    """
+    file_path = os.path.join(BONDS_FOLDER, f"{secid}.parquet")
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Bond data file not found: {file_path}")
+    
+    df = pd.read_parquet(file_path)
+    return df
+
+def update_moex_bond(secid: str, session: requests.Session = None) -> None:
+    """
+    Updates bond data from last saved date to today.
+    """
+    try:
+        existing_df = read_moex_bond(secid)
+        last_date = existing_df.index.max().strftime('%Y-%m-%d')
+        start = (pd.to_datetime(last_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    except FileNotFoundError:
+        start = '2023-01-01'
+    
+    end = datetime.today().strftime('%Y-%m-%d')
+    if start >= end:
+        print(f"[INFO] Bond {secid} is up to date")
+        return
+    
+    new_df = get_moex_bond_prices(secid, start, end, session)
+    if new_df.empty:
+        print(f"[INFO] No new data for bond {secid}")
+        return
+    
+    if 'existing_df' in locals():
+        combined_df = pd.concat([existing_df, new_df]).drop_duplicates()
+    else:
+        combined_df = new_df
+    
+    os.makedirs(BONDS_FOLDER, exist_ok=True)
+    file_path = os.path.join(BONDS_FOLDER, f"{secid}.parquet")
+    
+    temp_path = file_path + ".tmp"
+    combined_df.to_parquet(temp_path)
+    os.replace(temp_path, file_path)
+    
+    print(f"[OK] Updated bond {secid}")
+
+def calculate_ytm(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, coupon_freq: int = 2) -> float:
+    """
+    Calculates Yield to Maturity (YTM) for a bond.
+    
+    Parameters:
+    price (float): Current price (% of face value).
+    face_value (float): Face value.
+    coupon_rate (float): Annual coupon rate (%).
+    years_to_maturity (float): Years to maturity.
+    coupon_freq (int): Coupons per year.
+    
+    Returns:
+    float: YTM (%).
+    """
+    # Simple approximation
+    coupon = face_value * (coupon_rate / 100) / coupon_freq
+    periods = int(years_to_maturity * coupon_freq)
+    
+    if periods == 0:
+        return 0
+    
+    ytm_guess = coupon_rate / 100
+    for _ in range(100):
+        pv_coupons = sum(coupon / (1 + ytm_guess/coupon_freq)**i for i in range(1, periods+1))
+        pv_face = face_value / (1 + ytm_guess/coupon_freq)**periods
+        pv_total = pv_coupons + pv_face
+        diff = pv_total - (price / 100 * face_value)
+        
+        if abs(diff) < 0.01:
+            break
+        
+        ytm_guess += diff / 1000  # Adjust
+    
+    return ytm_guess * 100
+
+def calculate_duration(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, ytm: float, coupon_freq: int = 2) -> float:
+    """
+    Calculates modified duration.
+    
+    Returns:
+    float: Duration in years.
+    """
+    coupon = face_value * (coupon_rate / 100) / coupon_freq
+    periods = int(years_to_maturity * coupon_freq)
+    ytm_period = ytm / 100 / coupon_freq
+    
+    if periods == 0:
+        return 0
+    
+    pv_coupons = sum((i * coupon) / (1 + ytm_period)**i for i in range(1, periods+1))
+    pv_face = (periods * face_value) / (1 + ytm_period)**periods
+    total_pv_weighted = pv_coupons + pv_face
+    
+    total_pv = sum(coupon / (1 + ytm_period)**i for i in range(1, periods+1)) + face_value / (1 + ytm_period)**periods
+    
+    macaulay_duration = total_pv_weighted / total_pv / coupon_freq
+    modified_duration = macaulay_duration / (1 + ytm_period)
+    
+    return modified_duration
+
+def add_bond_metrics(df: pd.DataFrame, params: pd.Series) -> pd.DataFrame:
+    """
+    Adds YTM and duration to bond price DataFrame.
+    
+    Parameters:
+    df (pd.DataFrame): Price data.
+    params (pd.Series): Bond parameters.
+    
+    Returns:
+    pd.DataFrame: DataFrame with added metrics.
+    """
+    face_value = params.get('FACEVALUE', 1000)
+    coupon_rate = params.get('COUPONPERCENT', 0)
+    maturity_date = pd.to_datetime(params.get('MATDATE'))
+    coupon_freq = 2  # Assume semi-annual
+    
+    df = df.copy()
+    df['years_to_maturity'] = (maturity_date - df.index).days / 365.25
+    
+    for idx in df.index:
+        price_pct = df.loc[idx, 'CLOSE'] if 'CLOSE' in df.columns else df.loc[idx, 'WAPRICE']
+        ytm = calculate_ytm(price_pct, face_value, coupon_rate, df.loc[idx, 'years_to_maturity'], coupon_freq)
+        duration = calculate_duration(price_pct, face_value, coupon_rate, df.loc[idx, 'years_to_maturity'], ytm, coupon_freq)
+        
+        df.loc[idx, 'ytm'] = ytm
+        df.loc[idx, 'duration'] = duration
+    
+    return df
         
