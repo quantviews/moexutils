@@ -28,7 +28,9 @@ def main(
 
     if do_update:
         print("=== 1. Обновление данных с MOEX ===")
-        moex.update_all_stocks()
+        # Если этап 3 всё равно пересчитает market cap для всех данных,
+        # не тратим время на пересчет для каждого тикера здесь
+        moex.update_all_stocks(calculate_market_cap_flag=not do_market_cap)
     else:
         print("=== 1. Обновление данных — пропуск (--no-update) ===")
 

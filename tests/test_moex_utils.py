@@ -230,10 +230,12 @@ class TestSaveReadUpdateStock:
 
         updated = []
         sessions = []
+        mc_flags = []
 
-        def fake_update(ticker, session=None):
+        def fake_update(ticker, session=None, calculate_market_cap_flag=True):
             updated.append(ticker)
             sessions.append(session)
+            mc_flags.append(calculate_market_cap_flag)
 
         monkeypatch.setattr(mu, 'update_moex_stock', fake_update)
 
@@ -242,6 +244,10 @@ class TestSaveReadUpdateStock:
         # одна общая HTTP-сессия на весь прогон
         assert sessions[0] is not None
         assert all(s is sessions[0] for s in sessions)
+        assert mc_flags == [True, True]        # дефолт сохранен
+
+        mu.update_all_stocks(calculate_market_cap_flag=False)
+        assert mc_flags[-2:] == [False, False]  # флаг доходит до каждого тикера
 
 
 class TestCombineStocks:

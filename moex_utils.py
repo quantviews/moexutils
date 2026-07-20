@@ -603,9 +603,13 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
     return df
 
 
-def update_all_stocks():
+def update_all_stocks(calculate_market_cap_flag: bool = True):
     """
     Updates data for all stocks that have existing parquet files.
+
+    Parameters:
+    calculate_market_cap_flag (bool): Если False, market cap на этом этапе не пересчитывается
+        (полезно, когда пересчет всё равно делается отдельным шагом, как в update_data.py).
     """
     # Get list of all ticker directories
     ticker_dirs = []
@@ -625,7 +629,8 @@ def update_all_stocks():
     for ticker in ticker_dirs:
         try:
             logger.info(f"\nUpdating {ticker}...")
-            update_moex_stock(ticker, session=session)
+            update_moex_stock(ticker, session=session,
+                              calculate_market_cap_flag=calculate_market_cap_flag)
         except Exception as e:
             logger.error(f"Error updating {ticker}: {e}")
     
