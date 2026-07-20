@@ -4,11 +4,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 
-
 moex.update_all_stocks()
 
 ticker = 'GAZP'
-div_folder = 'G:/YandexDisk/FINANCE/dividends/data/'
+div_folder = 'E:/YandexDisk/FINANCE/dividends/data/'
 
 # Run the function to update all stocks with the adj_close column
 moex.add_adj_close_to_all_stocks(div_folder)
