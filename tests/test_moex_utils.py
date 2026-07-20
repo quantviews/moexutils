@@ -217,9 +217,11 @@ class TestSaveReadUpdateStock:
         mu.update_moex_stock('sber', calculate_market_cap_flag=False)
         assert os.path.exists(out_path)
 
-    def test_update_missing_file_is_noop(self, tmp_data_folder, capsys):
-        mu.update_moex_stock('NOFILE', calculate_market_cap_flag=False)
-        assert 'No existing data' in capsys.readouterr().out
+    def test_update_missing_file_is_noop(self, tmp_data_folder, caplog):
+        import logging
+        with caplog.at_level(logging.INFO, logger='moex_utils'):
+            mu.update_moex_stock('NOFILE', calculate_market_cap_flag=False)
+        assert 'No existing data' in caplog.text
 
     def test_update_all_stocks_discovers_tickers(self, tmp_data_folder, monkeypatch):
         for ticker in ('AAA', 'BBB'):
@@ -602,6 +604,15 @@ class TestBondMetrics:
         assert len(result) == 3
         # срок до погашения убывает с каждым днем
         assert result['years_to_maturity'].is_monotonic_decreasing
+
+    def test_add_bond_metrics_missing_matdate(self):
+        dates = pd.date_range('2025-01-01', periods=2, freq='D')
+        df = pd.DataFrame({'CLOSE': [100, 100]}, index=dates)
+        params = pd.Series({'FACEVALUE': 1000, 'COUPONPERCENT': 10})  # без MATDATE
+
+        result = mu.add_bond_metrics(df, params)  # не должно падать
+        assert result['ytm'].isna().all()
+        assert result['duration'].isna().all()
 
     def test_add_bond_metrics_waprice_fallback(self):
         dates = pd.date_range('2025-01-01', periods=2, freq='D')

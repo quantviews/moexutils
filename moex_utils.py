@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
@@ -15,7 +17,17 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 
-def get_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None, frequency: int = 24) -> pd.DataFrame:
+logger = logging.getLogger("moex_utils")
+# Если логирование в приложении не настроено — выводим сообщения в stdout,
+# как раньше это делал print (прогресс в ноутбуках и update_data.bat).
+# Любая внешняя настройка logging имеет приоритет.
+if not logger.handlers and not logging.getLogger().handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+
+def get_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = None, session: Optional[requests.Session] = None, frequency: int = 24) -> pd.DataFrame:
     """
     Fetches stock data from the Moscow Exchange (MOEX) for a given ticker symbol within a specified date range.
     Parameters:
@@ -96,7 +108,7 @@ def get_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, sess
     except Exception as e:
         raise RuntimeError(f"An error occurred during data processing: {e}")
 
-def get_moex_index(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> pd.DataFrame:
+def get_moex_index(ticker: str, start: str = '2023-01-01', end: Optional[str] = None, session: Optional[requests.Session] = None) -> pd.DataFrame:
     """
     Fetch historical data for a specified index from the Moscow Exchange (MOEX) API.
 
@@ -199,32 +211,6 @@ def get_moex_index(ticker: str, start: str = '2023-01-01', end: str = None, sess
 
     return df
 
-# def save_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> None:
-#     """
-#     Downloads stock data for a given ticker symbol and saves it in Parquet format.
-    
-#     Parameters:
-#     ticker (str): The ticker symbol of the stock to fetch data for.
-#     start (str): The start date for the data in 'YYYY-MM-DD' format. Default is '2023-01-01'.
-#     end (str): The end date for the data in 'YYYY-MM-DD' format. Default is None, which sets the end date to today.
-#     session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
-#     """
-#     # Fetch the stock data using the existing function
-#     df = get_moex_stock(ticker, start, end, session)
-    
-#     # Print message with ticker name, start date, and end date
-#     print(f"Downloading data for ticker: {ticker}, from {start} to {end if end else 'today'}")
-    
-#     # Create a directory named after the ticker if it doesn't exist
-#     os.makedirs(os.path.join(DATA_FOLDER, ticker), exist_ok=True)
-
-#     # Define the file path for the Parquet file
-#     file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
-    
-#     # Save the DataFrame to Parquet format
-#     df.to_parquet(file_path)
-
-
 def save_moex_stock(
     ticker: str,
     start: str = "2023-01-01",
@@ -268,7 +254,7 @@ def save_moex_stock(
         end = datetime.today().strftime("%Y-%m-%d")
 
     # информативный лог
-    print(f"[INFO] {ticker}: fetching {start} → {end}, freq={frequency}")
+    logger.info(f"[INFO] {ticker}: fetching {start} → {end}, freq={frequency}")
 
     try:
         df = get_moex_stock(
@@ -279,20 +265,20 @@ def save_moex_stock(
             frequency=frequency
         )
         if df is None or df.empty:
-            print(f"[SKIP] {ticker}: пустой датафрейм от ISS MOEX (делистинг/нет торгов/не та доска).")
+            logger.info(f"[SKIP] {ticker}: пустой датафрейм от ISS MOEX (делистинг/нет торгов/не та доска).")
             return None
 
     except ValueError as e:
         # типично: пустой ответ (например, POLY), неверный период, несуществующий тикер
-        print(f"[SKIP] {ticker}: {e}")
+        logger.info(f"[SKIP] {ticker}: {e}")
         return None
     except requests.RequestException as e:
         # сетевые/HTTP проблемы
-        print(f"[ERROR] {ticker}: сетевой сбой — {e}")
+        logger.error(f"[ERROR] {ticker}: сетевой сбой — {e}")
         return None
     except Exception as e:
         # любая иная ошибка — не валим цикл
-        print(f"[ERROR] {ticker}: неожиданная ошибка — {e}")
+        logger.error(f"[ERROR] {ticker}: неожиданная ошибка — {e}")
         return None
 
     # Рассчитываем market cap, если требуется
@@ -300,9 +286,9 @@ def save_moex_stock(
         try:
             df = calculate_market_cap(df, ticker, metadata_file)
             if 'market_cap' in df.columns:
-                print(f"[INFO] {ticker}: market cap рассчитан")
+                logger.info(f"[INFO] {ticker}: market cap рассчитан")
         except Exception as e:
-            print(f"[WARNING] {ticker}: не удалось рассчитать market cap — {e}")
+            logger.warning(f"[WARNING] {ticker}: не удалось рассчитать market cap — {e}")
 
     # подготовка пути
     tdir = os.path.join(out_dir, ticker.upper())
@@ -314,7 +300,7 @@ def save_moex_stock(
     try:
         df.to_parquet(tmp_path, index=True)
         os.replace(tmp_path, file_path)
-        print(f"[OK] {ticker}: {len(df):,} rows → {file_path}")
+        logger.info(f"[OK] {ticker}: {len(df):,} rows → {file_path}")
         return file_path
     except Exception as e:
         # если запись сорвалась — удалим tmp и продолжим
@@ -323,14 +309,14 @@ def save_moex_stock(
                 os.remove(tmp_path)
         except Exception:
             pass
-        print(f"[ERROR] {ticker}: не удалось сохранить Parquet — {e}")
+        logger.error(f"[ERROR] {ticker}: не удалось сохранить Parquet — {e}")
         return None
 
 
 
 def update_moex_stock(
     ticker: str, 
-    session: requests.Session = None,
+    session: Optional[requests.Session] = None,
     calculate_market_cap_flag: bool = True,
     metadata_file: Optional[str] = None,
     frequency: int = 24,
@@ -379,20 +365,20 @@ def update_moex_stock(
             try:
                 df_updated = calculate_market_cap(df_updated, ticker, metadata_file)
                 if 'market_cap' in df_updated.columns:
-                    print(f"[INFO] {ticker}: market cap пересчитан")
+                    logger.info(f"[INFO] {ticker}: market cap пересчитан")
             except Exception as e:
-                print(f"[WARNING] {ticker}: не удалось пересчитать market cap — {e}")
+                logger.warning(f"[WARNING] {ticker}: не удалось пересчитать market cap — {e}")
         
         # Атомарная запись: не оставляем битый файл при прерывании
         tmp_path = file_path + ".tmp"
         df_updated.to_parquet(tmp_path)
         os.replace(tmp_path, file_path)
 
-        print(f"Updated data for ticker: {ticker} from {last_date_str} to {datetime.today().strftime('%Y-%m-%d')}")
+        logger.info(f"Updated data for ticker: {ticker} from {last_date_str} to {datetime.today().strftime('%Y-%m-%d')}")
     else:
-        print(f"No existing data found for ticker: {ticker}. Please use save_moex_stock to create the initial file.")
+        logger.info(f"No existing data found for ticker: {ticker}. Please use save_moex_stock to create the initial file.")
 
-def read_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> pd.DataFrame:
+def read_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = None, session: Optional[requests.Session] = None) -> pd.DataFrame:
     """
     Reads stock data for a given ticker symbol from a local Parquet file.
     If the file does not exist, it fetches the data using save_moex_stock.
@@ -415,10 +401,10 @@ def read_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, ses
     if os.path.exists(file_path):
         # Load the existing data
         df = pd.read_parquet(file_path)
-        print(f"Loaded data for ticker: {ticker} from local file.")
+        logger.info(f"Loaded data for ticker: {ticker} from local file.")
     else:
         # If the file does not exist, create it using save_moex_stock
-        print(f"No local data found for ticker: {ticker}. Fetching data...")
+        logger.info(f"No local data found for ticker: {ticker}. Fetching data...")
         save_moex_stock(ticker, start, end, session)
         df = pd.read_parquet(file_path)  # Load the newly created data
     
@@ -453,15 +439,15 @@ def combine_moex_stocks(data_folder: str | None = None) -> pd.DataFrame:
                     # Read the parquet file
                     df = pd.read_parquet(parquet_file)
                     dfs.append(df)
-                    print(f"Loaded data for {ticker_dir}")
+                    logger.info(f"Loaded data for {ticker_dir}")
                 except Exception as e:
-                    print(f"Error loading {ticker_dir}: {e}")
+                    logger.error(f"Error loading {ticker_dir}: {e}")
     
     # Combine all DataFrames
     if dfs:
         combined_df = pd.concat(dfs, axis=0)
-        print(f"\nCombined {len(dfs)} stocks into unified dataset")
-        print(f"Total rows: {len(combined_df)}")
+        logger.info(f"\nCombined {len(dfs)} stocks into unified dataset")
+        logger.info(f"Total rows: {len(combined_df)}")
         return combined_df
     else:
         raise ValueError("No parquet files found in data directory")
@@ -487,7 +473,7 @@ def load_shares_data(metadata_file: Optional[str] = None) -> pd.DataFrame:
         metadata_file = METADATA_FILE
 
     if not os.path.exists(metadata_file):
-        print(f"Warning: Metadata file not found: {metadata_file}")
+        logger.warning(f"Warning: Metadata file not found: {metadata_file}")
         return pd.DataFrame()
 
     cache_key = (os.path.abspath(metadata_file), os.path.getmtime(metadata_file))
@@ -529,11 +515,11 @@ def load_shares_data(metadata_file: Optional[str] = None) -> pd.DataFrame:
             _shares_cache[cache_key] = shares_df
             return shares_df.copy()
         else:
-            print(f"Warning: Required columns not found in {metadata_file}")
+            logger.warning(f"Warning: Required columns not found in {metadata_file}")
             return pd.DataFrame()
             
     except Exception as e:
-        print(f"Error loading shares data from {metadata_file}: {e}")
+        logger.error(f"Error loading shares data from {metadata_file}: {e}")
         return pd.DataFrame()
 
 
@@ -556,19 +542,19 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
     # Определяем колонку с ценой
     price_col = 'close' if 'close' in df.columns else 'value_rub'
     if price_col not in df.columns:
-        print(f"Warning: No price column found for {ticker}. Skipping market cap calculation.")
+        logger.warning(f"Warning: No price column found for {ticker}. Skipping market cap calculation.")
         return df
     
     # Загружаем данные о количестве акций
     shares_data = load_shares_data(metadata_file)
     if shares_data.empty:
-        print(f"Warning: No shares data available. Skipping market cap calculation for {ticker}.")
+        logger.warning(f"Warning: No shares data available. Skipping market cap calculation for {ticker}.")
         return df
     
     # Фильтруем данные для конкретного тикера
     ticker_shares = shares_data[shares_data['Code'] == ticker].copy()
     if ticker_shares.empty:
-        print(f"Warning: No shares data found for {ticker}. Skipping market cap calculation.")
+        logger.warning(f"Warning: No shares data found for {ticker}. Skipping market cap calculation.")
         return df
     
     # Создаем временной ряд количества акций
@@ -581,7 +567,7 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
         try:
             df.index = pd.to_datetime(df.index)
         except Exception:
-            print(f"Warning: Cannot convert index to datetime for {ticker}.")
+            logger.warning(f"Warning: Cannot convert index to datetime for {ticker}.")
             return df
     
     # Полный диапазон охватывает и ценовой ряд, и срезы метаданных: срез,
@@ -630,7 +616,7 @@ def update_all_stocks():
             if os.path.exists(parquet_file):
                 ticker_dirs.append(item)
     
-    print(f"Found {len(ticker_dirs)} stocks to update")
+    logger.info(f"Found {len(ticker_dirs)} stocks to update")
 
     # Одна HTTP-сессия на весь прогон: keep-alive вместо нового TLS-соединения на тикер
     session = requests.Session()
@@ -638,12 +624,12 @@ def update_all_stocks():
     # Update each stock
     for ticker in ticker_dirs:
         try:
-            print(f"\nUpdating {ticker}...")
+            logger.info(f"\nUpdating {ticker}...")
             update_moex_stock(ticker, session=session)
         except Exception as e:
-            print(f"Error updating {ticker}: {e}")
+            logger.error(f"Error updating {ticker}: {e}")
     
-    print(f"\nUpdate completed for {len(ticker_dirs)} stocks")
+    logger.info(f"\nUpdate completed for {len(ticker_dirs)} stocks")
 
 def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     """
@@ -657,7 +643,7 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     pd.DataFrame: The DataFrame with an added 'adj_close' column. Returns the original DataFrame if no dividend data is found.
     """
     if df.empty or 'ticker' not in df.columns or 'close' not in df.columns:
-        print("Warning: DataFrame пуст или нет колонок 'ticker'/'close'. Возвращаю как есть.")
+        logger.warning("Warning: DataFrame пуст или нет колонок 'ticker'/'close'. Возвращаю как есть.")
         return df
     # Убедимся, что индекс — даты
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -665,7 +651,7 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
             df = df.copy()
             df.index = pd.to_datetime(df.index)
         except Exception:
-            print("Warning: индекс не преобразуется в даты. Возвращаю без корректировки.")
+            logger.warning("Warning: индекс не преобразуется в даты. Возвращаю без корректировки.")
             df['adj_close'] = df['close']
             return df
 
@@ -673,7 +659,7 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     div_file = os.path.join(div_folder, f"{ticker}.csv")
 
     if not os.path.exists(div_file):
-        print(f"Info: No dividend file found for {ticker} at {div_file}. Setting adj_close equal to close.")
+        logger.info(f"Info: No dividend file found for {ticker} at {div_file}. Setting adj_close equal to close.")
         df['adj_close'] = df['close']
         return df
 
@@ -682,9 +668,8 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         div_df.dropna(subset=['closing_date'], inplace=True)
         div_df = div_df[div_df['dividend_value'] > 0]
         div_df.sort_values(by='closing_date', inplace=True)
-        dividends_df = div_df
     except Exception as e:
-        print(f"Error reading dividend file for {ticker}: {e}")
+        logger.error(f"Error reading dividend file for {ticker}: {e}")
         df['adj_close'] = df['close']
         return df
 
@@ -697,8 +682,8 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         return df
 
     # Calculate adjusted close prices using a proportional adjustment factor
-    #adj_close = df['close'].copy()
-    adj = df['close'].astype(float).copy()
+    closes = df['close'].astype(float)
+    adj = closes.copy()
 
     # Идём от последних дивидендов к ранним
     for row in div_df.iloc[::-1].itertuples(index=False):
@@ -712,12 +697,12 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         if pos == 0:
             continue
 
-        close_before = df['close'].iloc[pos - 1]
+        close_before = closes.iloc[pos - 1]
         if pd.isna(close_before) or close_before <= 0:
             # защита от деления на ноль/NaN
             continue
 
-        adjustment_factor = 1.0 - (dividend_value / float(close_before))
+        adjustment_factor = 1.0 - (dividend_value / close_before)
         # опционально: защита от странных значений
         # if adjustment_factor <= 0:
         #     continue
@@ -746,14 +731,14 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
     ]
 
     if not ticker_dirs:
-        print("No stock data found in the data folder.")
+        logger.info("No stock data found in the data folder.")
         return
 
-    print(f"Found {len(ticker_dirs)} stocks to process for adjusted close calculation.")
+    logger.info(f"Found {len(ticker_dirs)} stocks to process for adjusted close calculation.")
 
     for ticker in ticker_dirs:
         try:
-            print(f"Processing {ticker}...")
+            logger.info(f"Processing {ticker}...")
             file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
             
             df = pd.read_parquet(file_path)
@@ -763,12 +748,12 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
             
             df_adj.to_parquet(file_path)
             
-            print(f"Successfully updated {ticker} with adj_close column.")
+            logger.info(f"Successfully updated {ticker} with adj_close column.")
             
         except Exception as e:
-            print(f"Error processing {ticker}: {e}")
+            logger.error(f"Error processing {ticker}: {e}")
 
-    print(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
+    logger.info(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
 
 
 def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
@@ -789,14 +774,14 @@ def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
     ]
     
     if not ticker_dirs:
-        print("No stock data found in the data folder.")
+        logger.info("No stock data found in the data folder.")
         return
     
-    print(f"Found {len(ticker_dirs)} stocks to process for market cap calculation.")
+    logger.info(f"Found {len(ticker_dirs)} stocks to process for market cap calculation.")
     
     for ticker in ticker_dirs:
         try:
-            print(f"Processing {ticker}...")
+            logger.info(f"Processing {ticker}...")
             file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
             
             df = pd.read_parquet(file_path)
@@ -806,14 +791,14 @@ def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
             
             if 'market_cap' in df_mc.columns:
                 df_mc.to_parquet(file_path)
-                print(f"Successfully updated {ticker} with market cap data.")
+                logger.info(f"Successfully updated {ticker} with market cap data.")
             else:
-                print(f"Warning: Could not calculate market cap for {ticker}.")
+                logger.warning(f"Warning: Could not calculate market cap for {ticker}.")
             
         except Exception as e:
-            print(f"Error processing {ticker}: {e}")
+            logger.error(f"Error processing {ticker}: {e}")
     
-    print(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
+    logger.info(f"\nCompleted processing for {len(ticker_dirs)} stocks.")
 
 # Bonds functions
 
@@ -838,7 +823,7 @@ def _parse_iss_table(table) -> pd.DataFrame:
         return pd.DataFrame(table[1:], columns=table[0])
     return pd.DataFrame(table)
 
-def get_moex_bonds_list(segment: str = 'TQCB', session: requests.Session = None) -> pd.DataFrame:
+def get_moex_bonds_list(segment: str = 'TQCB', session: Optional[requests.Session] = None) -> pd.DataFrame:
     """
     Fetches list of bonds from MOEX by segment.
     
@@ -864,7 +849,7 @@ def get_moex_bonds_list(segment: str = 'TQCB', session: requests.Session = None)
     except Exception as e:
         raise RuntimeError(f"Error fetching bonds list: {e}")
 
-def get_moex_bond_params(secid: str, session: requests.Session = None) -> pd.DataFrame:
+def get_moex_bond_params(secid: str, session: Optional[requests.Session] = None) -> pd.DataFrame:
     """
     Fetches parameters for a specific bond.
     
@@ -888,7 +873,7 @@ def get_moex_bond_params(secid: str, session: requests.Session = None) -> pd.Dat
     except Exception as e:
         raise RuntimeError(f"Error fetching bond params for {secid}: {e}")
 
-def get_moex_bond_prices(secid: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> pd.DataFrame:
+def get_moex_bond_prices(secid: str, start: str = '2023-01-01', end: Optional[str] = None, session: Optional[requests.Session] = None) -> pd.DataFrame:
     """
     Fetches historical price data for a bond.
     
@@ -943,13 +928,13 @@ def get_moex_bond_prices(secid: str, start: str = '2023-01-01', end: str = None,
     except Exception as e:
         raise RuntimeError(f"Error fetching bond prices for {secid}: {e}")
 
-def save_moex_bond(secid: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None) -> None:
+def save_moex_bond(secid: str, start: str = '2023-01-01', end: Optional[str] = None, session: Optional[requests.Session] = None) -> None:
     """
     Saves bond data to Parquet file.
     """
     df = get_moex_bond_prices(secid, start, end, session)
     if df.empty:
-        print(f"[WARN] No data for bond {secid}")
+        logger.warning(f"[WARN] No data for bond {secid}")
         return
     
     os.makedirs(BONDS_FOLDER, exist_ok=True)
@@ -960,7 +945,7 @@ def save_moex_bond(secid: str, start: str = '2023-01-01', end: str = None, sessi
     df.to_parquet(temp_path)
     os.replace(temp_path, file_path)
     
-    print(f"[OK] Saved bond {secid} to {file_path}")
+    logger.info(f"[OK] Saved bond {secid} to {file_path}")
 
 def read_moex_bond(secid: str) -> pd.DataFrame:
     """
@@ -973,29 +958,31 @@ def read_moex_bond(secid: str) -> pd.DataFrame:
     df = pd.read_parquet(file_path)
     return df
 
-def update_moex_bond(secid: str, session: requests.Session = None) -> None:
+def update_moex_bond(secid: str, session: Optional[requests.Session] = None) -> None:
     """
     Updates bond data from last saved date to today.
     """
+    existing_df = None
     try:
         existing_df = read_moex_bond(secid)
         last_date = existing_df.index.max().strftime('%Y-%m-%d')
         start = (pd.to_datetime(last_date) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
     except FileNotFoundError:
         start = '2023-01-01'
-    
+
     end = datetime.today().strftime('%Y-%m-%d')
     if start >= end:
-        print(f"[INFO] Bond {secid} is up to date")
+        logger.info(f"[INFO] Bond {secid} is up to date")
         return
-    
+
     new_df = get_moex_bond_prices(secid, start, end, session)
     if new_df.empty:
-        print(f"[INFO] No new data for bond {secid}")
+        logger.info(f"[INFO] No new data for bond {secid}")
         return
-    
-    if 'existing_df' in locals():
-        combined_df = pd.concat([existing_df, new_df]).drop_duplicates()
+
+    if existing_df is not None:
+        combined_df = pd.concat([existing_df, new_df])
+        combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
     else:
         combined_df = new_df
     
@@ -1006,7 +993,7 @@ def update_moex_bond(secid: str, session: requests.Session = None) -> None:
     combined_df.to_parquet(temp_path)
     os.replace(temp_path, file_path)
     
-    print(f"[OK] Updated bond {secid}")
+    logger.info(f"[OK] Updated bond {secid}")
 
 def calculate_ytm(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, coupon_freq: int = 2) -> float:
     """
@@ -1089,21 +1076,31 @@ def add_bond_metrics(df: pd.DataFrame, params: pd.Series) -> pd.DataFrame:
     Returns:
     pd.DataFrame: DataFrame with added metrics.
     """
-    face_value = params.get('FACEVALUE', 1000)
-    coupon_rate = params.get('COUPONPERCENT', 0)
-    maturity_date = pd.to_datetime(params.get('MATDATE'))
+    face_value = float(params.get('FACEVALUE', 1000) or 1000)
+    coupon_rate = float(params.get('COUPONPERCENT', 0) or 0)
     coupon_freq = 2  # Assume semi-annual
-    
+
     df = df.copy()
+
+    maturity_raw = params.get('MATDATE')
+    maturity_date = pd.to_datetime(maturity_raw) if maturity_raw else pd.NaT
+    if pd.isna(maturity_date):
+        logger.warning("MATDATE отсутствует или пуст — ytm/duration не рассчитаны")
+        df['years_to_maturity'] = float('nan')
+        df['ytm'] = float('nan')
+        df['duration'] = float('nan')
+        return df
+
     df['years_to_maturity'] = (maturity_date - df.index).days / 365.25
-    
+
+    price_col = 'CLOSE' if 'CLOSE' in df.columns else 'WAPRICE'
     for idx in df.index:
-        price_pct = df.loc[idx, 'CLOSE'] if 'CLOSE' in df.columns else df.loc[idx, 'WAPRICE']
-        ytm = calculate_ytm(price_pct, face_value, coupon_rate, df.loc[idx, 'years_to_maturity'], coupon_freq)
-        duration = calculate_duration(price_pct, face_value, coupon_rate, df.loc[idx, 'years_to_maturity'], ytm, coupon_freq)
-        
-        df.loc[idx, 'ytm'] = ytm
-        df.loc[idx, 'duration'] = duration
-    
+        price_pct = float(df.at[idx, price_col])
+        years = float(df.at[idx, 'years_to_maturity'])
+        ytm = calculate_ytm(price_pct, face_value, coupon_rate, years, coupon_freq)
+        duration = calculate_duration(price_pct, face_value, coupon_rate, years, ytm, coupon_freq)
+
+        df.at[idx, 'ytm'] = ytm
+        df.at[idx, 'duration'] = duration
+
     return df
-        

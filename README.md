@@ -125,13 +125,6 @@ moex.add_adj_close_to_all_stocks(div_folder='path/to/dividends/')
 combined_df = moex.combine_moex_stocks()
 ```
 
-### Performance Analysis
-
-```python
-# Calculate and visualize last month's performance
-performance_data = moex.plot_stocks_performance()
-```
-
 ## Bonds Support
 
 Проект поддерживает основной функционал для облигаций MOEX:
@@ -282,10 +275,6 @@ Calculates and adds 'adj_close' column for all stocks in data folder.
 
 **Parameters:**
 - `div_folder` (str): Path to folder containing dividend CSV files
-
-#### `plot_stocks_performance()`
-
-Calculates and visualizes last month's performance for all stocks.
 
 Подробное описание функций для облигаций — в [docs/api-reference.md](docs/api-reference.md).
 
