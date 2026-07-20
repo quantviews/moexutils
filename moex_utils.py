@@ -10,9 +10,10 @@ import apimoex
 import pandas as pd
 import requests
 
-# Constant for the data folder
-DATA_FOLDER = "data"
-METADATA_FILE = "metadata/stock-index-base.xlsx"
+# Пути привязаны к папке модуля, чтобы импорт из nb/ и scripts/ работал при любом cwd
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FOLDER = os.path.join(BASE_DIR, "data")
+METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 
 def get_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, session: requests.Session = None, frequency: int = 24) -> pd.DataFrame:
     """
@@ -768,7 +769,7 @@ def add_market_cap_to_all_stocks(metadata_file: str = METADATA_FILE) -> None:
 
 # Bonds functions
 
-BONDS_FOLDER = "bonds"
+BONDS_FOLDER = os.path.join(BASE_DIR, "bonds")
 
 def get_moex_bonds_list(segment: str = 'TQCB', session: requests.Session = None) -> pd.DataFrame:
     """

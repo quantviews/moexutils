@@ -300,25 +300,27 @@ Calculates and visualizes last month's performance for all stocks.
 - `volume`: Index volume
 - `close`: Closing value
 
-## File Organization
-
-Data is stored in the following structure:
+## Project Layout
 
 ```
-data/
-├── SBER/
-│   └── SBER.parquet
-├── LKOH/
-│   └── LKOH.parquet
-└── ...
-
-bonds/
-├── RU000A0JX0J2.parquet
-└── ...
-
-metadata/
-└── stock-index-base.xlsx  # Excel file with shares data (Code, date, Number of issued shares)
+moexutils/
+├── moex_utils.py       # ядро библиотеки
+├── update_data.py      # пайплайн обновления данных (CLI)
+├── nb/                 # Jupyter-ноутбуки (исследования, примеры)
+├── scripts/            # аналитические скрипты (marimo и обычные)
+├── tests/              # pytest-тесты
+├── docs/               # документация
+├── data/               # локальные котировки акций (не в git)
+│   ├── SBER/
+│   │   └── SBER.parquet
+│   └── ...
+├── bonds/              # локальные данные облигаций (не в git)
+│   └── <SECID>.parquet
+└── metadata/
+    └── stock-index-base.xlsx  # Excel file with shares data (Code, date, Number of issued shares)
 ```
+
+Пути `data/`, `bonds/`, `metadata/` привязаны к папке модуля `moex_utils.py`, поэтому импорт из `nb/` и `scripts/` работает при любом рабочем каталоге (в ноутбуках первая ячейка добавляет корень проекта в `sys.path`).
 
 ### Metadata File Format
 

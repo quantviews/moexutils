@@ -4,12 +4,19 @@
 
 ```
 moexutils/
+├── moex_utils.py       # ядро библиотеки
+├── update_data.py      # пайплайн обновления данных (CLI)
+├── nb/                 # Jupyter-ноутбуки
+├── scripts/            # аналитические скрипты
+├── tests/              # pytest-тесты
 ├── data/
 │   ├── SBER/
 │   │   └── SBER.parquet
 │   ├── GAZP/
 │   │   └── GAZP.parquet
 │   └── ...
+├── bonds/
+│   └── <SECID>.parquet
 ├── metadata/
 │   └── stock-index-base.xlsx
 └── (опционально) ../dividends/data/   # CSV дивидендов для adj_close
@@ -18,7 +25,9 @@ moexutils/
 ```
 
 - **data/** — локальные котировки: подпапка на тикер, один Parquet на тикер.
+- **bonds/** — локальные данные облигаций, один Parquet на SECID.
 - **metadata/** — Excel с количеством акций по датам (для market_cap).
+- Пути `data/`, `bonds/`, `metadata/` привязаны к папке модуля `moex_utils.py` и не зависят от рабочего каталога.
 - Папка дивидендов задаётся параметром `div_folder` (в `update_data.py` по умолчанию `../dividends/data`).
 
 ---
