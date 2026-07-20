@@ -191,14 +191,31 @@ class TestSaveReadUpdateStock:
         # Обновление перезапрашивает с последней даты: перекрытие по 03.01 (новая цена 999)
         new = make_stock_df(['2025-01-03', '2025-01-04', '2025-01-05'], [999, 103, 104])
         monkeypatch.setattr(mu, 'get_moex_stock',
-                            lambda ticker, start, session=None: new)
+                            lambda ticker, start, session=None, frequency=24: new)
 
         mu.update_moex_stock('TEST', calculate_market_cap_flag=False)
 
-        df = pd.read_parquet(os.path.join(tmp_data_folder, 'TEST', 'TEST.parquet'))
+        path = os.path.join(tmp_data_folder, 'TEST', 'TEST.parquet')
+        df = pd.read_parquet(path)
         assert len(df) == 5                                   # дубликат схлопнут
         assert df.index.is_monotonic_increasing
         assert df.loc['2025-01-03', 'close'] == 999           # keep='last'
+        assert not os.path.exists(path + '.tmp')              # атомарная запись
+
+    def test_ticker_case_insensitive(self, tmp_data_folder, monkeypatch):
+        """save/read/update нормализуют тикер к верхнему регистру."""
+        sample = make_stock_df(['2025-01-01'], [100])
+        monkeypatch.setattr(mu, 'get_moex_stock',
+                            lambda ticker=None, start=None, session=None, frequency=24, **kw: sample)
+
+        out_path = mu.save_moex_stock('sber', calculate_market_cap_flag=False)
+        assert out_path == os.path.join(tmp_data_folder, 'SBER', 'SBER.parquet')
+
+        df = mu.read_moex_stock('sber')          # нижний регистр находит тот же файл
+        assert len(df) == 1
+
+        mu.update_moex_stock('sber', calculate_market_cap_flag=False)
+        assert os.path.exists(out_path)
 
     def test_update_missing_file_is_noop(self, tmp_data_folder, capsys):
         mu.update_moex_stock('NOFILE', calculate_market_cap_flag=False)
@@ -327,26 +344,35 @@ class TestAdjClose:
 # ---------------------------------------------------------------- bonds: API
 
 class TestBondsApi:
-    def test_get_bonds_list(self):
-        expected = {'securities': [['SECID', 'SHORTNAME'], ['BOND1', 'Test Bond']]}
+    def test_get_bonds_list_filters_by_board_path(self):
+        # Реальный формат ISS: {'columns': [...], 'data': [...]}
+        expected = {'securities': {'columns': ['SECID', 'SHORTNAME'],
+                                   'data': [['BOND1', 'Test Bond']]}}
 
         class FakeSession:
             def get(self, url, params=None):
-                assert 'bonds/securities.json' in url
+                # фильтрация по доске должна идти через путь /boards/<board>/
+                assert 'boards/TQCB/securities.json' in url
                 return DummyResponse(expected)
 
         df = mu.get_moex_bonds_list(segment='TQCB', session=FakeSession())
         assert df.loc[0, 'SECID'] == 'BOND1'
 
-    def test_get_bonds_list_dict_format(self):
-        expected = {'securities': [{'SECID': 'BOND1', 'SHORTNAME': 'Test Bond'}]}
+    def test_get_bonds_list_legacy_formats(self):
+        # Совместимость: список списков с шапкой и список словарей
+        for payload in (
+            {'securities': [['SECID', 'SHORTNAME'], ['BOND1', 'Test Bond']]},
+            {'securities': [{'SECID': 'BOND1', 'SHORTNAME': 'Test Bond'}]},
+        ):
+            class FakeSession:
+                def __init__(self, data):
+                    self.data = data
 
-        class FakeSession:
-            def get(self, url, params=None):
-                return DummyResponse(expected)
+                def get(self, url, params=None):
+                    return DummyResponse(self.data)
 
-        df = mu.get_moex_bonds_list(session=FakeSession())
-        assert df.loc[0, 'SECID'] == 'BOND1'
+            df = mu.get_moex_bonds_list(session=FakeSession(payload))
+            assert df.loc[0, 'SECID'] == 'BOND1'
 
     def test_get_bond_params(self):
         data = {'securities': [['SECID', 'COUPONPERCENT'], ['BOND1', '10.0']]}
@@ -386,6 +412,33 @@ class TestBondsApi:
 
         df = mu.get_moex_bond_prices('BOND1', session=FakeSession())
         assert df.empty
+
+    def test_get_bond_prices_paginated(self):
+        """ISS отдаёт history страницами — все страницы должны склеиваться."""
+        all_rows = [[f'2025-01-{d:02d}', 100.0 + d] for d in range(1, 6)]  # 5 строк
+        page_size = 2
+
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def get(self, url, params=None):
+                offset = params['start']
+                self.calls.append(offset)
+                rows = all_rows[offset:offset + page_size]
+                return DummyResponse({
+                    'history': {'columns': ['TRADEDATE', 'CLOSE'], 'data': rows},
+                    'history.cursor': {'columns': ['INDEX', 'TOTAL', 'PAGESIZE'],
+                                       'data': [[offset, len(all_rows), page_size]]},
+                })
+
+        session = FakeSession()
+        df = mu.get_moex_bond_prices('BOND1', start='2025-01-01', end='2025-01-05',
+                                     session=session)
+
+        assert len(df) == 5                       # все страницы, а не первая
+        assert session.calls == [0, 2, 4]         # листали по offset
+        assert df['CLOSE'].iloc[-1] == 105.0
 
     def test_http_error_raises(self):
         class FakeSession:
@@ -476,6 +529,18 @@ class TestBondMetrics:
     def test_ytm_zero_periods(self):
         assert mu.calculate_ytm(price=100, face_value=1000, coupon_rate=10,
                                 years_to_maturity=0) == 0
+
+    def test_ytm_independent_of_face_value_scale(self):
+        """Регрессия: старый солвер сходился только при номинале ~1000."""
+        for face in (1, 100, 1000, 100000):
+            ytm = mu.calculate_ytm(price=100, face_value=face, coupon_rate=10,
+                                   years_to_maturity=1, coupon_freq=2)
+            assert ytm == pytest.approx(10.0, abs=1e-4), f"face_value={face}"
+
+    def test_ytm_long_maturity_converges(self):
+        ytm = mu.calculate_ytm(price=100, face_value=1000, coupon_rate=8,
+                               years_to_maturity=30, coupon_freq=2)
+        assert ytm == pytest.approx(8.0, abs=1e-4)
 
     def test_duration_zero_coupon_bond(self):
         # Для бескупонной облигации Маколей = сроку, модифицированная = срок / (1 + ytm/freq)

@@ -252,6 +252,10 @@ def save_moex_stock(
     Returns:
     str | None: Путь к сохраненному файлу или None в случае ошибки.
     """
+    # Тикер нормализуем к верхнему регистру: пути и колонка ticker
+    # должны совпадать во всех функциях независимо от регистра на входе
+    ticker = ticker.upper()
+
     # Дефолты путей разрешаем в момент вызова, чтобы работало переопределение
     # moex.DATA_FOLDER / moex.METADATA_FILE (например, из update_data.py)
     if out_dir is None:
@@ -329,6 +333,7 @@ def update_moex_stock(
     session: requests.Session = None,
     calculate_market_cap_flag: bool = True,
     metadata_file: Optional[str] = None,
+    frequency: int = 24,
 ) -> None:
     """
     Updates the stock data for a given ticker symbol by checking the local Parquet file.
@@ -340,7 +345,11 @@ def update_moex_stock(
     session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
     calculate_market_cap_flag (bool): Если True, пересчитывает market cap для всех данных.
     metadata_file (str): Путь к Excel файлу с метаданными о количестве акций.
+    frequency (int): Частота свечей для дозагрузки (24 = дневные). Должна совпадать
+                     с частотой, с которой файл был сохранен изначально.
     """
+    ticker = ticker.upper()
+
     # Define the file path for the Parquet file
     file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
     
@@ -356,7 +365,7 @@ def update_moex_stock(
         last_date_str = last_date.strftime('%Y-%m-%d')
         
         # Fetch new data from the last date to today
-        new_data = get_moex_stock(ticker, start=last_date_str, session=session)
+        new_data = get_moex_stock(ticker, start=last_date_str, session=session, frequency=frequency)
         
         # Append the new data to the existing DataFrame
         df_updated = pd.concat([df_existing, new_data])
@@ -374,9 +383,11 @@ def update_moex_stock(
             except Exception as e:
                 print(f"[WARNING] {ticker}: не удалось пересчитать market cap — {e}")
         
-        # Save the updated DataFrame back to Parquet format
-        df_updated.to_parquet(file_path)
-        
+        # Атомарная запись: не оставляем битый файл при прерывании
+        tmp_path = file_path + ".tmp"
+        df_updated.to_parquet(tmp_path)
+        os.replace(tmp_path, file_path)
+
         print(f"Updated data for ticker: {ticker} from {last_date_str} to {datetime.today().strftime('%Y-%m-%d')}")
     else:
         print(f"No existing data found for ticker: {ticker}. Please use save_moex_stock to create the initial file.")
@@ -395,6 +406,8 @@ def read_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, ses
     Returns:
     pd.DataFrame: A DataFrame containing the stock data.
     """
+    ticker = ticker.upper()
+
     # Define the file path for the Parquet file
     file_path = os.path.join(DATA_FOLDER, ticker, f"{ticker}.parquet")
     
@@ -789,6 +802,25 @@ def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
 
 BONDS_FOLDER = os.path.join(BASE_DIR, "bonds")
 
+
+def _parse_iss_table(table) -> pd.DataFrame:
+    """
+    Разбирает таблицу из ответа ISS MOEX в DataFrame.
+
+    Реальный ISS возвращает {'columns': [...], 'data': [...]};
+    для совместимости поддерживаются также список словарей
+    и список списков с шапкой в первой строке.
+    """
+    if not table:
+        return pd.DataFrame()
+    if isinstance(table, dict):
+        return pd.DataFrame(table.get('data') or [], columns=table.get('columns'))
+    if isinstance(table, list) and isinstance(table[0], dict):
+        return pd.DataFrame(table)
+    if isinstance(table, list) and isinstance(table[0], list):
+        return pd.DataFrame(table[1:], columns=table[0])
+    return pd.DataFrame(table)
+
 def get_moex_bonds_list(segment: str = 'TQCB', session: requests.Session = None) -> pd.DataFrame:
     """
     Fetches list of bonds from MOEX by segment.
@@ -801,32 +833,17 @@ def get_moex_bonds_list(segment: str = 'TQCB', session: requests.Session = None)
     """
     if session is None:
         session = requests.Session()
-    
-    url = f"https://iss.moex.com/iss/engines/stock/markets/bonds/securities.json"
-    params = {
-        'iss.only': 'securities',
-        'limit': 100,
-        'boardid': segment
-    }
-    
+
+    # Фильтрация по доске работает только через путь /boards/<board>/:
+    # одноимённый query-параметр ISS молча игнорирует
+    url = f"https://iss.moex.com/iss/engines/stock/markets/bonds/boards/{segment}/securities.json"
+    params = {'iss.only': 'securities'}
+
     try:
         resp = session.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
-        
-        securities = data.get('securities', [])
-        if not securities:
-            return pd.DataFrame()
-
-        # MOEX may return two formats: list-of-lists or list-of-dicts
-        if isinstance(securities, list) and len(securities) > 0 and isinstance(securities[0], dict):
-            return pd.DataFrame(securities)
-        if isinstance(securities, list) and len(securities) > 1 and isinstance(securities[0], list):
-            columns = securities[0]
-            rows = securities[1:]
-            return pd.DataFrame(rows, columns=columns)
-
-        return pd.DataFrame(securities)
+        return _parse_iss_table(data.get('securities'))
     except Exception as e:
         raise RuntimeError(f"Error fetching bonds list: {e}")
 
@@ -845,24 +862,12 @@ def get_moex_bond_params(secid: str, session: requests.Session = None) -> pd.Dat
     
     url = f"https://iss.moex.com/iss/engines/stock/markets/bonds/securities/{secid}.json"
     params = {'iss.only': 'securities'}
-    
+
     try:
         resp = session.get(url, params=params)
         resp.raise_for_status()
         data = resp.json()
-        
-        securities = data.get('securities', [])
-        if not securities:
-            return pd.DataFrame()
-
-        if isinstance(securities, list) and len(securities) > 0 and isinstance(securities[0], dict):
-            return pd.DataFrame(securities)
-        if isinstance(securities, list) and len(securities) > 1 and isinstance(securities[0], list):
-            columns = securities[0]
-            rows = securities[1:]
-            return pd.DataFrame(rows, columns=columns)
-
-        return pd.DataFrame(securities)
+        return _parse_iss_table(data.get('securities'))
     except Exception as e:
         raise RuntimeError(f"Error fetching bond params for {secid}: {e}")
 
@@ -885,29 +890,38 @@ def get_moex_bond_prices(secid: str, start: str = '2023-01-01', end: str = None,
         session = requests.Session()
     
     url = f"https://iss.moex.com/iss/history/engines/stock/markets/bonds/securities/{secid}.json"
-    params = {
-        'from': start,
-        'till': end,
-        'limit': 100
-    }
-    
+
     try:
-        resp = session.get(url, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-        
-        history = data['history']
-        if not history:
+        # ISS отдаёт history страницами (обычно по 100 строк) — листаем через offset
+        pages = []
+        offset = 0
+        for _ in range(1000):  # защита от бесконечного цикла
+            params = {'from': start, 'till': end, 'start': offset}
+            resp = session.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+
+            page = _parse_iss_table(data.get('history'))
+            if page.empty:
+                break
+            pages.append(page)
+            offset += len(page)
+
+            cursor = _parse_iss_table(data.get('history.cursor'))
+            if cursor.empty or 'TOTAL' not in cursor.columns:
+                break  # курсора нет — считаем ответ одностраничным
+            if offset >= int(cursor['TOTAL'].iloc[0]):
+                break
+
+        if not pages:
             return pd.DataFrame()
-        
-        columns = history[0]
-        rows = history[1:]
-        
-        df = pd.DataFrame(rows, columns=columns)
+
+        df = pd.concat(pages, ignore_index=True)
         df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE'])
         df.set_index('TRADEDATE', inplace=True)
+        df = df[~df.index.duplicated(keep='last')]
         df['secid'] = secid
-        
+
         return df
     except Exception as e:
         raise RuntimeError(f"Error fetching bond prices for {secid}: {e}")
@@ -991,26 +1005,36 @@ def calculate_ytm(price: float, face_value: float, coupon_rate: float, years_to_
     Returns:
     float: YTM (%).
     """
-    # Simple approximation
     coupon = face_value * (coupon_rate / 100) / coupon_freq
     periods = int(years_to_maturity * coupon_freq)
-    
+
     if periods == 0:
         return 0
-    
-    ytm_guess = coupon_rate / 100
-    for _ in range(100):
-        pv_coupons = sum(coupon / (1 + ytm_guess/coupon_freq)**i for i in range(1, periods+1))
-        pv_face = face_value / (1 + ytm_guess/coupon_freq)**periods
-        pv_total = pv_coupons + pv_face
-        diff = pv_total - (price / 100 * face_value)
-        
-        if abs(diff) < 0.01:
+
+    target = price / 100 * face_value
+
+    def _pv(annual_rate: float) -> float:
+        r = annual_rate / coupon_freq
+        pv_coupons = sum(coupon / (1 + r) ** i for i in range(1, periods + 1))
+        return pv_coupons + face_value / (1 + r) ** periods
+
+    # Бисекция: PV монотонно убывает по ставке, ищем ставку в [-50%, 500%]
+    lo, hi = -0.5, 5.0
+    if target >= _pv(lo):
+        return lo * 100
+    if target <= _pv(hi):
+        return hi * 100
+
+    for _ in range(200):
+        mid = (lo + hi) / 2
+        if _pv(mid) > target:
+            lo = mid
+        else:
+            hi = mid
+        if hi - lo < 1e-10:
             break
-        
-        ytm_guess += diff / 1000  # Adjust
-    
-    return ytm_guess * 100
+
+    return (lo + hi) / 2 * 100
 
 def calculate_duration(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, ytm: float, coupon_freq: int = 2) -> float:
     """
