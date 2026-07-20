@@ -12,9 +12,10 @@ app = marimo.App(width="full")
 
 @app.cell
 def __():
-    import os
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # moex_utils лежит в корне проекта (родительская папка от marimo/)
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     import moex_utils as moex
     import pandas as pd
     import numpy as np

@@ -24,9 +24,10 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import os
-    import sys
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    # moex_utils лежит в корне проекта (родительская папка от marimo/)
+    import sys as _sys
+    import os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     import moex_utils as moex
     import pandas as pd
     import numpy as np
@@ -40,9 +41,9 @@ def _():
 
 
 @app.cell
-def _(os):
-    # Получаем список доступных тикеров
-    DATA_FOLDER = "data"
+def _(moex, os):
+    # Получаем список доступных тикеров из data/ проекта
+    DATA_FOLDER = moex.DATA_FOLDER
     available_tickers = sorted([
         d for d in os.listdir(DATA_FOLDER) 
         if os.path.isdir(os.path.join(DATA_FOLDER, d)) and 
