@@ -466,13 +466,20 @@ def combine_moex_stocks(data_folder: str | None = None) -> pd.DataFrame:
     else:
         raise ValueError("No parquet files found in data directory")
 
+# Кэш разобранных метаданных: ключ (абсолютный путь, mtime файла).
+# Полное обновление вызывает load_shares_data на каждый тикер — без кэша
+# Excel перечитывался бы ~100 раз за прогон.
+_shares_cache: dict = {}
+
+
 def load_shares_data(metadata_file: Optional[str] = None) -> pd.DataFrame:
     """
     Загружает данные о количестве акций из Excel файла metadata/stock-index-base.xlsx.
-    
+    Результат кэшируется в памяти до изменения файла (по mtime).
+
     Parameters:
     metadata_file (str): Путь к Excel файлу с метаданными. По умолчанию METADATA_FILE.
-    
+
     Returns:
     pd.DataFrame: DataFrame с колонками Code, date, Number of issued shares.
     """
@@ -482,7 +489,12 @@ def load_shares_data(metadata_file: Optional[str] = None) -> pd.DataFrame:
     if not os.path.exists(metadata_file):
         print(f"Warning: Metadata file not found: {metadata_file}")
         return pd.DataFrame()
-    
+
+    cache_key = (os.path.abspath(metadata_file), os.path.getmtime(metadata_file))
+    cached = _shares_cache.get(cache_key)
+    if cached is not None:
+        return cached.copy()
+
     try:
         xls = pd.ExcelFile(metadata_file)
         sheets = xls.sheet_names
@@ -513,7 +525,9 @@ def load_shares_data(metadata_file: Optional[str] = None) -> pd.DataFrame:
             shares_df = shares_df[['Code', 'date', 'Number of issued shares']].copy()
             shares_df = shares_df.dropna(subset=['Number of issued shares'])
             shares_df = shares_df.sort_values(['Code', 'date'])
-            return shares_df
+            _shares_cache.clear()  # храним один актуальный файл
+            _shares_cache[cache_key] = shares_df
+            return shares_df.copy()
         else:
             print(f"Warning: Required columns not found in {metadata_file}")
             return pd.DataFrame()
@@ -617,12 +631,15 @@ def update_all_stocks():
                 ticker_dirs.append(item)
     
     print(f"Found {len(ticker_dirs)} stocks to update")
-    
+
+    # Одна HTTP-сессия на весь прогон: keep-alive вместо нового TLS-соединения на тикер
+    session = requests.Session()
+
     # Update each stock
     for ticker in ticker_dirs:
         try:
             print(f"\nUpdating {ticker}...")
-            update_moex_stock(ticker)
+            update_moex_stock(ticker, session=session)
         except Exception as e:
             print(f"Error updating {ticker}: {e}")
     

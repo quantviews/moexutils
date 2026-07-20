@@ -227,10 +227,19 @@ class TestSaveReadUpdateStock:
         os.makedirs(os.path.join(tmp_data_folder, 'EMPTY_DIR'))  # без parquet — должен игнорироваться
 
         updated = []
-        monkeypatch.setattr(mu, 'update_moex_stock', lambda ticker: updated.append(ticker))
+        sessions = []
+
+        def fake_update(ticker, session=None):
+            updated.append(ticker)
+            sessions.append(session)
+
+        monkeypatch.setattr(mu, 'update_moex_stock', fake_update)
 
         mu.update_all_stocks()
         assert sorted(updated) == ['AAA', 'BBB']
+        # одна общая HTTP-сессия на весь прогон
+        assert sessions[0] is not None
+        assert all(s is sessions[0] for s in sessions)
 
 
 class TestCombineStocks:
@@ -260,6 +269,35 @@ class TestSharesAndMarketCap:
 
     def test_load_shares_data_missing_file(self, tmp_path):
         assert mu.load_shares_data(str(tmp_path / 'nope.xlsx')).empty
+
+    def test_load_shares_data_cached_until_file_changes(self, metadata_xlsx, monkeypatch):
+        mu._shares_cache.clear()
+        reads = {'count': 0}
+        orig_excel_file = pd.ExcelFile
+
+        def counting_excel_file(*args, **kwargs):
+            reads['count'] += 1
+            return orig_excel_file(*args, **kwargs)
+
+        monkeypatch.setattr(pd, 'ExcelFile', counting_excel_file)
+
+        first = mu.load_shares_data(metadata_xlsx)
+        second = mu.load_shares_data(metadata_xlsx)
+        assert reads['count'] == 1                      # второй вызов — из кэша
+        pd.testing.assert_frame_equal(first, second)
+
+        # меняем mtime — кэш должен инвалидироваться
+        st = os.stat(metadata_xlsx)
+        os.utime(metadata_xlsx, (st.st_atime, st.st_mtime + 10))
+        mu.load_shares_data(metadata_xlsx)
+        assert reads['count'] == 2
+
+    def test_load_shares_data_cache_returns_copy(self, metadata_xlsx):
+        mu._shares_cache.clear()
+        first = mu.load_shares_data(metadata_xlsx)
+        first['Code'] = 'MUTATED'                       # портим полученный DataFrame
+        second = mu.load_shares_data(metadata_xlsx)
+        assert 'MUTATED' not in set(second['Code'])     # кэш не задет
 
     def test_market_cap_ffill_bfill(self, metadata_xlsx):
         df = make_stock_df(
