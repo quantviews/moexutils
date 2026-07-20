@@ -1,11 +1,19 @@
 data/
 metadata
 
-# Игнорировать все Excel файлы
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# marimo
+__marimo__/
+
+# Игнорировать все Excel файлы и данные
 *.xls
 *.xlsx
 *.xlsm
 *.xlsb
 *.ods
 *.parquet
-*.csv 
+*.csv
