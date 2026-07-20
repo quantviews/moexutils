@@ -87,6 +87,12 @@ moex.update_moex_stock('SBER', calculate_market_cap_flag=False)
 moex.update_all_stocks()
 ```
 
+На Windows полный цикл обновления (котировки → adj_close → market_cap) запускается через `update_data.bat` (двойной клик или планировщик задач). Флаги пробрасываются в `update_data.py`:
+
+```bat
+update_data.bat --no-adj    :: без пересчета adj_close
+```
+
 ### Market Cap Calculation
 
 ```python
