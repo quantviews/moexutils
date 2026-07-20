@@ -19,7 +19,7 @@ get_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24)
 
 Котировки бумаги. Параметры: `ticker`, `start`, `end` (YYYY-MM-DD), `session`, `frequency` (1/10/60/**24**/7/31/4 — минуты/час/день/неделя/месяц/квартал).
 
-**Возвращает:** DataFrame с индексом `date`, колонками `value_rub`, `close`, `volume`, `ticker`.
+**Возвращает:** DataFrame с индексом `date`, колонками `value_rub` (оборот за период, руб. — не цена), `close` (цена закрытия), `volume`, `ticker`.
 
 ---
 

@@ -293,8 +293,8 @@ Calculates and visualizes last month's performance for all stocks.
 
 ### Stock Data Columns
 - `date`: Trading date (index)
-- `value_rub`: Stock price in RUB
-- `close`: Stock closing price (alias for value_rub)
+- `value_rub`: trading turnover for the period in RUB (renamed ISS candle field `value`) — NOT a price
+- `close`: stock closing price (use this for price-based calculations)
 - `volume`: Trading volume
 - `ticker`: Stock ticker symbol
 - `shares`: Number of issued shares (added when market cap is calculated)
