@@ -12,9 +12,16 @@ A Python utility library for fetching and managing stock data from the Moscow Ex
 - Calculate and visualize stock performance
 - **Automatic market cap calculation** using shares data from metadata
 - **Adjusted close price calculation** based on dividend history
+- **Bonds support**: quotes, parameters, YTM and duration metrics
 - Support for different time frequencies (1min, 10min, 1hour, 1day, 1week, 1month, 1quarter)
 
 ## Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+or manually:
 
 ```bash
 pip install requests apimoex pandas pyarrow openpyxl
@@ -118,6 +125,44 @@ combined_df = moex.combine_moex_stocks()
 # Calculate and visualize last month's performance
 performance_data = moex.plot_stocks_performance()
 ```
+
+## Bonds Support
+
+Проект поддерживает основной функционал для облигаций MOEX:
+
+- `get_moex_bonds_list(segment='TQCB')` — список облигаций сегмента (корпоративные TQCB, государственные TQOB и др.)
+- `get_moex_bond_params(secid)` — параметры облигации (купон, срок погашения, ISIN, номинал и др.)
+- `get_moex_bond_prices(secid, start, end)` — исторические данные по цене и доходности
+- `save_moex_bond(secid, start, end)` — сохранение в `bonds/<SECID>.parquet`
+- `read_moex_bond(secid)` — чтение локального файла
+- `update_moex_bond(secid)` — инкрементальное обновление данных
+
+### Пример
+
+```python
+import moex_utils as moex
+
+# 1. Получить список корпоративных облигаций
+bonds = moex.get_moex_bonds_list('TQCB')
+
+# 2. Параметры конкретной облигации
+params = moex.get_moex_bond_params('SBERB')
+
+# 3. Получить исторические цены
+hist = moex.get_moex_bond_prices('SBERB', '2024-01-01', '2024-12-31')
+
+# 4. Добавить метрики доходности на каждый день
+hist_with_metrics = moex.add_bond_metrics(hist, params.iloc[0])
+
+# 5. Сохранить в папку bonds
+moex.save_moex_bond('SBERB', '2024-01-01')
+```
+
+### Метрики облигаций
+
+- `calculate_ytm(price, face_value, coupon_rate, years_to_maturity)` — доходность до погашения
+- `calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm)` — модифицированная дюрация
+- `add_bond_metrics(df, params)` — расчет YTM и duration для временного ряда цен
 
 ## API Reference
 
@@ -236,6 +281,8 @@ Calculates and adds 'adj_close' column for all stocks in data folder.
 
 Calculates and visualizes last month's performance for all stocks.
 
+Подробное описание функций для облигаций — в [docs/api-reference.md](docs/api-reference.md).
+
 ## Data Structure
 
 ### Stock Data Columns
@@ -256,12 +303,17 @@ Calculates and visualizes last month's performance for all stocks.
 ## File Organization
 
 Data is stored in the following structure:
+
 ```
 data/
 ├── SBER/
 │   └── SBER.parquet
 ├── LKOH/
 │   └── LKOH.parquet
+└── ...
+
+bonds/
+├── RU000A0JX0J2.parquet
 └── ...
 
 metadata/
@@ -274,6 +326,35 @@ The `metadata/stock-index-base.xlsx` file should contain:
 - Multiple sheets named with dates in format `DD.MM.YYYY`
 - Each sheet should have columns: `Code`, `Number of issued shares`
 - The library automatically reads all date sheets and combines them
+
+## Testing
+
+Модуль тестов `tests/test_moex_utils.py` покрывает:
+
+- скачивание и парсинг списка облигаций (`get_moex_bonds_list`)
+- получение параметров облигации (`get_moex_bond_params`)
+- исторические цены облигаций (`get_moex_bond_prices`)
+- сохранение/чтение/обновление облигаций (`save_moex_bond`, `read_moex_bond`, `update_moex_bond`)
+- расчеты метрик (`calculate_ytm`, `calculate_duration`, `add_bond_metrics`)
+- основной путь сохранения акций (`save_moex_stock`)
+
+Запуск тестов:
+
+```bash
+pip install pytest
+pytest -q
+```
+
+Тесты также запускаются в CI (GitHub Actions, `.github/workflows/python-app.yml`).
+
+## План развития
+
+Подробный роадмап — в [development-plan.md](development-plan.md):
+
+1. Облигации (загрузка, сохранение в `bonds/`, расчеты YTM/duration) — частично реализовано
+2. Производные (фьючерсы/опционы, roll-over и метрики)
+3. Инфраструктура (API, кэш, логирование)
+4. Дополнительные метрики (Sharpe, max drawdown, spread)
 
 ## Error Handling
 
@@ -295,4 +376,4 @@ The library includes comprehensive error handling for:
 
 ## License
 
-This project is open source and available under the MIT License. 
+This project is open source and available under the MIT License.

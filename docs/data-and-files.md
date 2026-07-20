@@ -1,0 +1,56 @@
+# Данные и файлы
+
+## Структура каталогов
+
+```
+moexutils/
+├── data/
+│   ├── SBER/
+│   │   └── SBER.parquet
+│   ├── GAZP/
+│   │   └── GAZP.parquet
+│   └── ...
+├── metadata/
+│   └── stock-index-base.xlsx
+└── (опционально) ../dividends/data/   # CSV дивидендов для adj_close
+    ├── SBER.csv
+    └── ...
+```
+
+- **data/** — локальные котировки: подпапка на тикер, один Parquet на тикер.
+- **metadata/** — Excel с количеством акций по датам (для market_cap).
+- Папка дивидендов задаётся параметром `div_folder` (в `update_data.py` по умолчанию `../dividends/data`).
+
+---
+
+## Формат Parquet (акции)
+
+Файл: `data/<TICKER>/<TICKER>.parquet`.
+
+| Колонка | Описание |
+|---------|----------|
+| **Индекс** | `date` (datetime64) |
+| `value_rub`, `close` | Цена закрытия, руб. |
+| `volume` | Объём торгов |
+| `ticker` | Тикер |
+| `shares` | Количество акций (если считался market_cap) |
+| `market_cap` | close × shares (если считался) |
+| `adj_close` | Скорректированная цена (если считалась) |
+
+---
+
+## Метаданные: stock-index-base.xlsx
+
+Используется для расчёта капитализации.
+
+- Листы с именами в формате даты **DD.MM.YYYY**.
+- На листе: колонки **Code** (тикер), **Number of issued shares**. При чтении используется `skiprows=3`.
+- Между срезами дат — forward fill; до первого среза — backward fill.
+
+---
+
+## Дивиденды (CSV для adj_close)
+
+- Один файл на тикер: `<TICKER>.csv` в папке `div_folder`.
+- Обязательные колонки: **closing_date** (дата закрытия реестра), **dividend_value** (руб. на акцию, > 0).
+- Расчёт adj_close идёт от последних дивидендов к ранним.
