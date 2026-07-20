@@ -403,19 +403,24 @@ def read_moex_stock(ticker: str, start: str = '2023-01-01', end: str = None, ses
     
     return df
 
-def combine_moex_stocks() -> pd.DataFrame:
+def combine_moex_stocks(data_folder: str | None = None) -> pd.DataFrame:
     """
     Lists all parquet files in the data folder, reads them, and combines into a unified dataset.
-    
+
+    Parameters:
+    data_folder (str | None): Папка с подпапками тикеров (<TICKER>/<TICKER>.parquet).
+                              По умолчанию — DATA_FOLDER.
+
     Returns:
     pd.DataFrame: A DataFrame containing combined stock data from all parquet files.
     """
+    folder = data_folder if data_folder is not None else DATA_FOLDER
     # Initialize an empty list to store DataFrames
     dfs = []
-    
+
     # Walk through the data directory
-    for ticker_dir in os.listdir(DATA_FOLDER):
-        dir_path = os.path.join(DATA_FOLDER, ticker_dir)
+    for ticker_dir in os.listdir(folder):
+        dir_path = os.path.join(folder, ticker_dir)
         
         # Check if it's a directory
         if os.path.isdir(dir_path):

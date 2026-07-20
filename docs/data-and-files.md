@@ -8,6 +8,7 @@ moexutils/
 ├── update_data.py      # пайплайн обновления данных (CLI)
 ├── nb/                 # Jupyter-ноутбуки
 ├── scripts/            # аналитические скрипты
+├── marimo/             # учебные marimo-ноутбуки
 ├── tests/              # pytest-тесты
 ├── data/
 │   ├── SBER/
