@@ -568,41 +568,71 @@ def _(filtered_df, go, mo, period_label, plotly_available):
 
 
 @app.cell(hide_code=True)
-def _(base64, io, mo, moex, pd, period_end, period_label, period_start, plt):
-    # IMOEX за период — из локального кэша indexes/IMOEX.parquet
-    # (обновляется офлайн: python update_data.py, шаг 1b)
+def _(go, mo, moex, pd, period_end, period_label, period_start, plotly_available):
+    # IMOEX (интерактивный) с линиями EWMAC — пара EWMA 16/64 дня (по Р. Карверу):
+    # быстрая выше медленной = восходящий тренд. Кэш: indexes/IMOEX.parquet.
     imoex_ret = None
     try:
         _idx_df = moex.read_moex_index('IMOEX')
         _idx_df.index = pd.to_datetime(_idx_df.index)
-        _win = _idx_df[(_idx_df.index >= period_start) & (_idx_df.index <= period_end)].sort_index()
+        _close = _idx_df['close'].astype(float).sort_index()
+
+        # Доходность за выбранный период — для сводки "Итоги"
+        _win = _close[(_close.index >= period_start) & (_close.index <= period_end)]
         if len(_win) >= 2:
-            _last_close = float(_win['close'].iloc[-1])
-            imoex_ret = (_last_close / float(_win['close'].iloc[0]) - 1) * 100
-            _figi, _axi = plt.subplots(figsize=(10, 2.6))
-            _axi.plot(_win.index, _win['close'], color='#1f77b4', linewidth=1.8)
-            _axi.fill_between(_win.index, _win['close'], float(_win['close'].min()), alpha=0.12, color='#1f77b4')
-            # Последнее значение — точкой с подписью у правого края
-            _axi.plot(_win.index[-1], _last_close, 'o', color='#1f77b4', markersize=5)
-            _axi.annotate(f'{_last_close:,.0f}'.replace(',', ' '),
-                          xy=(_win.index[-1], _last_close),
-                          xytext=(8, 0), textcoords='offset points',
-                          va='center', fontsize=11, fontweight='bold', color='#1f77b4')
-            _axi.margins(x=0.06)
-            _axi.set_title(f'IMOEX — {period_label}: {imoex_ret:+.2f}% (закрытие: {_last_close:,.0f})'.replace(',', ' '),
-                           fontsize=12, fontweight='bold')
-            _axi.grid(alpha=0.3)
-            _axi.spines['top'].set_visible(False)
-            _axi.spines['right'].set_visible(False)
-            plt.tight_layout()
-            _bufi = io.BytesIO()
-            _figi.savefig(_bufi, format='png', bbox_inches='tight', dpi=100)
-            _bufi.seek(0)
-            _imgi = base64.b64encode(_bufi.read()).decode()
-            plt.close(_figi)
-            index_block = mo.Html(f'<img src="data:image/png;base64,{_imgi}" style="max-width: 100%; height: auto;" />')
+            imoex_ret = (float(_win.iloc[-1]) / float(_win.iloc[0]) - 1) * 100
+
+        if not plotly_available:
+            index_block = mo.md("*Для графика IMOEX нужен plotly: `pip install plotly`*")
+        elif len(_close) < 70:
+            index_block = mo.md("*IMOEX: недостаточно истории в кэше — обновите: `python update_data.py`*")
         else:
-            index_block = mo.md("*IMOEX: недостаточно данных за период — обновите кэш: `python update_data.py`*")
+            # EWMA считаем по всей истории (без прогревочного смещения),
+            # показываем последний год, но не меньше выбранного периода
+            _ew16 = _close.ewm(span=16, adjust=False).mean()
+            _ew64 = _close.ewm(span=64, adjust=False).mean()
+            _show_from = min(_close.index.max() - pd.DateOffset(years=1),
+                             pd.Timestamp(period_start))
+            _c = _close[_close.index >= _show_from]
+            _e16 = _ew16[_ew16.index >= _show_from]
+            _e64 = _ew64[_ew64.index >= _show_from]
+            _last_close = float(_c.iloc[-1])
+
+            _figi = go.Figure()
+            _figi.add_scatter(x=_c.index, y=_c.values, name='IMOEX',
+                              line=dict(color='#1f77b4', width=1.8),
+                              hovertemplate='%{y:.0f}<extra>IMOEX</extra>')
+            _figi.add_scatter(x=_e16.index, y=_e16.values, name='EWMA 16',
+                              line=dict(color='#2ca02c', width=1.1),
+                              hovertemplate='%{y:.0f}<extra>EWMA 16</extra>')
+            _figi.add_scatter(x=_e64.index, y=_e64.values, name='EWMA 64',
+                              line=dict(color='#d62728', width=1.1, dash='dot'),
+                              hovertemplate='%{y:.0f}<extra>EWMA 64</extra>')
+            # Подсветка выбранного периода анализа
+            _figi.add_vrect(x0=period_start, x1=period_end,
+                            fillcolor='gray', opacity=0.08, line_width=0)
+            # Последнее значение
+            _figi.add_scatter(x=[_c.index[-1]], y=[_last_close], mode='markers',
+                              marker=dict(color='#1f77b4', size=7),
+                              showlegend=False, hoverinfo='skip')
+            _figi.add_annotation(x=_c.index[-1], y=_last_close,
+                                 text=f'<b>{_last_close:,.0f}</b>'.replace(',', ' '),
+                                 showarrow=False, xanchor='left', xshift=8,
+                                 font=dict(color='#1f77b4', size=13))
+
+            _ret_str = f'{imoex_ret:+.2f}%' if imoex_ret is not None else 'н/д'
+            _trend = ('восходящий (EWMA16 > EWMA64)'
+                      if float(_ew16.iloc[-1]) > float(_ew64.iloc[-1])
+                      else 'нисходящий (EWMA16 < EWMA64)')
+            _figi.update_layout(
+                height=360,
+                title=dict(text=(f'IMOEX {_last_close:,.0f} | {period_label}: {_ret_str} | '
+                                 f'тренд: {_trend}').replace(',', ' '), font_size=14),
+                hovermode='x unified',
+                legend=dict(orientation='h', y=1.12, x=1, xanchor='right'),
+                margin=dict(t=48, l=10, r=70, b=10),
+            )
+            index_block = _figi
     except FileNotFoundError:
         index_block = mo.md("*Локальный кэш IMOEX не найден — выполните `python update_data.py` (шаг 1b)*")
     except Exception as _e_idx:
@@ -611,7 +641,7 @@ def _(base64, io, mo, moex, pd, period_end, period_label, period_start, plt):
 
 
 @app.cell(hide_code=True)
-def _(combined_df, go, mo, pd, plotly_available):
+def _(combined_df, mo, pd):
     # Ширина рынка: 52-недельные экстремумы + доля бумаг выше MA50/MA200.
     # Классика: >50% бумаг выше MA200 — здоровый рынок, дивергенция с индексом — ранний сигнал.
     _last_date = combined_df.index.max()
@@ -646,33 +676,11 @@ def _(combined_df, go, mo, pd, plotly_available):
     _above50 = float(_above50_series.iloc[-1]) if len(_above50_series) else float('nan')
     _above200 = float(_above200_series.iloc[-1]) if len(_above200_series) else float('nan')
 
-    _md = mo.md(
+    breadth_block = mo.md(
         f"**Ширина рынка:** выше MA50: **{_above50:.0f}%** | выше MA200: **{_above200:.0f}%** | "
         f"у 52-нед. максимумов (≤2%): **{len(_near_hi)}** ({_fmt_tickers(_near_hi)}) | "
         f"у минимумов: **{len(_near_lo)}** ({_fmt_tickers(_near_lo)})"
     )
-
-    if plotly_available and len(_above200_series) > 30:
-        _hist = _above200_series[_above200_series.index >= _last_date - pd.DateOffset(years=1)]
-        _hist50 = _above50_series[_above50_series.index >= _last_date - pd.DateOffset(years=1)]
-        _figb = go.Figure()
-        _figb.add_scatter(x=_hist.index, y=_hist.values, mode='lines', name='выше MA200',
-                          line=dict(color='#1f77b4', width=1.8),
-                          hovertemplate='%{x|%d.%m.%Y}: %{y:.0f}%<extra>выше MA200</extra>')
-        _figb.add_scatter(x=_hist50.index, y=_hist50.values, mode='lines', name='выше MA50',
-                          line=dict(color='#ff7f0e', width=1.2, dash='dot'),
-                          hovertemplate='%{x|%d.%m.%Y}: %{y:.0f}%<extra>выше MA50</extra>')
-        _figb.add_hline(y=50, line_dash='dash', line_color='gray', line_width=1)
-        _figb.update_layout(
-            height=190,
-            margin=dict(t=26, l=10, r=10, b=10),
-            title=dict(text='Доля бумаг выше скользящих средних (год)', font_size=13),
-            yaxis=dict(range=[0, 100], ticksuffix='%'),
-            legend=dict(orientation='h', y=1.15, x=1, xanchor='right'),
-        )
-        breadth_block = mo.vstack([_md, _figb])
-    else:
-        breadth_block = _md
     return (breadth_block,)
 
 
