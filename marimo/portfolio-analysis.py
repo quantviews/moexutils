@@ -54,7 +54,7 @@ def _():
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, moex):
     # Папка с данными (поддиректории по тикерам, в каждой <ticker>.parquet)
     data_folder_input = mo.ui.text(
@@ -65,7 +65,7 @@ def _(mo, moex):
     return (data_folder_input,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(data_folder_input, moex):
     # Загрузка всех данных
     data_folder = data_folder_input.value or None
@@ -319,7 +319,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     EfficientFrontier,
     cov_method_dropdown,
@@ -372,7 +372,7 @@ def _(
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, perf_max_sharpe, weights_max_sharpe):
     # Вывод характеристик оптимального портфеля (max Sharpe)
     if perf_max_sharpe is not None and weights_max_sharpe:
@@ -458,7 +458,7 @@ def _(np, plt, prices_wide, weights_max_sharpe):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(plt, prices_wide):
     # Корреляционная матрица доходностей (для понимания диверсификации)
     if len(prices_wide.columns) >= 2 and len(prices_wide) >= 2:
@@ -605,7 +605,7 @@ def _(
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo, results_df, risk_free_rate_slider):
     # Вывод статистики
     if len(results_df) > 0:
