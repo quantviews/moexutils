@@ -25,8 +25,15 @@ def _():
     import marimo as mo
     import io
     import base64
+    try:
+        import plotly.express as px
+        import plotly.graph_objects as go
+        plotly_available = True
+    except ImportError:
+        px, go = None, None
+        plotly_available = False
 
-    return base64, io, mo, moex, np, pd, plt
+    return base64, go, io, mo, moex, np, pd, plotly_available, plt, px
 
 
 @app.cell(hide_code=True)
@@ -79,6 +86,18 @@ def _(moex):
     # иначе дробления акций (T 1:10 в 2026 и др.) выглядят как обвал цены
     combined_df = moex.adjust_for_splits(moex.combine_moex_stocks())
     return (combined_df,)
+
+
+@app.cell(hide_code=True)
+def _(moex, pd):
+    # Справочник тикер→сектор (используется картой рынка, секторным разрезом и структурой)
+    import os as _oss
+    _sec_path = _oss.path.join(moex.BASE_DIR, 'metadata', 'sectors.csv')
+    if _oss.path.exists(_sec_path):
+        sectors_map = pd.read_csv(_sec_path)
+    else:
+        sectors_map = pd.DataFrame(columns=['ticker', 'sector'])
+    return (sectors_map,)
 
 
 @app.cell(hide_code=True)
@@ -335,6 +354,7 @@ def _(base64, filtered_df, io, mo, period_label, plt, show_market_cap):
 
 @app.cell(hide_code=True)
 def _(
+    anchor_date,
     breadth_block,
     chart,
     heatmap_block,
@@ -351,6 +371,7 @@ def _(
     sector_block,
     show_market_cap,
     sort_by,
+    structure_block,
     table,
     volume_block,
 ):
@@ -367,6 +388,9 @@ def _(
         sector_block,
         heatmap_block,
         volume_block,
+        mo.md("---\n## 🧭 Структура рынка: сравнение с опорной датой"),
+        anchor_date,
+        structure_block,
         mo.accordion({
             "📊 Marimekko: динамика с учетом веса в рынке": marimekko_block,
             "🏆 Лидеры и аутсайдеры (топ-15)": chart,
@@ -417,53 +441,49 @@ def _(filtered_df, imoex_ret, mo, period_label):
 
 
 @app.cell(hide_code=True)
-def _(base64, filtered_df, io, mo, period_label, plt):
-    # Вертикальный Marimekko: толщина бара = доля в капитализации, длина = performance.
-    # Тикеры читаются горизонтально, лучшие сверху.
+def _(filtered_df, go, mo, period_label, plotly_available):
+    # Вертикальный Marimekko (интерактивный): толщина бара = доля в капитализации,
+    # длина = performance, лучшие сверху. Тонкие бары читаются через hover.
     _mk = filtered_df.dropna(subset=['last_market_cap', 'price_performance']).copy()
     if len(_mk) == 0:
         marimekko_block = mo.md("")
+    elif not plotly_available:
+        marimekko_block = mo.md("*Для Marimekko нужен plotly: `pip install plotly`*")
     else:
         _mk = _mk.sort_values('price_performance', ascending=False)
         _mk['share'] = _mk['last_market_cap'] / _mk['last_market_cap'].sum() * 100
+        _cums = _mk['share'].cumsum()
+        _mk['y_center'] = -( _cums - _mk['share'] / 2)
 
-        _span = max(abs(float(_mk['price_performance'].max())),
-                    abs(float(_mk['price_performance'].min())), 1e-9)
-        _off = 0.02 * _span
-
-        _figm, _axm = plt.subplots(figsize=(9.5, 12))
-        _cum = 0.0
-        for _rowm in _mk.itertuples():
-            _p = float(_rowm.price_performance)
-            _sh = float(_rowm.share)
-            _yc = -(_cum + _sh / 2)
-            _axm.barh(_yc, _p, height=max(_sh * 0.94, 0.15),
-                      color='green' if _p >= 0 else 'red',
-                      alpha=0.75, edgecolor='white', linewidth=0.4)
-            # Подписываем бары толще ~0.8% капитализации — прочие видны в таблице
-            if _sh >= 0.8:
-                _axm.text(_p + (_off if _p >= 0 else -_off), _yc,
-                          f'{_rowm.ticker} {_p:+.1f}%',
-                          ha='left' if _p >= 0 else 'right', va='center', fontsize=8)
-            _cum += _sh
-
-        _axm.set_ylim(-100, 0)
-        _axm.set_yticks([0, -20, -40, -60, -80, -100])
-        _axm.set_yticklabels(['0%', '20%', '40%', '60%', '80%', '100%'])
-        _axm.set_ylabel('Накопленная доля капитализации (лучшие — сверху)')
-        _axm.set_xlabel('Изменение цены (%)')
-        _axm.set_title(f'Marimekko: толщина = доля в капитализации рынка — {period_label}',
-                       fontsize=13, fontweight='bold')
-        _axm.axvline(0, color='black', linewidth=0.9)
-        _axm.grid(axis='x', linestyle='--', alpha=0.5)
-        _axm.margins(x=0.18)
-        plt.tight_layout()
-        _bufm = io.BytesIO()
-        _figm.savefig(_bufm, format='png', bbox_inches='tight', dpi=100)
-        _bufm.seek(0)
-        _imgm = base64.b64encode(_bufm.read()).decode()
-        plt.close(_figm)
-        marimekko_block = mo.Html(f'<img src="data:image/png;base64,{_imgm}" style="max-width: 100%; height: auto;" />')
+        _figm = go.Figure(go.Bar(
+            x=_mk['price_performance'],
+            y=_mk['y_center'],
+            width=(_mk['share'] * 0.94).clip(lower=0.12),
+            orientation='h',
+            marker_color=['green' if _v >= 0 else 'red' for _v in _mk['price_performance']],
+            marker_line=dict(color='white', width=0.5),
+            text=[f'{_t} {_v:+.1f}%' if _s >= 0.8 else ''
+                  for _t, _v, _s in zip(_mk['ticker'], _mk['price_performance'], _mk['share'])],
+            textposition='outside',
+            textfont_size=11,
+            customdata=_mk[['ticker', 'share', 'price_performance']].values,
+            hovertemplate='<b>%{customdata[0]}</b><br>Изменение: %{customdata[2]:+.2f}%'
+                          '<br>Доля в капитализации: %{customdata[1]:.2f}%<extra></extra>',
+        ))
+        _figm.update_layout(
+            height=900,
+            title=dict(text=f'Marimekko: толщина = доля в капитализации — {period_label}', font_size=15),
+            xaxis=dict(title='Изменение цены (%)', zeroline=True, zerolinecolor='black', zerolinewidth=1),
+            yaxis=dict(
+                title='Накопленная доля капитализации (лучшие — сверху)',
+                tickvals=[0, -20, -40, -60, -80, -100],
+                ticktext=['0%', '20%', '40%', '60%', '80%', '100%'],
+                range=[-101, 1],
+            ),
+            margin=dict(t=40, l=10, r=10, b=10),
+            showlegend=False,
+        )
+        marimekko_block = _figm
     return (marimekko_block,)
 
 
@@ -511,8 +531,9 @@ def _(base64, io, mo, moex, pd, period_end, period_label, period_start, plt):
 
 
 @app.cell(hide_code=True)
-def _(combined_df, mo, pd):
-    # Ширина рынка: близость к 52-недельным экстремумам (по close за последний год)
+def _(combined_df, go, mo, pd, plotly_available):
+    # Ширина рынка: 52-недельные экстремумы + доля бумаг выше MA50/MA200.
+    # Классика: >50% бумаг выше MA200 — здоровый рынок, дивергенция с индексом — ранний сигнал.
     _last_date = combined_df.index.max()
     _ydf = combined_df[combined_df.index >= _last_date - pd.DateOffset(years=1)]
     _g = _ydf.groupby('ticker')['close']
@@ -529,26 +550,61 @@ def _(combined_df, mo, pd):
         _s = ", ".join(_lst[:_limit])
         return _s + (f" и еще {len(_lst) - _limit}" if len(_lst) > _limit else "")
 
-    breadth_block = mo.md(
-        f"**Ширина рынка (52 нед.):** у максимумов (в пределах 2%): **{len(_near_hi)}** ({_fmt_tickers(_near_hi)}) | "
+    # Доля бумаг выше скользящих средних (по всей истории, показываем последний год)
+    _wide = combined_df.pivot_table(index=combined_df.index, columns='ticker',
+                                    values='close', aggfunc='last').sort_index()
+    _ma50 = _wide.rolling(50, min_periods=50).mean()
+    _ma200 = _wide.rolling(200, min_periods=200).mean()
+
+    def _pct_above(_prices, _ma):
+        _valid = _ma.notna() & _prices.notna()
+        _cnt = _valid.sum(axis=1)
+        return ((_prices > _ma) & _valid).sum(axis=1) / _cnt.replace(0, pd.NA) * 100
+
+    _above50_series = _pct_above(_wide, _ma50).dropna()
+    _above200_series = _pct_above(_wide, _ma200).dropna()
+    _above50 = float(_above50_series.iloc[-1]) if len(_above50_series) else float('nan')
+    _above200 = float(_above200_series.iloc[-1]) if len(_above200_series) else float('nan')
+
+    _md = mo.md(
+        f"**Ширина рынка:** выше MA50: **{_above50:.0f}%** | выше MA200: **{_above200:.0f}%** | "
+        f"у 52-нед. максимумов (≤2%): **{len(_near_hi)}** ({_fmt_tickers(_near_hi)}) | "
         f"у минимумов: **{len(_near_lo)}** ({_fmt_tickers(_near_lo)})"
     )
+
+    if plotly_available and len(_above200_series) > 30:
+        _hist = _above200_series[_above200_series.index >= _last_date - pd.DateOffset(years=1)]
+        _hist50 = _above50_series[_above50_series.index >= _last_date - pd.DateOffset(years=1)]
+        _figb = go.Figure()
+        _figb.add_scatter(x=_hist.index, y=_hist.values, mode='lines', name='выше MA200',
+                          line=dict(color='#1f77b4', width=1.8),
+                          hovertemplate='%{x|%d.%m.%Y}: %{y:.0f}%<extra>выше MA200</extra>')
+        _figb.add_scatter(x=_hist50.index, y=_hist50.values, mode='lines', name='выше MA50',
+                          line=dict(color='#ff7f0e', width=1.2, dash='dot'),
+                          hovertemplate='%{x|%d.%m.%Y}: %{y:.0f}%<extra>выше MA50</extra>')
+        _figb.add_hline(y=50, line_dash='dash', line_color='gray', line_width=1)
+        _figb.update_layout(
+            height=190,
+            margin=dict(t=26, l=10, r=10, b=10),
+            title=dict(text='Доля бумаг выше скользящих средних (год)', font_size=13),
+            yaxis=dict(range=[0, 100], ticksuffix='%'),
+            legend=dict(orientation='h', y=1.15, x=1, xanchor='right'),
+        )
+        breadth_block = mo.vstack([_md, _figb])
+    else:
+        breadth_block = _md
     return (breadth_block,)
 
 
 @app.cell(hide_code=True)
-def _(base64, filtered_df, io, mo, moex, pd, period_label, plt):
+def _(filtered_df, go, mo, pd, period_label, plotly_available, sectors_map):
     # Секторный разрез: динамика секторов, взвешенная по капитализации
-    # Справочник тикер→сектор: metadata/sectors.csv
-    import os as _osx
-    _sec_path = _osx.path.join(moex.BASE_DIR, 'metadata', 'sectors.csv')
-    if not _osx.path.exists(_sec_path):
-        sector_block = mo.md("*Справочник секторов `metadata/sectors.csv` не найден — секторный разрез пропущен*")
-    elif len(filtered_df) == 0:
+    if len(filtered_df) == 0 or len(sectors_map) == 0:
         sector_block = mo.md("")
+    elif not plotly_available:
+        sector_block = mo.md("*Для секторного графика нужен plotly: `pip install plotly`*")
     else:
-        _sec_map = pd.read_csv(_sec_path)
-        _sdf = filtered_df.merge(_sec_map, on='ticker', how='left')
+        _sdf = filtered_df.merge(sectors_map, on='ticker', how='left')
         _sdf['sector'] = _sdf['sector'].fillna('Прочее')
 
         _rows = []
@@ -558,65 +614,71 @@ def _(base64, filtered_df, io, mo, moex, pd, period_label, plt):
                 _ret = (_gmc['last_market_cap'].sum() / _gmc['first_market_cap'].sum() - 1) * 100
             else:
                 _ret = float(_grp['price_performance'].median())
-            _rows.append({'sector': f"{_sec} ({len(_grp)})", 'ret': _ret})
+            _rows.append({'sector': f"{_sec} ({len(_grp)})", 'ret': _ret,
+                          'tickers': ", ".join(sorted(_grp['ticker'])[:15])})
         _sec_df = pd.DataFrame(_rows).sort_values('ret')
 
-        _figs, _axs = plt.subplots(figsize=(10, max(3.0, 0.45 * len(_sec_df))))
-        _colss = ['green' if _x >= 0 else 'red' for _x in _sec_df['ret']]
-        _axs.barh(_sec_df['sector'], _sec_df['ret'], color=_colss, alpha=0.75)
-        for _yi, _v in enumerate(_sec_df['ret']):
-            _axs.text(_v, _yi, f' {_v:+.1f}% ', va='center',
-                      ha='left' if _v >= 0 else 'right', fontsize=9, fontweight='bold')
-        _axs.set_title(f'Сектора (взвешенно по капитализации) — {period_label}', fontsize=12, fontweight='bold')
-        _axs.axvline(0, color='black', linewidth=0.8)
-        _axs.grid(axis='x', linestyle='--', alpha=0.5)
-        plt.tight_layout()
-        _bufs = io.BytesIO()
-        _figs.savefig(_bufs, format='png', bbox_inches='tight', dpi=100)
-        _bufs.seek(0)
-        _imgs = base64.b64encode(_bufs.read()).decode()
-        plt.close(_figs)
-        sector_block = mo.Html(f'<img src="data:image/png;base64,{_imgs}" style="max-width: 100%; height: auto;" />')
+        _figs = go.Figure(go.Bar(
+            x=_sec_df['ret'],
+            y=_sec_df['sector'],
+            orientation='h',
+            marker_color=['green' if _x >= 0 else 'red' for _x in _sec_df['ret']],
+            text=[f'{_v:+.1f}%' for _v in _sec_df['ret']],
+            textposition='outside',
+            customdata=_sec_df[['tickers']].values,
+            hovertemplate='<b>%{y}</b>: %{x:+.2f}%<br>%{customdata[0]}<extra></extra>',
+        ))
+        _figs.update_layout(
+            height=max(300, 34 * len(_sec_df) + 80),
+            title=dict(text=f'Сектора (взвешенно по капитализации) — {period_label}', font_size=15),
+            xaxis=dict(title='Изменение (%)', zeroline=True, zerolinecolor='black'),
+            margin=dict(t=40, l=10, r=10, b=10),
+        )
+        sector_block = _figs
     return (sector_block,)
 
 
 @app.cell(hide_code=True)
-def _(base64, filtered_df, io, mo, np, period_label, plt):
-    # Карта рынка: плитки по убыванию капитализации, цвет = performance
-    _hm = filtered_df.dropna(subset=['price_performance']).copy()
+def _(filtered_df, mo, np, period_label, plotly_available, px, sectors_map):
+    # Карта рынка (finviz-style treemap): сектора → бумаги,
+    # площадь = капитализация, цвет = изменение цены. Hover — точные цифры.
+    _hm = filtered_df.dropna(subset=['price_performance', 'last_market_cap']).copy()
     if len(_hm) == 0:
         heatmap_block = mo.md("")
+    elif not plotly_available:
+        heatmap_block = mo.md("*Для карты рынка нужен plotly: `pip install plotly`*")
     else:
-        _hm['_mc'] = _hm['last_market_cap'].fillna(0)
-        _hm = _hm.sort_values('_mc', ascending=False)
+        _hm = _hm.merge(sectors_map, on='ticker', how='left')
+        _hm['sector'] = _hm['sector'].fillna('Прочее')
+        _hm['mc_bln'] = _hm['last_market_cap'] / 1e9
 
-        # 7 колонок под ширину страницы medium (~900px): плитка ~130px, шрифты читаемы
-        _ncols = 7
-        _nrows = int(np.ceil(len(_hm) / _ncols))
+        # Шкала цвета по 95-му перцентилю, чтобы один выброс не обесцвечивал карту
         _vmax = max(float(np.percentile(np.abs(_hm['price_performance']), 95)), 1e-9)
-        _cmap = plt.get_cmap('RdYlGn')
 
-        _figh, _axh = plt.subplots(figsize=(9.5, 1.05 * _nrows))
-        for _ih, _rowh in enumerate(_hm.itertuples()):
-            _rr, _cc = divmod(_ih, _ncols)
-            _pv = float(_rowh.price_performance)
-            _normv = 0.5 + max(-1.0, min(1.0, _pv / _vmax)) / 2
-            _axh.add_patch(plt.Rectangle((_cc + 0.02, -_rr - 0.98), 0.96, 0.94, color=_cmap(_normv)))
-            _axh.text(_cc + 0.5, -_rr - 0.38, str(_rowh.ticker),
-                      ha='center', va='center', fontsize=10, fontweight='bold')
-            _axh.text(_cc + 0.5, -_rr - 0.72, f'{_pv:+.1f}%', ha='center', va='center', fontsize=8.5)
-        _axh.set_xlim(0, _ncols)
-        _axh.set_ylim(-_nrows, 0)
-        _axh.axis('off')
-        _axh.set_title(f'Карта рынка (порядок = размер компании) — {period_label}',
-                       fontsize=13, fontweight='bold')
-        plt.tight_layout()
-        _bufh = io.BytesIO()
-        _figh.savefig(_bufh, format='png', bbox_inches='tight', dpi=110)
-        _bufh.seek(0)
-        _imgh = base64.b64encode(_bufh.read()).decode()
-        plt.close(_figh)
-        heatmap_block = mo.Html(f'<img src="data:image/png;base64,{_imgh}" style="max-width: 100%; height: auto;" />')
+        _figt = px.treemap(
+            _hm,
+            path=[px.Constant(f'Рынок — {period_label}'), 'sector', 'ticker'],
+            values='last_market_cap',
+            color='price_performance',
+            color_continuous_scale='RdYlGn',
+            color_continuous_midpoint=0,
+            range_color=(-_vmax, _vmax),
+            custom_data=['price_performance', 'mc_bln'],
+        )
+        _figt.update_traces(
+            texttemplate='%{label}<br>%{customdata[0]:+.1f}%',
+            hovertemplate='<b>%{label}</b><br>Изменение: %{customdata[0]:+.2f}%'
+                          '<br>Капитализация: %{customdata[1]:,.0f} млрд руб<extra></extra>',
+            textfont_size=13,
+            marker_line_width=1,
+        )
+        _figt.update_layout(
+            height=640,
+            margin=dict(t=34, l=2, r=2, b=2),
+            coloraxis_colorbar=dict(title='%'),
+            title=dict(text=f'Карта рынка — {period_label}', font_size=15),
+        )
+        heatmap_block = _figt
     return (heatmap_block,)
 
 
@@ -656,6 +718,142 @@ def _(combined_df, filtered_df, mo, pd, period_end, period_start):
             "|---|---|---|---|---|\n" + "\n".join(_lines)
         )
     return (volume_block,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Опорная дата для анализа структуры рынка
+    anchor_date = mo.ui.date(value="2022-02-21", label="Опорная дата:")
+    return (anchor_date,)
+
+
+@app.cell(hide_code=True)
+def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map):
+    # Структура рынка: что изменилось с опорной даты.
+    # Отвечает на вопросы: индекс на том же уровне — а рынок тот же?
+    # Кто вытащил/утопил капитализацию, как перекроились веса секторов,
+    # выросла ли концентрация.
+    _anchor = pd.Timestamp(anchor_date.value)
+    _last_date = combined_df.index.max()
+
+    # Срез "тогда": последняя котировка каждой бумаги в окне 45 дней до опорной даты
+    _win_then = combined_df[(combined_df.index <= _anchor) &
+                            (combined_df.index >= _anchor - pd.DateOffset(days=45))]
+    _then = _win_then.sort_index().groupby('ticker').tail(1)
+    _then = _then.reset_index()[['ticker', 'close', 'market_cap']].rename(
+        columns={'close': 'close_then', 'market_cap': 'mc_then'})
+
+    # Срез "сейчас": только бумаги, торговавшиеся в последние 30 дней (без делистингов)
+    _now = combined_df.sort_index().groupby('ticker').tail(1)
+    _now = _now[_now.index >= _last_date - pd.DateOffset(days=30)]
+    _now = _now.reset_index()[['ticker', 'close', 'market_cap']].rename(
+        columns={'close': 'close_now', 'market_cap': 'mc_now'})
+
+    _st = _then.merge(_now, on='ticker', how='inner').dropna(subset=['close_then', 'close_now'])
+
+    if len(_st) < 5:
+        structure_block = mo.md("*Недостаточно данных на выбранную опорную дату*")
+    else:
+        _st['px_chg'] = (_st['close_now'] / _st['close_then'] - 1) * 100
+
+        # --- IMOEX тогда и сейчас
+        _imx_line2 = ""
+        try:
+            _idx = moex.read_moex_index('IMOEX')
+            _idx.index = pd.to_datetime(_idx.index)
+            _idx_then = _idx[_idx.index <= _anchor]
+            if len(_idx_then):
+                _iv_then = float(_idx_then['close'].iloc[-1])
+                _iv_now = float(_idx['close'].iloc[-1])
+                _imx_line2 = (f"- **IMOEX:** {_iv_then:,.0f} → {_iv_now:,.0f} "
+                              f"(**{(_iv_now / _iv_then - 1) * 100:+.1f}%**)\n").replace(",", " ")
+        except Exception:
+            pass
+
+        # --- счет выше/ниже уровня опорной даты
+        _n_up = int((_st['px_chg'] > 0).sum())
+        _n_down = int((_st['px_chg'] < 0).sum())
+        _med_chg = float(_st['px_chg'].median())
+
+        # --- капитализация и концентрация (по бумагам с mc в обеих точках)
+        _mc = _st.dropna(subset=['mc_then', 'mc_now'])
+        _conc_line = ""
+        _total_line = ""
+        if len(_mc) >= 5 and _mc['mc_then'].sum() > 0:
+            _tot_then = _mc['mc_then'].sum()
+            _tot_now = _mc['mc_now'].sum()
+            _top5_then = _mc.nlargest(5, 'mc_then')['mc_then'].sum() / _tot_then * 100
+            _top5_now = _mc.nlargest(5, 'mc_now')['mc_now'].sum() / _tot_now * 100
+            _t5_then_names = ", ".join(_mc.nlargest(5, 'mc_then')['ticker'])
+            _t5_now_names = ", ".join(_mc.nlargest(5, 'mc_now')['ticker'])
+            _total_line = (f"- **Капитализация (сопоставимые бумаги):** "
+                           f"{_tot_then / 1e12:.1f} → {_tot_now / 1e12:.1f} трлн руб "
+                           f"(**{(_tot_now / _tot_then - 1) * 100:+.1f}%**)\n")
+            _conc_line = (f"- **Концентрация (доля топ-5):** {_top5_then:.0f}% → {_top5_now:.0f}%\n"
+                          f"  - тогда: {_t5_then_names}\n  - сейчас: {_t5_now_names}\n")
+
+        _tops = _st.nlargest(5, 'px_chg')
+        _bots = _st.nsmallest(5, 'px_chg')
+        _tops_str = ", ".join(f"**{_r.ticker}** {_r.px_chg:+.0f}%" for _r in _tops.itertuples())
+        _bots_str = ", ".join(f"**{_r.ticker}** {_r.px_chg:+.0f}%" for _r in _bots.itertuples())
+
+        _md_struct = mo.md(
+            f"### С {_anchor.strftime('%d.%m.%Y')} (сопоставимых бумаг: {len(_st)})\n\n"
+            + _imx_line2
+            + f"- **Выше уровня той даты: {_n_up}**, ниже: **{_n_down}**; медианная бумага: {_med_chg:+.1f}%\n"
+            + _total_line + _conc_line
+            + f"- 📈 Сильнее всех: {_tops_str}\n- 📉 Слабее всех: {_bots_str}"
+        )
+
+        _blocks = [_md_struct]
+
+        if plotly_available and len(_mc) >= 5 and _mc['mc_then'].sum() > 0:
+            # --- вклад бумаг в изменение суммарной капитализации (п.п.)
+            _mc = _mc.copy()
+            _mc['contrib'] = (_mc['mc_now'] - _mc['mc_then']) / _mc['mc_then'].sum() * 100
+            _cb = _mc.reindex(_mc['contrib'].abs().nlargest(12).index).sort_values('contrib')
+            _figc = go.Figure(go.Bar(
+                x=_cb['contrib'], y=_cb['ticker'], orientation='h',
+                marker_color=['green' if _v >= 0 else 'red' for _v in _cb['contrib']],
+                text=[f'{_v:+.1f} п.п.' for _v in _cb['contrib']],
+                textposition='outside',
+                customdata=_cb[['px_chg']].values,
+                hovertemplate='<b>%{y}</b>: %{x:+.2f} п.п. к капитализации рынка'
+                              '<br>Цена: %{customdata[0]:+.1f}%<extra></extra>',
+            ))
+            _figc.update_layout(
+                height=max(320, 30 * len(_cb) + 90),
+                title=dict(text='Кто изменил капитализацию рынка (вклад, п.п.)', font_size=14),
+                xaxis=dict(zeroline=True, zerolinecolor='black'),
+                margin=dict(t=40, l=10, r=10, b=10),
+            )
+            _blocks.append(_figc)
+
+            # --- веса секторов: тогда vs сейчас
+            if len(sectors_map):
+                _ms = _mc.merge(sectors_map, on='ticker', how='left')
+                _ms['sector'] = _ms['sector'].fillna('Прочее')
+                _w = _ms.groupby('sector').agg(mc_then=('mc_then', 'sum'), mc_now=('mc_now', 'sum'))
+                _w = (_w / _w.sum() * 100).sort_values('mc_now')
+                _figw = go.Figure()
+                _figw.add_bar(x=_w['mc_then'], y=_w.index, orientation='h', name='Тогда',
+                              marker_color='#9ecae1',
+                              hovertemplate='%{y}: %{x:.1f}%<extra>тогда</extra>')
+                _figw.add_bar(x=_w['mc_now'], y=_w.index, orientation='h', name='Сейчас',
+                              marker_color='#1f77b4',
+                              hovertemplate='%{y}: %{x:.1f}%<extra>сейчас</extra>')
+                _figw.update_layout(
+                    barmode='group',
+                    height=max(360, 34 * len(_w) + 90),
+                    title=dict(text='Веса секторов в капитализации: тогда vs сейчас', font_size=14),
+                    xaxis=dict(ticksuffix='%'),
+                    legend=dict(orientation='h', y=1.08, x=1, xanchor='right'),
+                    margin=dict(t=46, l=10, r=10, b=10),
+                )
+                _blocks.append(_figw)
+
+        structure_block = mo.vstack(_blocks)
+    return (structure_block,)
 
 
 if __name__ == "__main__":

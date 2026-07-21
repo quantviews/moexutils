@@ -4,3 +4,4 @@ pandas
 pyarrow
 openpyxl
 numpy<2
+plotly
