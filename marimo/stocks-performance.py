@@ -588,11 +588,10 @@ def _(go, mo, moex, pd, period_end, period_label, period_start, plotly_available
             index_block = mo.md("*IMOEX: недостаточно истории в кэше — обновите: `python update_data.py`*")
         else:
             # EWMA считаем по всей истории (без прогревочного смещения),
-            # показываем последний год, но не меньше выбранного периода
+            # показываем динамику с 2022 года
             _ew16 = _close.ewm(span=16, adjust=False).mean()
             _ew64 = _close.ewm(span=64, adjust=False).mean()
-            _show_from = min(_close.index.max() - pd.DateOffset(years=1),
-                             pd.Timestamp(period_start))
+            _show_from = min(pd.Timestamp('2022-01-01'), pd.Timestamp(period_start))
             _c = _close[_close.index >= _show_from]
             _e16 = _ew16[_ew16.index >= _show_from]
             _e64 = _ew64[_ew64.index >= _show_from]
