@@ -543,9 +543,12 @@ def _(filtered_df, go, mo, period_label, plotly_available):
                   for _t, _v, _s in zip(_mk['ticker'], _mk['price_performance'], _mk['share'])],
             textposition='outside',
             textfont_size=11,
-            customdata=_mk[['ticker', 'share', 'price_performance']].values,
-            hovertemplate='<b>%{customdata[0]}</b><br>Изменение: %{customdata[2]:+.2f}%'
-                          '<br>Доля в капитализации: %{customdata[1]:.2f}%<extra></extra>',
+            customdata=[
+                (_t, f'{_s:.2f}%', f'{_v:+.2f}%')
+                for _t, _s, _v in zip(_mk['ticker'], _mk['share'], _mk['price_performance'])
+            ],
+            hovertemplate='<b>%{customdata[0]}</b><br>Изменение: %{customdata[2]}'
+                          '<br>Доля в капитализации: %{customdata[1]}<extra></extra>',
         ))
         _figm.update_layout(
             height=900,
@@ -702,8 +705,10 @@ def _(filtered_df, go, mo, pd, period_label, plotly_available, sectors_map):
             marker_color=['green' if _x >= 0 else 'red' for _x in _sec_df['ret']],
             text=[f'{_v:+.1f}%' for _v in _sec_df['ret']],
             textposition='outside',
-            customdata=_sec_df[['tickers']].values,
-            hovertemplate='<b>%{y}</b>: %{x:+.2f}%<br>%{customdata[0]}<extra></extra>',
+            customdata=[
+                (_tk, f'{_v:+.2f}%') for _tk, _v in zip(_sec_df['tickers'], _sec_df['ret'])
+            ],
+            hovertemplate='<b>%{y}</b>: %{customdata[1]}<br>%{customdata[0]}<extra></extra>',
         ))
         _figs.update_layout(
             height=max(300, 34 * len(_sec_df) + 80),
@@ -727,7 +732,11 @@ def _(filtered_df, mo, np, period_label, plotly_available, px, sectors_map):
     else:
         _hm = _hm.merge(sectors_map, on='ticker', how='left')
         _hm['sector'] = _hm['sector'].fillna('Прочее')
-        _hm['mc_bln'] = _hm['last_market_cap'] / 1e9
+        # Форматируем подписи заранее: форматы в шаблонах plotly с флагом "+"
+        # применяются ненадежно, и на плитки попадают числа с 13 знаками
+        _hm['perf_str'] = _hm['price_performance'].map(lambda _v: f'{_v:+.1f}%')
+        _hm['mc_str'] = (_hm['last_market_cap'] / 1e9).map(
+            lambda _v: f'{_v:,.0f}'.replace(',', ' '))
 
         # Шкала цвета по 95-му перцентилю, чтобы один выброс не обесцвечивал карту
         _vmax = max(float(np.percentile(np.abs(_hm['price_performance']), 95)), 1e-9)
@@ -740,12 +749,12 @@ def _(filtered_df, mo, np, period_label, plotly_available, px, sectors_map):
             color_continuous_scale='RdYlGn',
             color_continuous_midpoint=0,
             range_color=(-_vmax, _vmax),
-            custom_data=['price_performance', 'mc_bln'],
+            custom_data=['perf_str', 'mc_str'],
         )
         _figt.update_traces(
-            texttemplate='%{label}<br>%{customdata[0]:+.1f}%',
-            hovertemplate='<b>%{label}</b><br>Изменение: %{customdata[0]:+.2f}%'
-                          '<br>Капитализация: %{customdata[1]:,.0f} млрд руб<extra></extra>',
+            texttemplate='%{label}<br>%{customdata[0]}',
+            hovertemplate='<b>%{label}</b><br>Изменение: %{customdata[0]}'
+                          '<br>Капитализация: %{customdata[1]} млрд руб<extra></extra>',
             textfont_size=13,
             marker_line_width=1,
         )
@@ -913,9 +922,12 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
                 marker_color=['green' if _v >= 0 else 'red' for _v in _cb['contrib']],
                 text=[f'{_v:+.1f} п.п.' for _v in _cb['contrib']],
                 textposition='outside',
-                customdata=_cb[['px_chg']].values,
-                hovertemplate='<b>%{y}</b>: %{x:+.2f} п.п. к капитализации рынка'
-                              '<br>Цена: %{customdata[0]:+.1f}%<extra></extra>',
+                customdata=[
+                    (f'{_c:+.2f}', f'{_p:+.1f}%')
+                    for _c, _p in zip(_cb['contrib'], _cb['px_chg'])
+                ],
+                hovertemplate='<b>%{y}</b>: %{customdata[0]} п.п. к капитализации рынка'
+                              '<br>Цена: %{customdata[1]}<extra></extra>',
             ))
             _figc.update_layout(
                 height=max(320, 30 * len(_cb) + 90),
