@@ -7,10 +7,10 @@
 import marimo
 
 __generated_with = "0.23.14"
-app = marimo.App(width="full")
+app = marimo.App(width="medium", app_title="Обзор фондового рынка РФ")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     # moex_utils лежит в корне проекта (родительская папка от marimo/)
     import sys as _sys
@@ -29,7 +29,7 @@ def _():
     return base64, io, mo, moex, np, pd, plt
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(mo):
     # UI элементы для выбора периода
     period_dropdown = mo.ui.dropdown(
@@ -53,9 +53,14 @@ def _(mo):
     )
 
     sort_by = mo.ui.dropdown(
-        options=["price_performance", "market_cap_performance", "market_cap_change", "ticker"],
-        value="price_performance",
-        label="Сортировка:"
+        options={
+            "Изм. цены": "price_performance",
+            "Изм. капитализации (%)": "market_cap_performance",
+            "Изм. капитализации (млрд)": "market_cap_change",
+            "Тикер": "ticker",
+        },
+        value="Изм. цены",
+        label="Сортировка таблицы:"
     )
 
     min_market_cap = mo.ui.number(
@@ -251,55 +256,30 @@ def _(filtered_df, mo, pd, show_market_cap):
 
 
 @app.cell(hide_code=True)
-def _(base64, filtered_df, io, mo, np, period_label, plt, show_market_cap):
-    # График performance по цене
+def _(base64, filtered_df, io, mo, pd, period_label, plt):
+    # Лидеры и аутсайдеры: топ-15 в обе стороны (полный список — в таблице)
     if len(filtered_df) > 0:
-        _fig1, axes = plt.subplots(1, 2 if show_market_cap.value and 'market_cap_performance' in filtered_df.columns else 1, 
-                                figsize=(16, max(8, len(filtered_df) * 0.25)))
+        _n_show = 15
+        _mv = pd.concat([
+            filtered_df.nlargest(_n_show, 'price_performance'),
+            filtered_df.nsmallest(_n_show, 'price_performance'),
+        ]).drop_duplicates(subset='ticker').sort_values('price_performance')
 
-        if not isinstance(axes, np.ndarray):
-            axes = [axes]
+        _fig1, _ax1 = plt.subplots(figsize=(9.5, max(6.0, 0.32 * len(_mv))))
+        _colors1 = ['green' if _x >= 0 else 'red' for _x in _mv['price_performance']]
+        _bars1 = _ax1.barh(_mv['ticker'], _mv['price_performance'], color=_colors1, alpha=0.75)
+        _ax1.set_xlabel('Изменение цены (%)')
+        _ax1.set_title(f'Лидеры и аутсайдеры (топ-{_n_show} в обе стороны) — {period_label}')
+        _ax1.axvline(x=0, color='black', linewidth=0.8)
+        _ax1.grid(axis='x', linestyle='--', alpha=0.5)
+        _ax1.margins(x=0.12)
 
-        # График 1: Performance по цене
-        ax1 = axes[0]
-        _colors1 = ['green' if x >= 0 else 'red' for x in filtered_df['price_performance']]
-        bars1 = ax1.barh(filtered_df['ticker'], filtered_df['price_performance'], color=_colors1, alpha=0.7)
-        ax1.set_xlabel('Performance (%)')
-        ax1.set_title(f'Performance по цене — {period_label}')
-        ax1.axvline(x=0, color='black', linestyle='-', linewidth=0.5)
-        ax1.grid(axis='x', linestyle='--', alpha=0.7)
-
-        # Добавляем значения на столбцы
-        for _i, (_bar, _val) in enumerate(zip(bars1, filtered_df['price_performance'])):
-            _width = _bar.get_width()
-            ax1.text(_width, _bar.get_y() + _bar.get_height()/2,
-                    f'{_val:.1f}%',
-                    ha='left' if _width >= 0 else 'right',
-                    va='center', fontsize=9)
-
-        # График 2: Performance по market cap (если включено)
-        if show_market_cap.value and 'market_cap_performance' in filtered_df.columns and len(axes) > 1:
-            ax2 = axes[1]
-            # Фильтруем только те, у которых есть данные по market cap
-            mc_data = filtered_df[filtered_df['market_cap_performance'].notna()].copy()
-            if len(mc_data) > 0:
-                colors2 = ['green' if x >= 0 else 'red' for x in mc_data['market_cap_performance']]
-                bars2 = ax2.barh(mc_data['ticker'], mc_data['market_cap_performance'], color=colors2, alpha=0.7)
-                ax2.set_xlabel('Performance (%)')
-                ax2.set_title(f'Performance по market cap — {period_label}')
-                ax2.axvline(x=0, color='black', linestyle='-', linewidth=0.5)
-                ax2.grid(axis='x', linestyle='--', alpha=0.7)
-
-                # Добавляем значения на столбцы
-                for _i2, (_bar2, _val2) in enumerate(zip(bars2, mc_data['market_cap_performance'])):
-                    _width2 = _bar2.get_width()
-                    ax2.text(_width2, _bar2.get_y() + _bar2.get_height()/2,
-                            f'{_val2:.1f}%',
-                            ha='left' if _width2 >= 0 else 'right',
-                            va='center', fontsize=9)
+        for _bar, _val in zip(_bars1, _mv['price_performance']):
+            _w = _bar.get_width()
+            _ax1.text(_w, _bar.get_y() + _bar.get_height() / 2, f' {_val:+.1f}% ',
+                      ha='left' if _w >= 0 else 'right', va='center', fontsize=8)
 
         plt.tight_layout()
-        # Конвертируем фигуру в base64 для отображения
         _buf = io.BytesIO()
         _fig1.savefig(_buf, format='png', bbox_inches='tight', dpi=100)
         _buf.seek(0)
@@ -313,19 +293,19 @@ def _(base64, filtered_df, io, mo, np, period_label, plt, show_market_cap):
 
 @app.cell(hide_code=True)
 def _(base64, filtered_df, io, mo, period_label, plt, show_market_cap):
-    # Дополнительный график: изменение market cap в абсолютных значениях
+    # Крупнейшие изменения капитализации: топ-10 по модулю
     if show_market_cap.value and 'market_cap_change' in filtered_df.columns and len(filtered_df) > 0:
         mc_change_data = filtered_df[filtered_df['market_cap_change'].notna()].copy()
         if len(mc_change_data) > 0:
-            _fig2, _ax2 = plt.subplots(figsize=(14, max(6, len(mc_change_data) * 0.2)))
-
-            # Сортируем по изменению
-            mc_change_data = mc_change_data.sort_values('market_cap_change', ascending=True)
+            _top_idx = mc_change_data['market_cap_change'].abs().nlargest(10).index
+            mc_change_data = mc_change_data.loc[_top_idx].sort_values('market_cap_change')
+            _fig2, _ax2 = plt.subplots(figsize=(9.5, 4.5))
 
             _colors3 = ['green' if x >= 0 else 'red' for x in mc_change_data['market_cap_change']]
             _bars3 = _ax2.barh(mc_change_data['ticker'], mc_change_data['market_cap_change'] / 1e9, color=_colors3, alpha=0.7)
             _ax2.set_xlabel('Изменение market cap (млрд руб)')
-            _ax2.set_title(f'Абсолютное изменение market cap — {period_label}')
+            _ax2.set_title(f'Крупнейшие изменения market cap (топ-10) — {period_label}')
+            _ax2.margins(x=0.12)
             _ax2.axvline(x=0, color='black', linestyle='-', linewidth=0.5)
             _ax2.grid(axis='x', linestyle='--', alpha=0.7)
 
@@ -355,9 +335,11 @@ def _(base64, filtered_df, io, mo, period_label, plt, show_market_cap):
 @app.cell(hide_code=True)
 def _(
     breadth_block,
-    charts_display,
+    chart,
     heatmap_block,
     index_block,
+    marimekko_block,
+    market_cap_chart,
     market_summary,
     min_market_cap,
     mo,
@@ -371,7 +353,7 @@ def _(
     table,
     volume_block,
 ):
-    # Основной layout
+    # Основной layout: сводка и ключевые картинки сверху, детали — в аккордеоне
     period_start_str = period_start.strftime('%d.%m.%Y')
     period_end_str = period_end.strftime('%d.%m.%Y')
 
@@ -384,8 +366,12 @@ def _(
         sector_block,
         heatmap_block,
         volume_block,
-        table,
-        charts_display,
+        mo.accordion({
+            "📊 Marimekko: динамика с учетом веса в рынке": marimekko_block,
+            "🏆 Лидеры и аутсайдеры (топ-15)": chart,
+            "💰 Крупнейшие изменения капитализации (топ-10)": market_cap_chart,
+            "📋 Таблица по всем бумагам": table,
+        }),
     ])
     return
 
@@ -430,148 +416,54 @@ def _(filtered_df, imoex_ret, mo, period_label):
 
 
 @app.cell(hide_code=True)
-def _(base64, chart, filtered_df, io, market_cap_chart, mo, period_label, plt):
-    # Графики включая Marimekko chart
-    _all_charts = [
-        mo.md("## Визуализация"),
-        chart,
-        market_cap_chart,
-    ]
+def _(base64, filtered_df, io, mo, period_label, plt):
+    # Вертикальный Marimekko: толщина бара = доля в капитализации, длина = performance.
+    # Тикеры читаются горизонтально, лучшие сверху.
+    _mk = filtered_df.dropna(subset=['last_market_cap', 'price_performance']).copy()
+    if len(_mk) == 0:
+        marimekko_block = mo.md("")
+    else:
+        _mk = _mk.sort_values('price_performance', ascending=False)
+        _mk['share'] = _mk['last_market_cap'] / _mk['last_market_cap'].sum() * 100
 
-    # Добавляем Marimekko chart
-    try:
-        if len(filtered_df) > 0 and 'last_market_cap' in filtered_df.columns and 'price_performance' in filtered_df.columns:
-            _marimekko_data = filtered_df[
-                (filtered_df['last_market_cap'].notna()) & 
-                (filtered_df['price_performance'].notna())
-            ].copy()
+        _span = max(abs(float(_mk['price_performance'].max())),
+                    abs(float(_mk['price_performance'].min())), 1e-9)
+        _off = 0.02 * _span
 
-            if len(_marimekko_data) > 0:
-                _marimekko_data = _marimekko_data.sort_values('price_performance', ascending=False)
-                _total_mc = _marimekko_data['last_market_cap'].sum()
-                _marimekko_data['width'] = (_marimekko_data['last_market_cap'] / _total_mc) * 100
+        _figm, _axm = plt.subplots(figsize=(9.5, 12))
+        _cum = 0.0
+        for _rowm in _mk.itertuples():
+            _p = float(_rowm.price_performance)
+            _sh = float(_rowm.share)
+            _yc = -(_cum + _sh / 2)
+            _axm.barh(_yc, _p, height=max(_sh * 0.94, 0.15),
+                      color='green' if _p >= 0 else 'red',
+                      alpha=0.75, edgecolor='white', linewidth=0.4)
+            # Подписываем бары толще ~0.8% капитализации — прочие видны в таблице
+            if _sh >= 0.8:
+                _axm.text(_p + (_off if _p >= 0 else -_off), _yc,
+                          f'{_rowm.ticker} {_p:+.1f}%',
+                          ha='left' if _p >= 0 else 'right', va='center', fontsize=8)
+            _cum += _sh
 
-                # Рассчитываем позиции так, чтобы бары шли без пропусков
-                _cumulative_width = 0
-                _positions = []
-                for _w in _marimekko_data['width']:
-                    _positions.append(_cumulative_width)
-                    _cumulative_width += _w
-                _marimekko_data['position'] = _positions
-
-                # Убеждаемся, что последний бар доходит до 100%
-                if len(_marimekko_data) > 0:
-                    _last_idx = _marimekko_data.index[-1]
-                    _last_pos = _marimekko_data.loc[_last_idx, 'position']
-                    _last_width = _marimekko_data.loc[_last_idx, 'width']
-                    # Если последний бар не доходит до 100%, корректируем его ширину
-                    if _last_pos + _last_width < 100:
-                        _marimekko_data.loc[_last_idx, 'width'] = 100 - _last_pos
-
-                _fig_m, _ax_m = plt.subplots(figsize=(16, 8))
-                _colors_m = ['green' if x >= 0 else 'red' for x in _marimekko_data['price_performance']]
-
-                # Масштаб подписей завязан на размах performance, а не на фиксированные
-                # проценты — иначе на коротких периодах подписи "висят в воздухе"
-                _perf_span = max(
-                    abs(float(_marimekko_data['price_performance'].max())),
-                    abs(float(_marimekko_data['price_performance'].min())),
-                    1e-9,
-                )
-                _lbl_off = 0.03 * _perf_span
-
-                for _idx, _row in _marimekko_data.iterrows():
-                    _h = _row['price_performance']
-                    _w = _row['width']
-                    _l = _row['position']
-                    _c = _colors_m[_marimekko_data.index.get_loc(_idx)]
-
-                    if _h < 0:
-                        _b = _h
-                        _bh = abs(_h)
-                    else:
-                        _b = 0
-                        _bh = _h
-
-                    _ax_m.bar(_l, _bh, width=_w, bottom=_b, color=_c, alpha=0.7, edgecolor='black', linewidth=0.5)
-
-                    if _w > 0.8:
-                        _ax_m.text(_l + _w / 2, _h / 2, _row['ticker'], ha='center', va='center',
-                                  fontsize=8 if _w > 2 else 6, rotation=0 if _w > 2 else 90,
-                                  fontweight='bold', color='white' if abs(_h) > 0.4 * _perf_span else 'black')
-                        if _w > 2.5:
-                            _ax_m.text(_l + _w / 2, _h + (_lbl_off if _h >= 0 else -_lbl_off), f'{_h:.1f}%',
-                                      ha='center', va='bottom' if _h >= 0 else 'top', fontsize=8, fontweight='bold')
-
-                _ax_m.set_xlabel('Доля market cap (%)', fontsize=12)
-                _ax_m.set_ylabel('Performance по цене (%)', fontsize=12)
-                _ax_m.set_xlim(0, 100)
-                _ax_m.set_title(f'Marimekko Chart: Performance по цене (ширина = market cap) — {period_label}',
-                              fontsize=14, fontweight='bold')
-                _ax_m.axhline(y=0, color='black', linestyle='-', linewidth=1)
-                _ax_m.grid(axis='y', linestyle='--', alpha=0.5)
-
-                from matplotlib.patches import Patch as _Patch2
-                _ax_m.legend(handles=[
-                    _Patch2(facecolor='green', alpha=0.7, label='Положительный performance'),
-                    _Patch2(facecolor='red', alpha=0.7, label='Отрицательный performance')
-                ], loc='upper right')
-
-                plt.tight_layout()
-                _buf_m = io.BytesIO()
-                _fig_m.savefig(_buf_m, format='png', bbox_inches='tight', dpi=100)
-                _buf_m.seek(0)
-                _img_m = base64.b64encode(_buf_m.read()).decode()
-                plt.close(_fig_m)
-                _marimekko_html = mo.Html(f'<img src="data:image/png;base64,{_img_m}" style="max-width: 100%; height: auto;" />')
-
-                _all_charts.extend([
-                    mo.md("## Marimekko Chart (ширина = market cap, высота = performance)"),
-                    _marimekko_html,
-                ])
-    except Exception:
-        pass
-
-    charts_display = mo.vstack(_all_charts)
-    return (charts_display,)
-
-
-@app.cell(hide_code=True)
-def _(filtered_df, mo, pd):
-    # Статистика
-    stats_items = [
-        f"- **Всего акций:** {len(filtered_df)}",
-        f"- **С данными по market cap:** {len(filtered_df[filtered_df['market_cap_performance'].notna()]) if 'market_cap_performance' in filtered_df.columns else 0}",
-        f"- **Средний performance по цене:** {filtered_df['price_performance'].mean():.2f}%",
-        f"- **Медианный performance по цене:** {filtered_df['price_performance'].median():.2f}%",
-    ]
-
-    if 'market_cap_performance' in filtered_df.columns:
-        mc_perf = filtered_df['market_cap_performance'].dropna()
-        if len(mc_perf) > 0:
-            stats_items.extend([
-                f"- **Средний performance по market cap:** {mc_perf.mean():.2f}%",
-                f"- **Медианный performance по market cap:** {mc_perf.median():.2f}%",
-            ])
-
-            # Топ-5 по росту и падению market cap
-            top_gainers = filtered_df.nlargest(5, 'market_cap_performance')
-            top_losers = filtered_df.nsmallest(5, 'market_cap_performance')
-
-            stats_items.append("\n### Топ-5 по росту market cap:")
-            for _, _row_g in top_gainers.iterrows():
-                if pd.notna(_row_g['market_cap_performance']):
-                    stats_items.append(f"- **{_row_g['ticker']}**: {_row_g['market_cap_performance']:.2f}%")
-
-            stats_items.append("\n### Топ-5 по падению market cap:")
-            for _, _row_l in top_losers.iterrows():
-                if pd.notna(_row_l['market_cap_performance']):
-                    stats_items.append(f"- **{_row_l['ticker']}**: {_row_l['market_cap_performance']:.2f}%")
-
-    stats_text = "## Статистика\n\n" + "\n".join(stats_items)
-
-    mo.md(stats_text)
-    return
+        _axm.set_ylim(-100, 0)
+        _axm.set_yticks([0, -20, -40, -60, -80, -100])
+        _axm.set_yticklabels(['0%', '20%', '40%', '60%', '80%', '100%'])
+        _axm.set_ylabel('Накопленная доля капитализации (лучшие — сверху)')
+        _axm.set_xlabel('Изменение цены (%)')
+        _axm.set_title(f'Marimekko: толщина = доля в капитализации рынка — {period_label}',
+                       fontsize=13, fontweight='bold')
+        _axm.axvline(0, color='black', linewidth=0.9)
+        _axm.grid(axis='x', linestyle='--', alpha=0.5)
+        _axm.margins(x=0.18)
+        plt.tight_layout()
+        _bufm = io.BytesIO()
+        _figm.savefig(_bufm, format='png', bbox_inches='tight', dpi=100)
+        _bufm.seek(0)
+        _imgm = base64.b64encode(_bufm.read()).decode()
+        plt.close(_figm)
+        marimekko_block = mo.Html(f'<img src="data:image/png;base64,{_imgm}" style="max-width: 100%; height: auto;" />')
+    return (marimekko_block,)
 
 
 @app.cell(hide_code=True)
@@ -688,20 +580,21 @@ def _(base64, filtered_df, io, mo, np, period_label, plt):
         _hm['_mc'] = _hm['last_market_cap'].fillna(0)
         _hm = _hm.sort_values('_mc', ascending=False)
 
-        _ncols = 10
+        # 7 колонок под ширину страницы medium (~900px): плитка ~130px, шрифты читаемы
+        _ncols = 7
         _nrows = int(np.ceil(len(_hm) / _ncols))
         _vmax = max(float(np.percentile(np.abs(_hm['price_performance']), 95)), 1e-9)
         _cmap = plt.get_cmap('RdYlGn')
 
-        _figh, _axh = plt.subplots(figsize=(16, 0.9 * _nrows))
+        _figh, _axh = plt.subplots(figsize=(9.5, 1.05 * _nrows))
         for _ih, _rowh in enumerate(_hm.itertuples()):
             _rr, _cc = divmod(_ih, _ncols)
             _pv = float(_rowh.price_performance)
             _normv = 0.5 + max(-1.0, min(1.0, _pv / _vmax)) / 2
             _axh.add_patch(plt.Rectangle((_cc + 0.02, -_rr - 0.98), 0.96, 0.94, color=_cmap(_normv)))
-            _axh.text(_cc + 0.5, -_rr - 0.40, str(_rowh.ticker),
-                      ha='center', va='center', fontsize=8, fontweight='bold')
-            _axh.text(_cc + 0.5, -_rr - 0.74, f'{_pv:+.1f}%', ha='center', va='center', fontsize=7)
+            _axh.text(_cc + 0.5, -_rr - 0.38, str(_rowh.ticker),
+                      ha='center', va='center', fontsize=10, fontweight='bold')
+            _axh.text(_cc + 0.5, -_rr - 0.72, f'{_pv:+.1f}%', ha='center', va='center', fontsize=8.5)
         _axh.set_xlim(0, _ncols)
         _axh.set_ylim(-_nrows, 0)
         _axh.axis('off')
