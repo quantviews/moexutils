@@ -443,9 +443,9 @@ class TestSplits:
         assert float(row['ratio'].iloc[0]) == 5000.0
 
     def test_load_splits_kind_defaults_to_price(self, tmp_path):
-        # Старый формат файла без колонки kind
+        # Старый формат файла без колонки kind (без внешнего реестра)
         path = self.write_splits(tmp_path, [('TEST', '2025-01-03', 10)])
-        splits = mu.load_splits(path)
+        splits = mu.load_splits(path, external_file=str(tmp_path / 'nope.json'))
         assert (splits['kind'] == 'price').all()
 
     def test_adjust_for_splits_ignores_shares_kind(self, tmp_path):
@@ -456,6 +456,66 @@ class TestSplits:
 
         result = mu.adjust_for_splits(df, splits_file=str(path))
         assert result['close'].tolist() == [100.0, 101.0]  # цены не тронуты
+
+    def test_load_splits_merges_external_json(self, tmp_path):
+        csv_path = tmp_path / 'splits.csv'
+        pd.DataFrame([('AAA', '2025-01-05', 10, 'price')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(csv_path, index=False)
+        json_path = tmp_path / 'splits.json'
+        json_path.write_text(
+            '{"AAA": [{"date": "2025-01-02", "ratio": 10, "kind": "split"}],'
+            ' "BBB": [{"date": "2025-06-01", "ratio": 100, "kind": "reverse"}]}',
+            encoding='utf-8')
+
+        splits = mu.load_splits(str(csv_path), external_file=str(json_path))
+
+        # AAA: явная запись из csv побеждает дубликат из json (±45 дней)
+        aaa = splits[splits['ticker'] == 'AAA']
+        assert len(aaa) == 1 and aaa['kind'].iloc[0] == 'price'
+        # BBB: консолидация 100:1 из json → ценовой делитель 0.01, kind=auto
+        bbb = splits[splits['ticker'] == 'BBB']
+        assert len(bbb) == 1
+        assert bbb['kind'].iloc[0] == 'auto'
+        assert float(bbb['ratio'].iloc[0]) == pytest.approx(0.01)
+
+    def test_auto_adjusts_prices_when_jump_present(self, tmp_path):
+        path = tmp_path / "splits.csv"
+        pd.DataFrame([('TEST', '2025-01-03', 10, 'auto')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(path, index=False)
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03'], [1000, 1010, 101])
+
+        result = mu.adjust_for_splits(df, splits_file=str(path))
+        assert result['close'].tolist() == pytest.approx([100.0, 101.0, 101.0])
+
+    def test_auto_leaves_restated_prices_untouched(self, tmp_path):
+        path = tmp_path / "splits.csv"
+        pd.DataFrame([('TEST', '2025-01-03', 10, 'auto')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(path, index=False)
+        # ряд без разрыва — история уже рестейтнута источником
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03'], [100, 101, 102])
+
+        result = mu.adjust_for_splits(df, splits_file=str(path))
+        assert result['close'].tolist() == [100.0, 101.0, 102.0]
+
+    def test_market_cap_auto_shares_adjustment(self, tmp_path, monkeypatch):
+        """auto + рестейтнутые цены: дробление 1:100 корректирует старые листы акций ×100."""
+        splits = tmp_path / 'splits.csv'
+        pd.DataFrame([('TEST', '2025-01-07', 100, 'auto')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(splits, index=False)
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(splits))
+        monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'nope.json'))
+
+        meta = tmp_path / 'meta.xlsx'
+        with pd.ExcelWriter(meta, engine='openpyxl') as writer:
+            pd.DataFrame({'Code': ['TEST'], 'Number of issued shares': [1000]}).to_excel(
+                writer, sheet_name='05.01.2025', startrow=3, index=False)
+            pd.DataFrame({'Code': ['TEST'], 'Number of issued shares': [100000]}).to_excel(
+                writer, sheet_name='08.01.2025', startrow=3, index=False)
+
+        # цены гладкие (рестейтнуты) → поправка идет в акции
+        df = make_stock_df(['2025-01-06', '2025-01-09'], [100, 100])
+        result = mu.calculate_market_cap(df, 'TEST', metadata_file=str(meta))
+        assert result['market_cap'].tolist() == pytest.approx([10000000.0, 10000000.0])
 
     def test_market_cap_shares_adjustment(self, tmp_path, monkeypatch):
         """Консолидация 100:1: старые листы метаданных в старых акциях, цены ISS

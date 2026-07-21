@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import math
 import os
 import sys
 from datetime import datetime
@@ -18,6 +20,8 @@ DATA_FOLDER = os.path.join(BASE_DIR, "data")
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 INDEXES_FOLDER = os.path.join(BASE_DIR, "indexes")
 SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
+# Внешний реестр сплитов соседнего проекта dividends (если проекты лежат рядом)
+EXTERNAL_SPLITS_FILE = os.path.join(BASE_DIR, "..", "dividends", "metadata", "splits.json")
 
 logger = logging.getLogger("moex_utils")
 # Если логирование в приложении не настроено — выводим сообщения в stdout,
@@ -659,16 +663,27 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
     shares_known = ticker_shares['shares']
     shares_known = shares_known[~shares_known.index.duplicated(keep='last')].sort_index()
 
-    # Приводим число акций к пост-событийной базе (kind='shares' в splits.csv):
+    # Приводим число акций к пост-событийной базе (kind='shares'/'auto' в реестре):
     # ISS рестейтит историю цен после сплитов/консолидаций, а листы метаданных
     # содержат количество акций на дату листа — без поправки market_cap
-    # до события кратно врет (ВТБ ×5000, ГМК и Транснефть ×100)
+    # до события кратно врет (ВТБ ×5000, ГМК и Транснефть ×100, Полюс ×10)
     _shares_adj = load_splits()
     if not _shares_adj.empty:
-        _shares_adj = _shares_adj[(_shares_adj['kind'] == 'shares') & (_shares_adj['ticker'] == ticker)]
+        _shares_adj = _shares_adj[(_shares_adj['kind'].isin(['shares', 'auto'])) &
+                                  (_shares_adj['ticker'] == ticker)]
         for _adj in _shares_adj.itertuples(index=False):
             _adj_mask = shares_known.index < pd.Timestamp(_adj.date)
-            shares_known.loc[_adj_mask] = shares_known.loc[_adj_mask] / float(_adj.ratio)
+            if not _adj_mask.any():
+                continue
+            if _adj.kind == 'shares':
+                # ratio в "акционной" семантике: количество акций до даты делится
+                shares_known.loc[_adj_mask] = shares_known.loc[_adj_mask] / float(_adj.ratio)
+            else:
+                # auto: ratio в ценовой семантике; корректируем акции, только если
+                # ценовой ряд рестейтнут (разрыва на дату события в ценах нет)
+                if _price_jump_matches(df[price_col], _adj.date, float(_adj.ratio)):
+                    continue
+                shares_known.loc[_adj_mask] = shares_known.loc[_adj_mask] * float(_adj.ratio)
 
     date_range = pd.date_range(
         start=min(df.index.min(), shares_known.index.min()),
@@ -697,27 +712,93 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
     return df
 
 
-def load_splits(splits_file: Optional[str] = None) -> pd.DataFrame:
+def load_splits(splits_file: Optional[str] = None,
+                external_file: Optional[str] = None) -> pd.DataFrame:
     """
-    Загружает реестр сплитов metadata/splits.csv (колонки: ticker, date, ratio, kind).
+    Загружает объединенный реестр сплитов (колонки: ticker, date, ratio, kind).
 
-    kind='price' (по умолчанию): цены в скачанной истории ДО даты события
-        не соответствуют текущей базе — при анализе цены до даты делятся на ratio.
-    kind='shares': ISS уже рестейтнул историю цен в новую базу, но число акций
-        в листах метаданных за старые даты осталось в старой — количество акций
-        до даты события делится на ratio при расчете market_cap.
+    Источники:
+    1. metadata/splits.csv этого проекта (явные записи, приоритет);
+    2. внешний splits.json проекта dividends (EXTERNAL_SPLITS_FILE), если лежит
+       рядом; его записи получают kind='auto'.
 
-    Семантика ratio одинакова: дробление 1:10 → 10; консолидация 100:1 → 0.01.
+    kind:
+    - 'price': скачанная история цен содержит разрыв на дату — цены до даты
+       делятся на ratio при анализе (adjust_for_splits);
+    - 'shares': история цен рестейтнута ISS, но число акций в старых листах
+       метаданных в старой базе — количество акций до даты делится на ratio
+       (calculate_market_cap);
+    - 'auto': тип определяется по данным — если в ценовом ряду есть разрыв,
+       соответствующий сплиту, поправка ценовая, иначе корректируются акции.
+       ratio для auto — в ценовой семантике (дробление 1:10 → 10,
+       консолидация 100:1 → 0.01).
     """
     if splits_file is None:
         splits_file = SPLITS_FILE
-    if not os.path.exists(splits_file):
-        return pd.DataFrame(columns=['ticker', 'date', 'ratio', 'kind'])
-    df = pd.read_csv(splits_file, parse_dates=['date'])
-    if 'kind' not in df.columns:
-        df['kind'] = 'price'
-    df['kind'] = df['kind'].fillna('price')
+    if external_file is None:
+        external_file = EXTERNAL_SPLITS_FILE
+
+    if os.path.exists(splits_file):
+        df = pd.read_csv(splits_file, parse_dates=['date'])
+        if 'kind' not in df.columns:
+            df['kind'] = 'price'
+        df['kind'] = df['kind'].fillna('price')
+    else:
+        df = pd.DataFrame(columns=['ticker', 'date', 'ratio', 'kind'])
+
+    # Внешний реестр: {"GMKN": [{"date": "...", "ratio": 100, "kind": "split"|"reverse"}]}
+    ext_rows = []
+    if os.path.exists(external_file):
+        try:
+            with open(external_file, encoding='utf-8') as f:
+                ext_data = json.load(f)
+            for ext_ticker, events in ext_data.items():
+                for ev in events:
+                    raw = float(ev['ratio'])
+                    # приводим к ценовому делителю: дробление → ratio, консолидация → 1/ratio
+                    divisor = raw if ev.get('kind') == 'split' else 1.0 / raw
+                    ext_rows.append({'ticker': ext_ticker,
+                                     'date': pd.Timestamp(ev['date']),
+                                     'ratio': divisor,
+                                     'kind': 'auto'})
+        except Exception as e:
+            logger.warning(f"[WARN] Не удалось прочитать внешний реестр сплитов {external_file}: {e}")
+
+    if ext_rows:
+        ext_df = pd.DataFrame(ext_rows)
+        if not df.empty:
+            # Дедупликация: явная запись из csv в пределах 45 дней имеет приоритет
+            keep = []
+            for row in ext_df.itertuples(index=False):
+                dup = df[(df['ticker'] == row.ticker) &
+                         ((df['date'] - row.date).abs() <= pd.Timedelta(days=45))]
+                if dup.empty:
+                    keep.append(row)
+            ext_df = pd.DataFrame(keep, columns=ext_df.columns)
+        if not ext_df.empty:
+            df = ext_df if df.empty else pd.concat([df, ext_df], ignore_index=True)
+
     return df
+
+
+def _price_jump_matches(prices: pd.Series, date, divisor: float) -> bool:
+    """
+    True, если в ценовом ряду на дате события есть разрыв, соответствующий
+    сплиту с ценовым делителем divisor (история НЕ рестейтнута источником).
+    Допускается расхождение до 2.5x на рыночное движение в день события.
+    """
+    prices = prices.dropna().sort_index()
+    before = prices[prices.index < pd.Timestamp(date)]
+    after = prices[prices.index >= pd.Timestamp(date)]
+    if before.empty or after.empty:
+        return False
+    last_before = float(before.iloc[-1])
+    first_after = float(after.iloc[0])
+    if last_before <= 0 or first_after <= 0:
+        return False
+    jump = first_after / last_before
+    expected = 1.0 / divisor
+    return abs(math.log(jump / expected)) < math.log(2.5)
 
 
 def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd.DataFrame:
@@ -742,7 +823,7 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
     """
     splits = load_splits(splits_file)
     if not splits.empty:
-        splits = splits[splits['kind'] == 'price']
+        splits = splits[splits['kind'].isin(['price', 'auto'])]
     if splits.empty or df.empty or 'ticker' not in df.columns:
         return df
 
@@ -752,7 +833,15 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
 
     price_cols = [c for c in ('close', 'adj_close', 'open', 'high', 'low') if c in df.columns]
     for row in splits.itertuples(index=False):
-        mask = (df['ticker'] == row.ticker) & (df.index < pd.Timestamp(row.date))
+        ticker_mask = df['ticker'] == row.ticker
+        if not ticker_mask.any():
+            continue
+        # auto: корректируем цены, только если в ряду реально есть разрыв
+        # (иначе история уже рестейтнута источником и трогать её нельзя)
+        if row.kind == 'auto' and not _price_jump_matches(
+                df.loc[ticker_mask, 'close'], row.date, float(row.ratio)):
+            continue
+        mask = ticker_mask & (df.index < pd.Timestamp(row.date))
         if not mask.any():
             continue
         for col in price_cols:
