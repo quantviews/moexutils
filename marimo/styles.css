@@ -33,3 +33,16 @@ marimo-ui-element label {
 .console-output {
     font-size: 14px;
 }
+
+/* Раскраска плюс/минус в сводках: <span class="pos">+1.2%</span> */
+.prose .pos,
+.pos {
+    color: #1a9850;
+    font-weight: 600;
+}
+
+.prose .neg,
+.neg {
+    color: #d73027;
+    font-weight: 600;
+}

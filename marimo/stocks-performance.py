@@ -479,8 +479,15 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, imoex_ret, mo, period_label):
+def _(filtered_df, imoex_ret, mo, period_end, period_label):
     # Сводка: рынок в целом за период
+
+    def _sgn(_v, _suffix='%', _nd=2):
+        """Число со знаком, раскрашенное классами pos/neg из styles.css"""
+        _cls = 'pos' if _v >= 0 else 'neg'
+        _txt = format(_v, f'+,.{_nd}f').replace(',', ' ')
+        return f'<span class="{_cls}">{_txt}{_suffix}</span>'
+
     _n = len(filtered_df)
     _up = int((filtered_df['price_performance'] > 0).sum()) if _n else 0
     _down = int((filtered_df['price_performance'] < 0).sum()) if _n else 0
@@ -489,10 +496,11 @@ def _(filtered_df, imoex_ret, mo, period_label):
     _mc = filtered_df.dropna(subset=['first_market_cap', 'last_market_cap']) if _n else filtered_df
     if _n and len(_mc) > 0 and _mc['first_market_cap'].sum() > 0:
         _market_ret = (_mc['last_market_cap'].sum() / _mc['first_market_cap'].sum() - 1) * 100
-        _mkt_str = f"{_market_ret:+.2f}%"
+        _mkt_str = _sgn(_market_ret)
         _mc_total = _mc['last_market_cap'].sum() / 1e12
         _mc_delta = (_mc['last_market_cap'].sum() - _mc['first_market_cap'].sum()) / 1e9
-        _mkt_extra = f" (капитализация {_mc_total:.1f} трлн руб, {_mc_delta:+,.0f} млрд руб)".replace(",", " ")
+        _mkt_extra = (f" — капитализация на {period_end.strftime('%d.%m.%Y')}: "
+                      f"{_mc_total:.1f} трлн руб ({_sgn(_mc_delta, ' млрд', 0)} за период)")
     else:
         _mkt_str = "н/д"
         _mkt_extra = ""
@@ -501,13 +509,15 @@ def _(filtered_df, imoex_ret, mo, period_label):
         _med = filtered_df['price_performance'].median()
         _top = filtered_df.nlargest(5, 'price_performance')
         _bot = filtered_df.nsmallest(5, 'price_performance')
-        _top_str = ", ".join(f"**{_r.ticker}** {_r.price_performance:+.1f}%" for _r in _top.itertuples())
-        _bot_str = ", ".join(f"**{_r.ticker}** {_r.price_performance:+.1f}%" for _r in _bot.itertuples())
-        _imx_line = f"; IMOEX: **{imoex_ret:+.2f}%**" if imoex_ret is not None else ""
+        _top_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.price_performance, '%', 1)}"
+                             for _r in _top.itertuples())
+        _bot_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.price_performance, '%', 1)}"
+                             for _r in _bot.itertuples())
+        _imx_line = f"; IMOEX: {_sgn(imoex_ret)}" if imoex_ret is not None else ""
         market_summary = mo.md(f"""
     ### Итоги — {period_label}
 
-    - **Рынок (взвешенно по капитализации): {_mkt_str}**{_mkt_extra}{_imx_line}; медианная бумага: {_med:+.2f}%
+    - **Рынок (взвешенно по капитализации):** {_mkt_str}{_mkt_extra}{_imx_line}; медианная бумага: {_sgn(_med)}
     - Выросло: **{_up}** | Упало: **{_down}** | Всего: {_n}
     - 📈 Лидеры: {_top_str}
     - 📉 Аутсайдеры: {_bot_str}
@@ -868,6 +878,12 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
     else:
         _st['px_chg'] = (_st['close_now'] / _st['close_then'] - 1) * 100
 
+        def _sgn(_v, _suffix='%', _nd=1):
+            """Число со знаком, раскрашенное классами pos/neg из styles.css"""
+            _cls = 'pos' if _v >= 0 else 'neg'
+            _txt = format(_v, f'+,.{_nd}f').replace(',', ' ')
+            return f'<span class="{_cls}">{_txt}{_suffix}</span>'
+
         # --- IMOEX тогда и сейчас
         _imx_line2 = ""
         try:
@@ -877,8 +893,8 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
             if len(_idx_then):
                 _iv_then = float(_idx_then['close'].iloc[-1])
                 _iv_now = float(_idx['close'].iloc[-1])
-                _imx_line2 = (f"- **IMOEX:** {_iv_then:,.0f} → {_iv_now:,.0f} "
-                              f"(**{(_iv_now / _iv_then - 1) * 100:+.1f}%**)\n").replace(",", " ")
+                _imx_line2 = (f"- **IMOEX:** {_iv_then:,.0f} → {_iv_now:,.0f} ".replace(",", " ")
+                              + f"({_sgn((_iv_now / _iv_then - 1) * 100)})\n")
         except Exception:
             pass
 
@@ -900,19 +916,19 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
             _t5_now_names = ", ".join(_mc.nlargest(5, 'mc_now')['ticker'])
             _total_line = (f"- **Капитализация (сопоставимые бумаги):** "
                            f"{_tot_then / 1e12:.1f} → {_tot_now / 1e12:.1f} трлн руб "
-                           f"(**{(_tot_now / _tot_then - 1) * 100:+.1f}%**)\n")
+                           f"({_sgn((_tot_now / _tot_then - 1) * 100)})\n")
             _conc_line = (f"- **Концентрация (доля топ-5):** {_top5_then:.0f}% → {_top5_now:.0f}%\n"
                           f"  - тогда: {_t5_then_names}\n  - сейчас: {_t5_now_names}\n")
 
         _tops = _st.nlargest(5, 'px_chg')
         _bots = _st.nsmallest(5, 'px_chg')
-        _tops_str = ", ".join(f"**{_r.ticker}** {_r.px_chg:+.0f}%" for _r in _tops.itertuples())
-        _bots_str = ", ".join(f"**{_r.ticker}** {_r.px_chg:+.0f}%" for _r in _bots.itertuples())
+        _tops_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.px_chg, '%', 0)}" for _r in _tops.itertuples())
+        _bots_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.px_chg, '%', 0)}" for _r in _bots.itertuples())
 
         _md_struct = mo.md(
             f"### С {_anchor.strftime('%d.%m.%Y')} (сопоставимых бумаг: {len(_st)})\n\n"
             + _imx_line2
-            + f"- **Выше уровня той даты: {_n_up}**, ниже: **{_n_down}**; медианная бумага: {_med_chg:+.1f}%\n"
+            + f"- **Выше уровня той даты: {_n_up}**, ниже: **{_n_down}**; медианная бумага: {_sgn(_med_chg)}\n"
             + _total_line + _conc_line
             + f"- 📈 Сильнее всех: {_tops_str}\n- 📉 Слабее всех: {_bots_str}"
         )
