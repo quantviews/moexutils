@@ -434,6 +434,49 @@ class TestSplits:
         row = splits[splits['ticker'] == 'T']
         assert len(row) == 1
         assert float(row['ratio'].iloc[0]) == 10.0
+        assert row['kind'].iloc[0] == 'price'
+
+    def test_real_registry_contains_vtbr_shares_adjustment(self):
+        splits = mu.load_splits()
+        row = splits[(splits['ticker'] == 'VTBR') & (splits['kind'] == 'shares')]
+        assert len(row) == 1
+        assert float(row['ratio'].iloc[0]) == 5000.0
+
+    def test_load_splits_kind_defaults_to_price(self, tmp_path):
+        # Старый формат файла без колонки kind
+        path = self.write_splits(tmp_path, [('TEST', '2025-01-03', 10)])
+        splits = mu.load_splits(path)
+        assert (splits['kind'] == 'price').all()
+
+    def test_adjust_for_splits_ignores_shares_kind(self, tmp_path):
+        path = tmp_path / "splits.csv"
+        pd.DataFrame([('TEST', '2025-01-02', 100, 'shares')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(path, index=False)
+        df = make_stock_df(['2025-01-01', '2025-01-02'], [100, 101])
+
+        result = mu.adjust_for_splits(df, splits_file=str(path))
+        assert result['close'].tolist() == [100.0, 101.0]  # цены не тронуты
+
+    def test_market_cap_shares_adjustment(self, tmp_path, monkeypatch):
+        """Консолидация 100:1: старые листы метаданных в старых акциях, цены ISS
+        рестейтнуты — без поправки market_cap до события завышен в 100 раз."""
+        splits = tmp_path / 'splits.csv'
+        pd.DataFrame([('TEST', '2025-01-07', 100, 'shares')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(splits, index=False)
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(splits))
+
+        meta = tmp_path / 'meta.xlsx'
+        with pd.ExcelWriter(meta, engine='openpyxl') as writer:
+            pd.DataFrame({'Code': ['TEST'], 'Number of issued shares': [100000]}).to_excel(
+                writer, sheet_name='05.01.2025', startrow=3, index=False)
+            pd.DataFrame({'Code': ['TEST'], 'Number of issued shares': [1000]}).to_excel(
+                writer, sheet_name='08.01.2025', startrow=3, index=False)
+
+        df = make_stock_df(['2025-01-06', '2025-01-09'], [100, 100])
+        result = mu.calculate_market_cap(df, 'TEST', metadata_file=str(meta))
+
+        # Обе даты в одной (новой) базе: 100 руб × 1000 акций
+        assert result['market_cap'].tolist() == pytest.approx([100000.0, 100000.0])
 
 
 # ---------------------------------------------------------------- indexes: storage

@@ -1,4 +1,7 @@
-ticker,date,ratio
-PHOR,2012-03-26,10
-IRAO,2015-01-20,0.01
-T,2026-02-20,10
+ticker,date,ratio,kind
+PHOR,2012-03-26,10,price
+IRAO,2015-01-20,0.01,price
+T,2026-02-20,10,price
+TRNFP,2024-02-21,0.01,shares
+GMKN,2024-04-04,0.01,shares
+VTBR,2024-07-15,5000,shares

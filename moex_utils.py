@@ -659,6 +659,17 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
     shares_known = ticker_shares['shares']
     shares_known = shares_known[~shares_known.index.duplicated(keep='last')].sort_index()
 
+    # Приводим число акций к пост-событийной базе (kind='shares' в splits.csv):
+    # ISS рестейтит историю цен после сплитов/консолидаций, а листы метаданных
+    # содержат количество акций на дату листа — без поправки market_cap
+    # до события кратно врет (ВТБ ×5000, ГМК и Транснефть ×100)
+    _shares_adj = load_splits()
+    if not _shares_adj.empty:
+        _shares_adj = _shares_adj[(_shares_adj['kind'] == 'shares') & (_shares_adj['ticker'] == ticker)]
+        for _adj in _shares_adj.itertuples(index=False):
+            _adj_mask = shares_known.index < pd.Timestamp(_adj.date)
+            shares_known.loc[_adj_mask] = shares_known.loc[_adj_mask] / float(_adj.ratio)
+
     date_range = pd.date_range(
         start=min(df.index.min(), shares_known.index.min()),
         end=max(df.index.max(), shares_known.index.max()),
@@ -688,16 +699,25 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
 
 def load_splits(splits_file: Optional[str] = None) -> pd.DataFrame:
     """
-    Загружает реестр сплитов metadata/splits.csv (колонки: ticker, date, ratio).
+    Загружает реестр сплитов metadata/splits.csv (колонки: ticker, date, ratio, kind).
 
-    ratio — делитель цены: цены ДО даты сплита делятся на ratio.
-    Дробление 1:10 → ratio=10; консолидация 100:1 → ratio=0.01.
+    kind='price' (по умолчанию): цены в скачанной истории ДО даты события
+        не соответствуют текущей базе — при анализе цены до даты делятся на ratio.
+    kind='shares': ISS уже рестейтнул историю цен в новую базу, но число акций
+        в листах метаданных за старые даты осталось в старой — количество акций
+        до даты события делится на ratio при расчете market_cap.
+
+    Семантика ratio одинакова: дробление 1:10 → 10; консолидация 100:1 → 0.01.
     """
     if splits_file is None:
         splits_file = SPLITS_FILE
     if not os.path.exists(splits_file):
-        return pd.DataFrame(columns=['ticker', 'date', 'ratio'])
-    return pd.read_csv(splits_file, parse_dates=['date'])
+        return pd.DataFrame(columns=['ticker', 'date', 'ratio', 'kind'])
+    df = pd.read_csv(splits_file, parse_dates=['date'])
+    if 'kind' not in df.columns:
+        df['kind'] = 'price'
+    df['kind'] = df['kind'].fillna('price')
+    return df
 
 
 def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd.DataFrame:
@@ -721,6 +741,8 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
     pd.DataFrame: копия df со скорректированными ценами.
     """
     splits = load_splits(splits_file)
+    if not splits.empty:
+        splits = splits[splits['kind'] == 'price']
     if splits.empty or df.empty or 'ticker' not in df.columns:
         return df
 
