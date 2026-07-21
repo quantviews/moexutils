@@ -21,7 +21,7 @@ __generated_with = "0.18.4"
 app = marimo.App(width="medium")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import sys
     from pathlib import Path
@@ -83,7 +83,7 @@ def _(data_folder_input, moex):
     return combined_stocks, latest_date, max_years
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(max_years, mo):
     # Слайдер для выбора периода анализа (в годах)
     years_slider = mo.ui.slider(
@@ -125,8 +125,18 @@ def _(max_years, mo):
         label="Макс. доля одной бумаги (%); 100 = без ограничения:",
     )
 
-    [years_slider, risk_free_rate_slider, exclude_tickers_input, portfolio_period_dropdown, max_weight_slider]
+    # Оценка ковариационной матрицы: выборочная или сжатие Ledoit-Wolf.
+    # Ledoit-Wolf дает лучше обусловленную матрицу (меньше предупреждений
+    # решателя и стабильнее граница при большом числе бумаг)
+    cov_method_dropdown = mo.ui.dropdown(
+        {"Выборочная (sample_cov)": "sample", "Ledoit-Wolf (сжатие)": "lw"},
+        value="Выборочная (sample_cov)",
+        label="Оценка ковариации:",
+    )
+
+    [years_slider, risk_free_rate_slider, exclude_tickers_input, portfolio_period_dropdown, max_weight_slider, cov_method_dropdown]
     return (
+        cov_method_dropdown,
         exclude_tickers_input,
         max_weight_slider,
         portfolio_period_dropdown,
@@ -135,7 +145,7 @@ def _(max_years, mo):
     )
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(combined_stocks, latest_date, pd, years_slider):
     # Фильтрация данных по выбранному периоду
     years = years_slider.value
@@ -150,7 +160,7 @@ def _(combined_stocks, latest_date, pd, years_slider):
     return df_filtered, start_date, years
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(df_filtered, exclude_tickers_input, latest_date, start_date):
     # Фильтрация тикеров с полной историей за период
     # Считаем историю полной, если первая дата - не позже 30 дней от начала периода,
@@ -178,7 +188,7 @@ def _(df_filtered, exclude_tickers_input, latest_date, start_date):
     return (valid_tickers,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(df_filtered, np, pd, risk_free_rate_slider, valid_tickers):
     # Расчет CAGR, волатильности и Sharpe Ratio для каждого тикера
     risk_free_rate = risk_free_rate_slider.value / 100.0  # Конвертируем проценты в десятичную дробь
@@ -276,7 +286,7 @@ def _(df_filtered, np, pd, risk_free_rate_slider, valid_tickers):
     return (results_df,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(combined_stocks, df_filtered, portfolio_period_dropdown, valid_tickers):
     # Матрица цен для PyPortfolioOpt: строки — даты, столбцы — тикеры
     # Период: весь датасет (по умолчанию) или как период анализа
@@ -312,6 +322,7 @@ def _(mo):
 @app.cell
 def _(
     EfficientFrontier,
+    cov_method_dropdown,
     expected_returns,
     max_weight_slider,
     np,
@@ -325,9 +336,14 @@ def _(
     weight_bounds = (0, max_weight)
     if pypfopt_available and len(prices_wide.columns) >= 2 and len(prices_wide) >= 2:
         mu_series = expected_returns.mean_historical_return(prices_wide)
-        S_df = risk_models.sample_cov(prices_wide)
-        # Точки границы: для каждой целевой доходности — минимальный риск
-        target_returns = np.linspace(float(mu_series.min()), float(mu_series.max()), 50)
+        if cov_method_dropdown.value == "lw":
+            S_df = risk_models.CovarianceShrinkage(prices_wide).ledoit_wolf()
+        else:
+            S_df = risk_models.sample_cov(prices_wide)
+        # Точки границы: для каждой целевой доходности — минимальный риск.
+        # Крайние точки диапазона отбрасываем: задачи на mu.min()/mu.max()
+        # вырожденные, решатель на них дает "Solution may be inaccurate"
+        target_returns = np.linspace(float(mu_series.min()), float(mu_series.max()), 52)[1:-1]
         for r in target_returns:
             ef = EfficientFrontier(mu_series, S_df, weight_bounds=weight_bounds)
             try:
@@ -500,6 +516,7 @@ def _(mo):
 @app.cell
 def _(
     EfficientFrontier,
+    cov_method_dropdown,
     expected_returns,
     max_weight_slider,
     prices_wide,
@@ -512,7 +529,11 @@ def _(
     weight_bounds_mv = (0, max_weight_mv)
     if pypfopt_available and len(prices_wide.columns) >= 2 and len(prices_wide) >= 2:
         mu_mv = expected_returns.mean_historical_return(prices_wide)
-        S_mv = risk_models.sample_cov(prices_wide)
+        # Та же оценка ковариации, что и для max Sharpe, — иначе сравнение некорректно
+        if cov_method_dropdown.value == "lw":
+            S_mv = risk_models.CovarianceShrinkage(prices_wide).ledoit_wolf()
+        else:
+            S_mv = risk_models.sample_cov(prices_wide)
         ef_minv = EfficientFrontier(mu_mv, S_mv, weight_bounds=weight_bounds_mv)
         weights_min_vol = ef_minv.min_volatility()
         weights_min_vol = {k: v for k, v in weights_min_vol.items() if v > 1e-6}
