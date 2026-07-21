@@ -477,11 +477,20 @@ def _(base64, io, mo, moex, pd, period_end, period_label, period_start, plt):
         _idx_df.index = pd.to_datetime(_idx_df.index)
         _win = _idx_df[(_idx_df.index >= period_start) & (_idx_df.index <= period_end)].sort_index()
         if len(_win) >= 2:
-            imoex_ret = (float(_win['close'].iloc[-1]) / float(_win['close'].iloc[0]) - 1) * 100
+            _last_close = float(_win['close'].iloc[-1])
+            imoex_ret = (_last_close / float(_win['close'].iloc[0]) - 1) * 100
             _figi, _axi = plt.subplots(figsize=(10, 2.6))
             _axi.plot(_win.index, _win['close'], color='#1f77b4', linewidth=1.8)
             _axi.fill_between(_win.index, _win['close'], float(_win['close'].min()), alpha=0.12, color='#1f77b4')
-            _axi.set_title(f'IMOEX — {period_label}: {imoex_ret:+.2f}%', fontsize=12, fontweight='bold')
+            # Последнее значение — точкой с подписью у правого края
+            _axi.plot(_win.index[-1], _last_close, 'o', color='#1f77b4', markersize=5)
+            _axi.annotate(f'{_last_close:,.0f}'.replace(',', ' '),
+                          xy=(_win.index[-1], _last_close),
+                          xytext=(8, 0), textcoords='offset points',
+                          va='center', fontsize=11, fontweight='bold', color='#1f77b4')
+            _axi.margins(x=0.06)
+            _axi.set_title(f'IMOEX — {period_label}: {imoex_ret:+.2f}% (закрытие: {_last_close:,.0f})'.replace(',', ' '),
+                           fontsize=12, fontweight='bold')
             _axi.grid(alpha=0.3)
             _axi.spines['top'].set_visible(False)
             _axi.spines['right'].set_visible(False)
