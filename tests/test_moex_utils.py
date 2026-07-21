@@ -387,6 +387,62 @@ class TestAdjClose:
         assert df['adj_close'].tolist() == pytest.approx([90.0, 90.0])
 
 
+# ---------------------------------------------------------------- indexes: storage
+
+class TestIndexStorage:
+    @pytest.fixture(autouse=True)
+    def idx_folder(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'INDEXES_FOLDER', str(tmp_path))
+        return str(tmp_path)
+
+    @staticmethod
+    def make_index_df(dates, closes):
+        # get_moex_index возвращает индекс из date-объектов — воспроизводим это
+        idx = pd.Index([pd.Timestamp(d).date() for d in dates], name='date')
+        return pd.DataFrame({'volume': [1e9] * len(idx), 'close': closes}, index=idx)
+
+    def test_save_and_read(self, monkeypatch):
+        sample = self.make_index_df(['2025-01-01', '2025-01-02'], [3000.0, 3050.0])
+        monkeypatch.setattr(mu, 'get_moex_index',
+                            lambda ticker, start=None, end=None, session=None: sample)
+
+        path = mu.save_moex_index('imoex')
+        assert path.endswith('IMOEX.parquet')
+
+        df = mu.read_moex_index('IMOEX')
+        assert len(df) == 2
+        assert isinstance(df.index, pd.DatetimeIndex)   # даты нормализованы
+        assert (df['ticker'] == 'IMOEX').all()
+
+    def test_read_missing_raises(self):
+        with pytest.raises(FileNotFoundError):
+            mu.read_moex_index('NOFILE')
+
+    def test_update_appends_and_dedupes(self, monkeypatch):
+        first = self.make_index_df(['2025-01-01', '2025-01-02'], [3000.0, 3050.0])
+        monkeypatch.setattr(mu, 'get_moex_index',
+                            lambda ticker, start=None, end=None, session=None: first)
+        mu.save_moex_index('IMOEX')
+
+        # Обновление перезапрашивает с последней даты: перекрытие по 02.01
+        new = self.make_index_df(['2025-01-02', '2025-01-03'], [3055.0, 3100.0])
+        monkeypatch.setattr(mu, 'get_moex_index',
+                            lambda ticker, start=None, end=None, session=None: new)
+        mu.update_moex_index('IMOEX')
+
+        df = mu.read_moex_index('IMOEX')
+        assert len(df) == 3
+        assert df.loc['2025-01-02', 'close'] == 3055.0  # keep='last'
+        assert df.index.is_monotonic_increasing
+
+    def test_update_missing_file_does_initial_save(self, monkeypatch):
+        sample = self.make_index_df(['2025-01-01'], [3000.0])
+        monkeypatch.setattr(mu, 'get_moex_index',
+                            lambda ticker, start=None, end=None, session=None: sample)
+        mu.update_moex_index('IMOEX')
+        assert len(mu.read_moex_index('IMOEX')) == 1
+
+
 # ---------------------------------------------------------------- bonds: API
 
 class TestBondsApi:

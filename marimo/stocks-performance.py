@@ -6,7 +6,7 @@
 
 import marimo
 
-__generated_with = "0.18.4"
+__generated_with = "0.23.14"
 app = marimo.App(width="full")
 
 
@@ -25,6 +25,7 @@ def _():
     import marimo as mo
     import io
     import base64
+
     return base64, io, mo, moex, np, pd, plt
 
 
@@ -64,7 +65,6 @@ def _(mo):
         value=0,
         label="Мин. market cap (млрд руб):"
     )
-
     return min_market_cap, period_dropdown, show_market_cap, sort_by
 
 
@@ -195,7 +195,6 @@ def _(min_market_cap, perf_df, sort_by):
         filtered_df = filtered_df.sort_values(sort_by.value, ascending=ascending)
     elif sort_by.value == "ticker":
         filtered_df = filtered_df.sort_values('ticker', ascending=True)
-
     return (filtered_df,)
 
 
@@ -309,7 +308,6 @@ def _(base64, filtered_df, io, mo, np, period_label, plt, show_market_cap):
         chart = mo.Html(f'<img src="data:image/png;base64,{_img_base64}" style="max-width: 100%; height: auto;" />')
     else:
         chart = mo.md("Нет данных для отображения")
-
     return (chart,)
 
 
@@ -351,13 +349,15 @@ def _(base64, filtered_df, io, mo, period_label, plt, show_market_cap):
             market_cap_chart = mo.md("Нет данных по market cap")
     else:
         market_cap_chart = mo.md("")
-
     return (market_cap_chart,)
 
 
 @app.cell(hide_code=True)
 def _(
+    breadth_block,
     charts_display,
+    heatmap_block,
+    index_block,
     market_summary,
     min_market_cap,
     mo,
@@ -365,9 +365,11 @@ def _(
     period_end,
     period_label,
     period_start,
+    sector_block,
     show_market_cap,
     sort_by,
     table,
+    volume_block,
 ):
     # Основной layout
     period_start_str = period_start.strftime('%d.%m.%Y')
@@ -377,6 +379,11 @@ def _(
         mo.hstack([period_dropdown, show_market_cap, sort_by, min_market_cap], justify="start"),
         mo.md(f"## Что произошло на рынке — {period_label}\n**Период:** {period_start_str} - {period_end_str}"),
         market_summary,
+        breadth_block,
+        index_block,
+        sector_block,
+        heatmap_block,
+        volume_block,
         table,
         charts_display,
     ])
@@ -384,7 +391,7 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, mo, period_label):
+def _(filtered_df, imoex_ret, mo, period_label):
     # Сводка: рынок в целом за период
     _n = len(filtered_df)
     _up = int((filtered_df['price_performance'] > 0).sum()) if _n else 0
@@ -408,30 +415,22 @@ def _(filtered_df, mo, period_label):
         _bot = filtered_df.nsmallest(5, 'price_performance')
         _top_str = ", ".join(f"**{_r.ticker}** {_r.price_performance:+.1f}%" for _r in _top.itertuples())
         _bot_str = ", ".join(f"**{_r.ticker}** {_r.price_performance:+.1f}%" for _r in _bot.itertuples())
+        _imx_line = f"; IMOEX: **{imoex_ret:+.2f}%**" if imoex_ret is not None else ""
         market_summary = mo.md(f"""
-### Итоги — {period_label}
+    ### Итоги — {period_label}
 
-- **Рынок (взвешенно по капитализации): {_mkt_str}**{_mkt_extra}; медианная бумага: {_med:+.2f}%
-- Выросло: **{_up}** | Упало: **{_down}** | Всего: {_n}
-- 📈 Лидеры: {_top_str}
-- 📉 Аутсайдеры: {_bot_str}
-""")
+    - **Рынок (взвешенно по капитализации): {_mkt_str}**{_mkt_extra}{_imx_line}; медианная бумага: {_med:+.2f}%
+    - Выросло: **{_up}** | Упало: **{_down}** | Всего: {_n}
+    - 📈 Лидеры: {_top_str}
+    - 📉 Аутсайдеры: {_bot_str}
+    """)
     else:
         market_summary = mo.md("Нет данных за выбранный период")
     return (market_summary,)
 
 
 @app.cell(hide_code=True)
-def _(
-    base64,
-    chart,
-    filtered_df,
-    io,
-    market_cap_chart,
-    mo,
-    period_label,
-    plt,
-):
+def _(base64, chart, filtered_df, io, market_cap_chart, mo, period_label, plt):
     # Графики включая Marimekko chart
     _all_charts = [
         mo.md("## Визуализация"),
@@ -537,7 +536,7 @@ def _(
     return (charts_display,)
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(filtered_df, mo, pd):
     # Статистика
     stats_items = [
@@ -573,6 +572,187 @@ def _(filtered_df, mo, pd):
 
     mo.md(stats_text)
     return
+
+
+@app.cell(hide_code=True)
+def _(base64, io, mo, moex, pd, period_end, period_label, period_start, plt):
+    # IMOEX за период — из локального кэша indexes/IMOEX.parquet
+    # (обновляется офлайн: python update_data.py, шаг 1b)
+    imoex_ret = None
+    try:
+        _idx_df = moex.read_moex_index('IMOEX')
+        _idx_df.index = pd.to_datetime(_idx_df.index)
+        _win = _idx_df[(_idx_df.index >= period_start) & (_idx_df.index <= period_end)].sort_index()
+        if len(_win) >= 2:
+            imoex_ret = (float(_win['close'].iloc[-1]) / float(_win['close'].iloc[0]) - 1) * 100
+            _figi, _axi = plt.subplots(figsize=(10, 2.6))
+            _axi.plot(_win.index, _win['close'], color='#1f77b4', linewidth=1.8)
+            _axi.fill_between(_win.index, _win['close'], float(_win['close'].min()), alpha=0.12, color='#1f77b4')
+            _axi.set_title(f'IMOEX — {period_label}: {imoex_ret:+.2f}%', fontsize=12, fontweight='bold')
+            _axi.grid(alpha=0.3)
+            _axi.spines['top'].set_visible(False)
+            _axi.spines['right'].set_visible(False)
+            plt.tight_layout()
+            _bufi = io.BytesIO()
+            _figi.savefig(_bufi, format='png', bbox_inches='tight', dpi=100)
+            _bufi.seek(0)
+            _imgi = base64.b64encode(_bufi.read()).decode()
+            plt.close(_figi)
+            index_block = mo.Html(f'<img src="data:image/png;base64,{_imgi}" style="max-width: 100%; height: auto;" />')
+        else:
+            index_block = mo.md("*IMOEX: недостаточно данных за период — обновите кэш: `python update_data.py`*")
+    except FileNotFoundError:
+        index_block = mo.md("*Локальный кэш IMOEX не найден — выполните `python update_data.py` (шаг 1b)*")
+    except Exception as _e_idx:
+        index_block = mo.md(f"*IMOEX: ошибка чтения кэша — {_e_idx}*")
+    return imoex_ret, index_block
+
+
+@app.cell(hide_code=True)
+def _(combined_df, mo, pd):
+    # Ширина рынка: близость к 52-недельным экстремумам (по close за последний год)
+    _last_date = combined_df.index.max()
+    _ydf = combined_df[combined_df.index >= _last_date - pd.DateOffset(years=1)]
+    _g = _ydf.groupby('ticker')['close']
+    _hi = _g.max()
+    _lo = _g.min()
+    _lastp = _ydf.sort_index().groupby('ticker')['close'].last()
+
+    _near_hi = sorted(_lastp[_lastp >= _hi * 0.98].index)
+    _near_lo = sorted(_lastp[_lastp <= _lo * 1.02].index)
+
+    def _fmt_tickers(_lst, _limit=12):
+        if not _lst:
+            return "—"
+        _s = ", ".join(_lst[:_limit])
+        return _s + (f" и еще {len(_lst) - _limit}" if len(_lst) > _limit else "")
+
+    breadth_block = mo.md(
+        f"**Ширина рынка (52 нед.):** у максимумов (в пределах 2%): **{len(_near_hi)}** ({_fmt_tickers(_near_hi)}) | "
+        f"у минимумов: **{len(_near_lo)}** ({_fmt_tickers(_near_lo)})"
+    )
+    return (breadth_block,)
+
+
+@app.cell(hide_code=True)
+def _(base64, filtered_df, io, mo, moex, pd, period_label, plt):
+    # Секторный разрез: динамика секторов, взвешенная по капитализации
+    # Справочник тикер→сектор: metadata/sectors.csv
+    import os as _osx
+    _sec_path = _osx.path.join(moex.BASE_DIR, 'metadata', 'sectors.csv')
+    if not _osx.path.exists(_sec_path):
+        sector_block = mo.md("*Справочник секторов `metadata/sectors.csv` не найден — секторный разрез пропущен*")
+    elif len(filtered_df) == 0:
+        sector_block = mo.md("")
+    else:
+        _sec_map = pd.read_csv(_sec_path)
+        _sdf = filtered_df.merge(_sec_map, on='ticker', how='left')
+        _sdf['sector'] = _sdf['sector'].fillna('Прочее')
+
+        _rows = []
+        for _sec, _grp in _sdf.groupby('sector'):
+            _gmc = _grp.dropna(subset=['first_market_cap', 'last_market_cap'])
+            if len(_gmc) > 0 and _gmc['first_market_cap'].sum() > 0:
+                _ret = (_gmc['last_market_cap'].sum() / _gmc['first_market_cap'].sum() - 1) * 100
+            else:
+                _ret = float(_grp['price_performance'].median())
+            _rows.append({'sector': f"{_sec} ({len(_grp)})", 'ret': _ret})
+        _sec_df = pd.DataFrame(_rows).sort_values('ret')
+
+        _figs, _axs = plt.subplots(figsize=(10, max(3.0, 0.45 * len(_sec_df))))
+        _colss = ['green' if _x >= 0 else 'red' for _x in _sec_df['ret']]
+        _axs.barh(_sec_df['sector'], _sec_df['ret'], color=_colss, alpha=0.75)
+        for _yi, _v in enumerate(_sec_df['ret']):
+            _axs.text(_v, _yi, f' {_v:+.1f}% ', va='center',
+                      ha='left' if _v >= 0 else 'right', fontsize=9, fontweight='bold')
+        _axs.set_title(f'Сектора (взвешенно по капитализации) — {period_label}', fontsize=12, fontweight='bold')
+        _axs.axvline(0, color='black', linewidth=0.8)
+        _axs.grid(axis='x', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        _bufs = io.BytesIO()
+        _figs.savefig(_bufs, format='png', bbox_inches='tight', dpi=100)
+        _bufs.seek(0)
+        _imgs = base64.b64encode(_bufs.read()).decode()
+        plt.close(_figs)
+        sector_block = mo.Html(f'<img src="data:image/png;base64,{_imgs}" style="max-width: 100%; height: auto;" />')
+    return (sector_block,)
+
+
+@app.cell(hide_code=True)
+def _(base64, filtered_df, io, mo, np, period_label, plt):
+    # Карта рынка: плитки по убыванию капитализации, цвет = performance
+    _hm = filtered_df.dropna(subset=['price_performance']).copy()
+    if len(_hm) == 0:
+        heatmap_block = mo.md("")
+    else:
+        _hm['_mc'] = _hm['last_market_cap'].fillna(0)
+        _hm = _hm.sort_values('_mc', ascending=False)
+
+        _ncols = 10
+        _nrows = int(np.ceil(len(_hm) / _ncols))
+        _vmax = max(float(np.percentile(np.abs(_hm['price_performance']), 95)), 1e-9)
+        _cmap = plt.get_cmap('RdYlGn')
+
+        _figh, _axh = plt.subplots(figsize=(16, 0.9 * _nrows))
+        for _ih, _rowh in enumerate(_hm.itertuples()):
+            _rr, _cc = divmod(_ih, _ncols)
+            _pv = float(_rowh.price_performance)
+            _normv = 0.5 + max(-1.0, min(1.0, _pv / _vmax)) / 2
+            _axh.add_patch(plt.Rectangle((_cc + 0.02, -_rr - 0.98), 0.96, 0.94, color=_cmap(_normv)))
+            _axh.text(_cc + 0.5, -_rr - 0.40, str(_rowh.ticker),
+                      ha='center', va='center', fontsize=8, fontweight='bold')
+            _axh.text(_cc + 0.5, -_rr - 0.74, f'{_pv:+.1f}%', ha='center', va='center', fontsize=7)
+        _axh.set_xlim(0, _ncols)
+        _axh.set_ylim(-_nrows, 0)
+        _axh.axis('off')
+        _axh.set_title(f'Карта рынка (порядок = размер компании) — {period_label}',
+                       fontsize=13, fontweight='bold')
+        plt.tight_layout()
+        _bufh = io.BytesIO()
+        _figh.savefig(_bufh, format='png', bbox_inches='tight', dpi=110)
+        _bufh.seek(0)
+        _imgh = base64.b64encode(_bufh.read()).decode()
+        plt.close(_figh)
+        heatmap_block = mo.Html(f'<img src="data:image/png;base64,{_imgh}" style="max-width: 100%; height: auto;" />')
+    return (heatmap_block,)
+
+
+@app.cell(hide_code=True)
+def _(combined_df, filtered_df, mo, pd, period_end, period_start):
+    # Необычная активность: среднедневной оборот за период против 90 дней до него
+    _per = combined_df[(combined_df.index >= period_start) & (combined_df.index <= period_end)]
+    _base = combined_df[
+        (combined_df.index >= period_start - pd.DateOffset(days=90)) & (combined_df.index < period_start)
+    ]
+
+    _va = pd.DataFrame({
+        'per': _per.groupby('ticker')['value_rub'].mean(),
+        'base': _base.groupby('ticker')['value_rub'].mean(),
+    }).dropna()
+    _va = _va[_va['base'] > 1e7]  # отсекаем неликвид: база < 10 млн руб/день
+    _va['ratio'] = _va['per'] / _va['base']
+    _va = _va.sort_values('ratio', ascending=False).head(10)
+
+    if len(_va) == 0:
+        volume_block = mo.md("")
+    else:
+        _perf_map = (
+            filtered_df.set_index('ticker')['price_performance'] if len(filtered_df) else pd.Series(dtype=float)
+        )
+        _lines = []
+        for _tv, _rv in _va.iterrows():
+            _pperf = _perf_map.get(_tv)
+            _pstr = f"{_pperf:+.1f}%" if pd.notna(_pperf) else "—"
+            _lines.append(
+                f"| {_tv} | {_rv['per'] / 1e6:,.0f} | {_rv['base'] / 1e6:,.0f} | ×{_rv['ratio']:.1f} | {_pstr} |".replace(",", " ")
+            )
+        volume_block = mo.md(
+            "### Необычная активность\n\n"
+            "Среднедневной оборот за период против среднего за предыдущие 90 дней:\n\n"
+            "| Тикер | Оборот/день, млн руб | База, млн руб | Всплеск | Изм. цены |\n"
+            "|---|---|---|---|---|\n" + "\n".join(_lines)
+        )
+    return (volume_block,)
 
 
 if __name__ == "__main__":

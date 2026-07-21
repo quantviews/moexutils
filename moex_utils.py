@@ -16,6 +16,7 @@ import requests
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
+INDEXES_FOLDER = os.path.join(BASE_DIR, "indexes")
 
 logger = logging.getLogger("moex_utils")
 # Если логирование в приложении не настроено — выводим сообщения в stdout,
@@ -210,6 +211,87 @@ def get_moex_index(ticker: str, start: str = '2023-01-01', end: Optional[str] = 
         raise RuntimeError(f"An error occurred during data processing: {e}")
 
     return df
+
+
+def save_moex_index(ticker: str = 'IMOEX', start: str = '2010-01-01', end: Optional[str] = None,
+                    session: Optional[requests.Session] = None) -> Optional[str]:
+    """
+    Скачивает историю индекса и сохраняет в INDEXES_FOLDER/<TICKER>.parquet (атомарная запись).
+
+    Returns:
+    str | None: путь к файлу или None при ошибке.
+    """
+    ticker = ticker.upper()
+    try:
+        df = get_moex_index(ticker, start=start, end=end, session=session)
+    except Exception as e:
+        logger.error(f"[ERROR] {ticker}: не удалось получить данные индекса — {e}")
+        return None
+
+    if df is None or df.empty:
+        logger.warning(f"[WARN] {ticker}: пустой ответ по индексу")
+        return None
+
+    df = df.copy()
+    df.index = pd.to_datetime(df.index)
+    df.sort_index(inplace=True)
+    df['ticker'] = ticker
+
+    os.makedirs(INDEXES_FOLDER, exist_ok=True)
+    file_path = os.path.join(INDEXES_FOLDER, f"{ticker}.parquet")
+    tmp_path = file_path + ".tmp"
+    df.to_parquet(tmp_path)
+    os.replace(tmp_path, file_path)
+    logger.info(f"[OK] {ticker}: {len(df):,} rows → {file_path}")
+    return file_path
+
+
+def read_moex_index(ticker: str = 'IMOEX') -> pd.DataFrame:
+    """
+    Читает локальный кэш индекса из INDEXES_FOLDER/<TICKER>.parquet.
+    """
+    ticker = ticker.upper()
+    file_path = os.path.join(INDEXES_FOLDER, f"{ticker}.parquet")
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(
+            f"Index data file not found: {file_path}. Используйте save_moex_index('{ticker}')."
+        )
+    return pd.read_parquet(file_path)
+
+
+def update_moex_index(ticker: str = 'IMOEX', session: Optional[requests.Session] = None) -> None:
+    """
+    Инкрементально обновляет локальный кэш индекса; при отсутствии файла скачивает историю с 2010 года.
+    """
+    ticker = ticker.upper()
+    file_path = os.path.join(INDEXES_FOLDER, f"{ticker}.parquet")
+    if not os.path.exists(file_path):
+        save_moex_index(ticker, session=session)
+        return
+
+    existing_df = pd.read_parquet(file_path)
+    start = pd.to_datetime(existing_df.index.max()).strftime('%Y-%m-%d')
+    try:
+        new_df = get_moex_index(ticker, start=start, session=session)
+    except Exception as e:
+        logger.warning(f"[WARN] {ticker}: не удалось обновить индекс — {e}")
+        return
+
+    if new_df is None or new_df.empty:
+        logger.info(f"[INFO] {ticker}: нет новых данных")
+        return
+
+    new_df = new_df.copy()
+    new_df.index = pd.to_datetime(new_df.index)
+    new_df['ticker'] = ticker
+
+    combined_df = pd.concat([existing_df, new_df])
+    combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
+
+    tmp_path = file_path + ".tmp"
+    combined_df.to_parquet(tmp_path)
+    os.replace(tmp_path, file_path)
+    logger.info(f"Updated index {ticker}: {start} → {combined_df.index.max().strftime('%Y-%m-%d')}")
 
 def save_moex_stock(
     ticker: str,
