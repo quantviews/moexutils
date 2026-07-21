@@ -9,6 +9,7 @@
 | `DATA_FOLDER` | `<корень проекта>/data` | Каталог с подпапками по тикерам и Parquet-файлами |
 | `METADATA_FILE` | `<корень проекта>/metadata/stock-index-base.xlsx` | Excel с количеством акций по датам |
 | `BONDS_FOLDER` | `<корень проекта>/bonds` | Parquet-файлы облигаций (`<SECID>.parquet`) |
+| `INDEXES_FOLDER` | `<корень проекта>/indexes` | Локальный кэш индексов (`<TICKER>.parquet`) |
 
 Сообщения о ходе работы идут через логгер `moex_utils` (по умолчанию — в stdout, как обычный print; приглушить: `logging.getLogger("moex_utils").setLevel(logging.WARNING)`).
 
@@ -35,6 +36,18 @@ get_moex_index(ticker, start='2023-01-01', end=None, session=None) -> pd.DataFra
 ```
 
 История индекса (например IMOEX, RGBI). **Возвращает:** DataFrame с индексом `date`, колонками `volume`, `close`.
+
+---
+
+### save_moex_index / read_moex_index / update_moex_index
+
+```python
+save_moex_index(ticker='IMOEX', start='2010-01-01', end=None, session=None) -> Optional[str]
+read_moex_index(ticker='IMOEX') -> pd.DataFrame
+update_moex_index(ticker='IMOEX', session=None) -> None
+```
+
+Локальный кэш индексов в `INDEXES_FOLDER/<TICKER>.parquet` (DatetimeIndex, колонки `volume`, `close`, `ticker`; атомарная запись). `update_moex_index` дозагружает с последней сохранённой даты, при отсутствии файла скачивает историю с 2010 года. Обновляется шагом 1b в `update_data.py`.
 
 ---
 
@@ -236,6 +249,8 @@ python update_data.py [--no-update] [--no-adj] [--no-cap] [--div-folder PATH] [-
 | `--no-update` | Не обновлять котировки с MOEX |
 | `--no-adj` | Не пересчитывать adj_close |
 | `--no-cap` | Не пересчитывать market_cap |
+| `--no-index` | Не обновлять индексы |
+| `--indexes` | Индексы через запятую (по умолчанию `IMOEX`) |
 | `--div-folder` | Папка с CSV дивидендов (по умолчанию `../dividends/data`) |
 | `--data-folder` | Папка с Parquet |
 | `--metadata-file` | Путь к Excel с метаданными |
