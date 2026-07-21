@@ -67,9 +67,9 @@ def _(mo, moex):
 
 @app.cell(hide_code=True)
 def _(data_folder_input, moex):
-    # Загрузка всех данных
+    # Загрузка всех данных; цены приводим к пост-сплитовой базе (metadata/splits.csv)
     data_folder = data_folder_input.value or None
-    combined_stocks = moex.combine_moex_stocks(data_folder=data_folder)
+    combined_stocks = moex.adjust_for_splits(moex.combine_moex_stocks(data_folder=data_folder))
     latest_date = combined_stocks.index.max()
     earliest_date = combined_stocks.index.min()
 

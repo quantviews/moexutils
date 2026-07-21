@@ -10,6 +10,7 @@
 | `METADATA_FILE` | `<корень проекта>/metadata/stock-index-base.xlsx` | Excel с количеством акций по датам |
 | `BONDS_FOLDER` | `<корень проекта>/bonds` | Parquet-файлы облигаций (`<SECID>.parquet`) |
 | `INDEXES_FOLDER` | `<корень проекта>/indexes` | Локальный кэш индексов (`<TICKER>.parquet`) |
+| `SPLITS_FILE` | `<корень проекта>/metadata/splits.csv` | Реестр сплитов акций (ticker, date, ratio) |
 
 Сообщения о ходе работы идут через логгер `moex_utils` (по умолчанию — в stdout, как обычный print; приглушить: `logging.getLogger("moex_utils").setLevel(logging.WARNING)`).
 
@@ -103,6 +104,27 @@ combine_moex_stocks(data_folder=None) -> pd.DataFrame
 ```
 
 Объединяет все Parquet из `data_folder` (по умолчанию `DATA_FOLDER`) в один DataFrame.
+
+---
+
+## Сплиты
+
+### load_splits / adjust_for_splits
+
+```python
+load_splits(splits_file=None) -> pd.DataFrame
+adjust_for_splits(df, splits_file=None) -> pd.DataFrame
+```
+
+Свечи MOEX не корректируются на дробления/консолидации акций — например, у T (Т-Технологии) 20.02.2026 цена «упала» в 10 раз из-за сплита 1:10. `adjust_for_splits` приводит ценовые колонки (`close`, `adj_close`, `open/high/low`) к пост-сплитовой базе по реестру `metadata/splits.csv`: цены до даты сплита делятся на `ratio`, объем умножается. `value_rub` и `market_cap` не трогаются. Семантика `ratio`: дробление 1:10 → `10`, консолидация 100:1 → `0.01`.
+
+Применяйте к результату `combine_moex_stocks()` перед расчетом доходностей:
+
+```python
+combined = moex.adjust_for_splits(moex.combine_moex_stocks())
+```
+
+При добавлении нового сплита допишите строку в `metadata/splits.csv`.
 
 ---
 

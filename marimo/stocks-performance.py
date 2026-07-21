@@ -75,8 +75,9 @@ def _(mo):
 
 @app.cell
 def _(moex):
-    # Загружаем данные
-    combined_df = moex.combine_moex_stocks()
+    # Загружаем данные; цены приводим к пост-сплитовой базе (metadata/splits.csv),
+    # иначе дробления акций (T 1:10 в 2026 и др.) выглядят как обвал цены
+    combined_df = moex.adjust_for_splits(moex.combine_moex_stocks())
     return (combined_df,)
 
 

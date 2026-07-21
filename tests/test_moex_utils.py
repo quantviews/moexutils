@@ -387,6 +387,55 @@ class TestAdjClose:
         assert df['adj_close'].tolist() == pytest.approx([90.0, 90.0])
 
 
+# ---------------------------------------------------------------- splits
+
+class TestSplits:
+    @staticmethod
+    def write_splits(tmp_path, rows):
+        path = tmp_path / "splits.csv"
+        pd.DataFrame(rows, columns=['ticker', 'date', 'ratio']).to_csv(path, index=False)
+        return str(path)
+
+    def test_prices_divided_before_split_only(self, tmp_path):
+        splits = self.write_splits(tmp_path, [('TEST', '2025-01-03', 10)])
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
+                           [1000, 1010, 101, 102])
+
+        result = mu.adjust_for_splits(df, splits_file=splits)
+
+        assert result['close'].tolist() == pytest.approx([100.0, 101.0, 101.0, 102.0])
+        # объем до сплита умножается на ratio
+        assert result['volume'].tolist() == pytest.approx([100.0, 100.0, 10.0, 10.0])
+        # исходный DataFrame не изменен
+        assert df['close'].iloc[0] == 1000
+
+    def test_reverse_split(self, tmp_path):
+        # Консолидация 100:1 → ratio=0.01: старые цены умножаются на 100
+        splits = self.write_splits(tmp_path, [('TEST', '2025-01-02', 0.01)])
+        df = make_stock_df(['2025-01-01', '2025-01-02'], [0.01, 1.0])
+
+        result = mu.adjust_for_splits(df, splits_file=splits)
+        assert result['close'].tolist() == pytest.approx([1.0, 1.0])
+
+    def test_other_tickers_untouched(self, tmp_path):
+        splits = self.write_splits(tmp_path, [('OTHER', '2025-01-02', 10)])
+        df = make_stock_df(['2025-01-01', '2025-01-02'], [100, 101])
+
+        result = mu.adjust_for_splits(df, splits_file=splits)
+        assert result['close'].tolist() == [100.0, 101.0]
+
+    def test_missing_registry_is_noop(self, tmp_path):
+        df = make_stock_df(['2025-01-01'], [100])
+        result = mu.adjust_for_splits(df, splits_file=str(tmp_path / 'nope.csv'))
+        assert result['close'].tolist() == [100.0]
+
+    def test_real_registry_contains_t_split(self):
+        splits = mu.load_splits()
+        row = splits[splits['ticker'] == 'T']
+        assert len(row) == 1
+        assert float(row['ratio'].iloc[0]) == 10.0
+
+
 # ---------------------------------------------------------------- indexes: storage
 
 class TestIndexStorage:

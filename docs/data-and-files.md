@@ -22,7 +22,8 @@ moexutils/
 │   └── IMOEX.parquet       # локальный кэш индексов (update_data.py, шаг 1b)
 ├── metadata/
 │   ├── stock-index-base.xlsx
-│   └── sectors.csv         # справочник тикер→сектор (для секторного разреза)
+│   ├── sectors.csv         # справочник тикер→сектор (для секторного разреза)
+│   └── splits.csv          # реестр сплитов: ticker,date,ratio (цены до даты делятся на ratio)
 └── (опционально) ../dividends/data/   # CSV дивидендов для adj_close
     ├── SBER.csv
     └── ...

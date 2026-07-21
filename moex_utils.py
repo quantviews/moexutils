@@ -17,6 +17,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 INDEXES_FOLDER = os.path.join(BASE_DIR, "indexes")
+SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
 
 logger = logging.getLogger("moex_utils")
 # Если логирование в приложении не настроено — выводим сообщения в stdout,
@@ -682,6 +683,61 @@ def calculate_market_cap(df: pd.DataFrame, ticker: str, metadata_file: Optional[
     # Удаляем строки где нет данных о количестве акций
     df = df.dropna(subset=['market_cap'])
     
+    return df
+
+
+def load_splits(splits_file: Optional[str] = None) -> pd.DataFrame:
+    """
+    Загружает реестр сплитов metadata/splits.csv (колонки: ticker, date, ratio).
+
+    ratio — делитель цены: цены ДО даты сплита делятся на ratio.
+    Дробление 1:10 → ratio=10; консолидация 100:1 → ratio=0.01.
+    """
+    if splits_file is None:
+        splits_file = SPLITS_FILE
+    if not os.path.exists(splits_file):
+        return pd.DataFrame(columns=['ticker', 'date', 'ratio'])
+    return pd.read_csv(splits_file, parse_dates=['date'])
+
+
+def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd.DataFrame:
+    """
+    Приводит ценовые колонки к пост-сплитовой базе по реестру splits.csv.
+
+    Свечи MOEX не корректируются на сплиты: например, у T (Т-Технологии)
+    20.02.2026 цена «упала» в 10 раз из-за дробления 1:10, и наивный расчет
+    доходности через такой разрыв дает бессмыслицу.
+
+    Для каждого сплита: цены (close, adj_close, open, high, low) до даты
+    делятся на ratio, volume умножается. value_rub (оборот) и market_cap
+    не трогаем — они согласованы во времени и без корректировки.
+
+    Parameters:
+    df (pd.DataFrame): данные с колонкой 'ticker' и датами в индексе
+                       (одна бумага или combine_moex_stocks()).
+    splits_file (str | None): путь к CSV реестра; по умолчанию SPLITS_FILE.
+
+    Returns:
+    pd.DataFrame: копия df со скорректированными ценами.
+    """
+    splits = load_splits(splits_file)
+    if splits.empty or df.empty or 'ticker' not in df.columns:
+        return df
+
+    df = df.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    price_cols = [c for c in ('close', 'adj_close', 'open', 'high', 'low') if c in df.columns]
+    for row in splits.itertuples(index=False):
+        mask = (df['ticker'] == row.ticker) & (df.index < pd.Timestamp(row.date))
+        if not mask.any():
+            continue
+        for col in price_cols:
+            df.loc[mask, col] = df.loc[mask, col] / float(row.ratio)
+        if 'volume' in df.columns:
+            df.loc[mask, 'volume'] = df.loc[mask, 'volume'] * float(row.ratio)
+
     return df
 
 
