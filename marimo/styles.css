@@ -1,0 +1,35 @@
+/* Общие стили для marimo-ноутбуков проекта.
+   Подключение: app = marimo.App(css_file="styles.css")
+   Путь берется относительно файла ноутбука. */
+
+/* Markdown-вывод (mo.md): базовый текст крупнее */
+.prose {
+    font-size: 17px;
+    line-height: 1.55;
+}
+
+.prose h1 { font-size: 1.9rem; }
+.prose h2 { font-size: 1.55rem; }
+.prose h3 { font-size: 1.3rem; }
+
+/* Таблицы в markdown (в т.ч. «Необычная активность») */
+.prose table {
+    font-size: 15px;
+}
+
+/* Интерактивная таблица mo.ui.table */
+.marimo-table,
+[data-testid="table"] {
+    font-size: 14px;
+}
+
+/* Подписи контролов (дропдауны, слайдеры, чекбоксы) */
+.marimo-ui-element label,
+marimo-ui-element label {
+    font-size: 15px;
+}
+
+/* Вывод print() в консоли ячейки */
+.console-output {
+    font-size: 14px;
+}

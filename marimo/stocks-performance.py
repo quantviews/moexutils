@@ -7,7 +7,7 @@
 import marimo
 
 __generated_with = "0.23.14"
-app = marimo.App(width="medium", app_title="Обзор фондового рынка РФ")
+app = marimo.App(width="medium", app_title="Обзор фондового рынка РФ", css_file="styles.css")
 
 
 @app.cell(hide_code=True)

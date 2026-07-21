@@ -18,7 +18,7 @@ marimo notebook: ARIMA-анализ тикера MOEX
 import marimo
 
 __generated_with = "0.18.4"
-app = marimo.App(width="medium")
+app = marimo.App(width="medium", css_file="styles.css")
 
 
 @app.cell(hide_code=True)
