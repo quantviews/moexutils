@@ -202,6 +202,68 @@ def _(combined_df, pd, period_dropdown):
 
 
 @app.cell(hide_code=True)
+def _(combined_df, moex, np, pd):
+    # Годовые метрики риска по бумагам: волатильность (аннуализированная),
+    # бета к IMOEX, max drawdown и расстояние от 52-недельного максимума
+    _last_date_r = combined_df.index.max()
+    _start_1y = _last_date_r - pd.DateOffset(years=1)
+    _wide_r = combined_df.pivot_table(index=combined_df.index, columns='ticker',
+                                      values='close', aggfunc='last').sort_index()
+    _wide_1y = _wide_r[_wide_r.index >= _start_1y]
+    _rets = _wide_1y.pct_change()
+    _counts = _rets.count()
+
+    _vol_1y = _rets.std() * np.sqrt(252) * 100
+    _vol_1y[_counts < 60] = np.nan  # меньше ~3 месяцев наблюдений — оценка ненадежна
+
+    _cummax = _wide_1y.cummax()
+    _mdd_1y = ((_wide_1y / _cummax) - 1).min() * 100
+    _off_high = (_wide_1y.ffill().iloc[-1] / _wide_1y.max() - 1) * 100
+
+    _beta = pd.Series(np.nan, index=_rets.columns)
+    try:
+        _imx_r = moex.read_moex_index('IMOEX')
+        _imx_r.index = pd.to_datetime(_imx_r.index)
+        _imx_ret_s = _imx_r['close'].pct_change()
+        _imx_ret_s = _imx_ret_s[_imx_ret_s.index >= _start_1y]
+        _aligned = _rets.join(_imx_ret_s.rename('_IMOEX_'), how='inner')
+        _ivar = float(_aligned['_IMOEX_'].var())
+        if _ivar > 0:
+            _beta = _aligned.drop(columns='_IMOEX_').apply(
+                lambda _s: _s.cov(_aligned['_IMOEX_'])) / _ivar
+            _beta[_counts < 60] = np.nan
+    except Exception:
+        pass
+
+    risk_df = pd.DataFrame({
+        'vol_1y': _vol_1y,
+        'beta': _beta,
+        'mdd_1y': _mdd_1y,
+        'off_high': _off_high,
+    })
+    risk_df.index.name = 'ticker'
+    risk_df = risk_df.reset_index()
+    return (risk_df,)
+
+
+@app.cell(hide_code=True)
+def _(filtered_df, imoex_ret, pd, period_end, period_start, risk_df):
+    # Обогащение риск-метриками: σ-движение (аномальность хода за период)
+    # и альфа к IMOEX (изменение бумаги минус бета × изменение индекса)
+    enriched_df = filtered_df.merge(risk_df, on='ticker', how='left')
+
+    _years = max((period_end - period_start).days, 1) / 365.25
+    _denom = (enriched_df['vol_1y'] * (_years ** 0.5)).replace(0, pd.NA)
+    enriched_df['sigma_move'] = enriched_df['price_performance'] / _denom
+
+    if imoex_ret is not None:
+        enriched_df['alpha'] = enriched_df['price_performance'] - enriched_df['beta'] * imoex_ret
+    else:
+        enriched_df['alpha'] = pd.NA
+    return (enriched_df,)
+
+
+@app.cell(hide_code=True)
 def _(min_market_cap, perf_df, sort_by):
     # Фильтруем и сортируем данные
     filtered_df = perf_df.copy()
@@ -224,18 +286,27 @@ def _(min_market_cap, perf_df, sort_by):
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, mo, pd, show_market_cap):
+def _(enriched_df, mo, pd, show_market_cap):
     # Таблица с результатами
-    display_cols = ['ticker', 'price_performance', 'first_price', 'last_price']
+    display_cols = ['ticker', 'price_performance', 'sigma_move', 'alpha',
+                    'vol_1y', 'beta', 'mdd_1y', 'off_high',
+                    'first_price', 'last_price']
+    display_cols = [c for c in display_cols if c in enriched_df.columns]
 
     # Добавляем даты в таблицу
-    if 'start_date' in filtered_df.columns and 'end_date' in filtered_df.columns:
+    if 'start_date' in enriched_df.columns and 'end_date' in enriched_df.columns:
         display_cols.extend(['start_date', 'end_date'])
 
-    if show_market_cap.value and 'market_cap_performance' in filtered_df.columns:
+    if show_market_cap.value and 'market_cap_performance' in enriched_df.columns:
         display_cols.extend(['market_cap_performance', 'market_cap_change', 'last_market_cap'])
 
-    display_df = filtered_df[display_cols].copy()
+    display_df = enriched_df[display_cols].copy()
+
+    # Округление риск-метрик
+    for _rc, _nd in (('sigma_move', 1), ('alpha', 1), ('vol_1y', 0),
+                     ('beta', 2), ('mdd_1y', 1), ('off_high', 1)):
+        if _rc in display_df.columns:
+            display_df[_rc] = pd.to_numeric(display_df[_rc], errors='coerce').round(_nd)
 
     # Форматирование
     if 'price_performance' in display_df.columns:
@@ -259,15 +330,21 @@ def _(filtered_df, mo, pd, show_market_cap):
 
     # Переименование для читаемости
     column_mapping = {
-        'Ticker': 'Тикер',
-        'Price Performance': 'Performance по цене (%)',
-        'First Price': 'Цена нач. (руб)',
-        'Last Price': 'Цена кон. (руб)',
-        'Start Date': 'Дата нач.',
-        'End Date': 'Дата кон.',
-        'Market Cap Performance': 'Performance по market cap (%)',
-        'Market Cap Change': 'Изменение market cap (млрд руб)',
-        'Last Market Cap': 'Market cap кон. (млрд руб)',
+        'ticker': 'Тикер',
+        'price_performance': 'Изм. цены (%)',
+        'sigma_move': 'σ-движение',
+        'alpha': 'Альфа (%)',
+        'vol_1y': 'Волат. 1Y (%)',
+        'beta': 'Бета',
+        'mdd_1y': 'Max DD 1Y (%)',
+        'off_high': 'От 52н max (%)',
+        'first_price': 'Цена нач.',
+        'last_price': 'Цена кон.',
+        'start_date': 'Дата нач.',
+        'end_date': 'Дата кон.',
+        'market_cap_performance': 'Изм. mcap (%)',
+        'market_cap_change': 'Δ mcap (млрд)',
+        'last_market_cap': 'Mcap (млрд)',
     }
     display_df = display_df.rename(columns=column_mapping)
 
@@ -683,7 +760,7 @@ def _(filtered_df, mo, np, period_label, plotly_available, px, sectors_map):
 
 
 @app.cell(hide_code=True)
-def _(combined_df, filtered_df, mo, pd, period_end, period_start):
+def _(combined_df, enriched_df, filtered_df, mo, pd, period_end, period_start):
     # Необычная активность: среднедневной оборот за период против 90 дней до него
     _per = combined_df[(combined_df.index >= period_start) & (combined_df.index <= period_end)]
     _base = combined_df[
@@ -698,9 +775,8 @@ def _(combined_df, filtered_df, mo, pd, period_end, period_start):
     _va['ratio'] = _va['per'] / _va['base']
     _va = _va.sort_values('ratio', ascending=False).head(10)
 
-    if len(_va) == 0:
-        volume_block = mo.md("")
-    else:
+    _parts = []
+    if len(_va) > 0:
         _perf_map = (
             filtered_df.set_index('ticker')['price_performance'] if len(filtered_df) else pd.Series(dtype=float)
         )
@@ -711,12 +787,32 @@ def _(combined_df, filtered_df, mo, pd, period_end, period_start):
             _lines.append(
                 f"| {_tv} | {_rv['per'] / 1e6:,.0f} | {_rv['base'] / 1e6:,.0f} | ×{_rv['ratio']:.1f} | {_pstr} |".replace(",", " ")
             )
-        volume_block = mo.md(
+        _parts.append(mo.md(
             "### Необычная активность\n\n"
             "Среднедневной оборот за период против среднего за предыдущие 90 дней:\n\n"
             "| Тикер | Оборот/день, млн руб | База, млн руб | Всплеск | Изм. цены |\n"
             "|---|---|---|---|---|\n" + "\n".join(_lines)
-        )
+        ))
+
+    # Необычные движения цены: ход за период в единицах годовой волатильности бумаги.
+    # |σ| ≥ 2 — статистически редкое движение, даже если процент скромный
+    _sm = enriched_df.dropna(subset=['sigma_move']) if len(enriched_df) else enriched_df
+    if len(_sm) > 0:
+        _sm = _sm[_sm['sigma_move'].abs() >= 2]
+        _sm = _sm.sort_values('sigma_move', key=lambda s: s.abs(), ascending=False).head(10)
+        if len(_sm) > 0:
+            _lines2 = [
+                f"| {_r.ticker} | {_r.price_performance:+.1f}% | {_r.sigma_move:+.1f}σ | {_r.vol_1y:.0f}% |"
+                for _r in _sm.itertuples()
+            ]
+            _parts.append(mo.md(
+                "### Необычные движения цены (|σ| ≥ 2)\n\n"
+                "Изменение за период в единицах собственной годовой волатильности бумаги:\n\n"
+                "| Тикер | Изм. цены | Движение | Волат. 1Y |\n"
+                "|---|---|---|---|\n" + "\n".join(_lines2)
+            ))
+
+    volume_block = mo.vstack(_parts) if _parts else mo.md("")
     return (volume_block,)
 
 
