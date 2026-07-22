@@ -408,6 +408,71 @@ class TestAdjClose:
         result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
         assert (result['adj_close'] == result['close']).all()
 
+    def test_adj_close_is_split_adjusted(self, tmp_path, monkeypatch):
+        """adj_close строится на сплит-скорректированной базе: без дивидендов
+        это непрерывный ряд без разрыва на дате сплита."""
+        splits = tmp_path / 'splits.csv'
+        pd.DataFrame([('TEST', '2025-01-03', 10, 'price')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(splits, index=False)
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(splits))
+        monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'nope.json'))
+
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
+                           [1000, 1010, 101, 102])
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+
+        assert result['adj_close'].tolist() == pytest.approx([100.0, 101.0, 101.0, 102.0])
+        assert result['close'].tolist() == [1000.0, 1010.0, 101.0, 102.0]  # сырой close не тронут
+
+    def test_adj_close_dividend_across_split(self, tmp_path, monkeypatch):
+        """Дивиденд в старой ценовой базе: фактор считается по сырой цене,
+        применяется к сплит-скорректированной базе."""
+        splits = tmp_path / 'splits.csv'
+        pd.DataFrame([('TEST', '2025-01-03', 10, 'price')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(splits, index=False)
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(splits))
+        monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'nope.json'))
+
+        # дивиденд 101 руб при сырой цене 1010 (старая база) → фактор 0.9
+        self.write_dividends(tmp_path, 'TEST', [('2025-01-02', 101.0)])
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
+                           [1000, 1010, 101, 102])
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+
+        # база [100, 101, 101, 102], фактор 0.9 к первым двум
+        assert result['adj_close'].tolist() == pytest.approx([90.0, 90.9, 101.0, 102.0])
+
+    def test_adj_close_restated_dividend_basis(self, tmp_path, monkeypatch):
+        """Дивиденды ВТБ-стиля: файл рестейтнут в новую базу (×5000), сырые цены
+        старых дат — в старой. Доходность по сырой базе абсурдна (×350) —
+        берется рестейтнутая."""
+        splits = tmp_path / 'splits.csv'
+        pd.DataFrame([('TEST', '2025-01-03', 0.0002, 'price')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(splits, index=False)
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(splits))
+        monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'nope.json'))
+
+        # консолидация 5000:1: сырые цены 0.02 → 100; дивиденд 7 в НОВОЙ базе
+        self.write_dividends(tmp_path, 'TEST', [('2025-01-02', 7.0)])
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
+                           [0.02, 0.02, 100.0, 101.0])
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+
+        # база [100, 100, 100, 101]; доходность 7/100 = 7% → фактор 0.93
+        assert result['adj_close'].tolist() == pytest.approx([93.0, 93.0, 100.0, 101.0])
+
+    def test_adjust_for_splits_leaves_adj_close(self, tmp_path):
+        """adjust_for_splits не трогает adj_close — он уже в единой базе."""
+        path = tmp_path / "splits.csv"
+        pd.DataFrame([('TEST', '2025-01-02', 10, 'price')],
+                     columns=['ticker', 'date', 'ratio', 'kind']).to_csv(path, index=False)
+        df = make_stock_df(['2025-01-01', '2025-01-02'], [1000, 101])
+        df['adj_close'] = [100.0, 101.0]  # уже непрерывный
+
+        result = mu.adjust_for_splits(df, splits_file=str(path))
+        assert result['close'].tolist() == pytest.approx([100.0, 101.0])
+        assert result['adj_close'].tolist() == [100.0, 101.0]  # не изменился
+
     def test_add_adj_close_to_all_stocks(self, tmp_data_folder, tmp_path):
         write_stock_parquet(tmp_data_folder, 'TEST',
                             make_stock_df(['2025-01-01', '2025-01-02'], [100, 100]))

@@ -866,7 +866,9 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
     if not isinstance(df.index, pd.DatetimeIndex):
         df.index = pd.to_datetime(df.index)
 
-    price_cols = [c for c in ('close', 'adj_close', 'open', 'high', 'low') if c in df.columns]
+    # adj_close намеренно НЕ корректируем: calculate_adj_close создает его
+    # сразу в пост-сплитовой базе, повторная поправка исказила бы ряд
+    price_cols = [c for c in ('close', 'open', 'high', 'low') if c in df.columns]
     for row in splits.itertuples(index=False):
         ticker_mask = df['ticker'] == row.ticker
         if not ticker_mask.any():
@@ -986,14 +988,25 @@ def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = Fa
 
 def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     """
-    Calculates the adjusted close price for a given stock DataFrame based on its dividend history.
+    Считает adj_close — цену, скорректированную на дивиденды И сплиты,
+    в текущей (пост-сплитовой) базе цен.
+
+    Методика:
+    - базой служит сплит-скорректированный ряд close (adjust_for_splits) —
+      непрерывный, без разрывов на дроблениях/консолидациях;
+    - дивидендные факторы (1 - div/close) считаются по СЫРЫМ ценам:
+      дивиденд и цена на его дату находятся в одной, тогдашней базе,
+      поэтому безразмерный фактор корректен без пересчета дивиденда.
+
+    Колонка adj_close на выходе уже в единой базе — повторно применять
+    adjust_for_splits к ней не нужно (и adjust_for_splits ее не трогает).
 
     Parameters:
     df (pd.DataFrame): The input DataFrame for a single stock. Must contain 'ticker' and 'close' columns.
     div_folder (str): The path to the folder containing dividend history CSV files (e.g., 'SBER.csv').
 
     Returns:
-    pd.DataFrame: The DataFrame with an added 'adj_close' column. Returns the original DataFrame if no dividend data is found.
+    pd.DataFrame: The DataFrame with an added 'adj_close' column.
     """
     if df.empty or 'ticker' not in df.columns or 'close' not in df.columns:
         logger.warning("Warning: DataFrame пуст или нет колонок 'ticker'/'close'. Возвращаю как есть.")
@@ -1008,12 +1021,17 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
             df['adj_close'] = df['close']
             return df
 
+    df = df.sort_index()
+
+    # База adj_close: непрерывный сплит-скорректированный ряд close
+    split_adj_close = adjust_for_splits(df[['ticker', 'close']])['close'].astype(float)
+
     ticker = df['ticker'].iloc[0]
     div_file = os.path.join(div_folder, f"{ticker}.csv")
 
     if not os.path.exists(div_file):
-        logger.info(f"Info: No dividend file found for {ticker} at {div_file}. Setting adj_close equal to close.")
-        df['adj_close'] = df['close']
+        logger.info(f"Info: No dividend file found for {ticker} at {div_file}. adj_close = сплит-скорректированный close.")
+        df['adj_close'] = split_adj_close
         return df
 
     try:
@@ -1023,20 +1041,21 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         div_df.sort_values(by='closing_date', inplace=True)
     except Exception as e:
         logger.error(f"Error reading dividend file for {ticker}: {e}")
-        df['adj_close'] = df['close']
+        df['adj_close'] = split_adj_close
         return df
 
-    # Filter data and sort
-    df = df.sort_index()
     div_df = div_df[div_df['closing_date'].notnull()].sort_values('closing_date')
 
     if div_df.empty:
-        df['adj_close'] = df['close']
+        df['adj_close'] = split_adj_close
         return df
 
-    # Calculate adjusted close prices using a proportional adjustment factor
+    # Факторы — через дивидендную доходность. База дивиденда в CSV может быть
+    # как валютой своей даты (обычный случай), так и рестейтнутой в текущую
+    # (как у ВТБ после консолидации 5000:1) — проверяем обе базы и берем ту,
+    # где доходность правдоподобна (0..50%); приоритет у сырой.
     closes = df['close'].astype(float)
-    adj = closes.copy()
+    adj = split_adj_close.copy()
 
     # Идём от последних дивидендов к ранним
     for row in div_df.iloc[::-1].itertuples(index=False):
@@ -1050,18 +1069,21 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         if pos == 0:
             continue
 
-        close_before = closes.iloc[pos - 1]
-        if pd.isna(close_before) or close_before <= 0:
-            # защита от деления на ноль/NaN
+        yield_candidates = []
+        for base_close in (closes.iloc[pos - 1], split_adj_close.iloc[pos - 1]):
+            if pd.notna(base_close) and float(base_close) > 0:
+                yield_candidates.append(dividend_value / float(base_close))
+
+        dividend_yield = next((y for y in yield_candidates if 0 < y < 0.5), None)
+        if dividend_yield is None:
+            logger.warning(
+                f"[WARN] {ticker}: дивиденд {dividend_value} на "
+                f"{pd.Timestamp(ex_dividend_date).strftime('%Y-%m-%d')} не согласуется "
+                f"ни с одной ценовой базой — пропущен")
             continue
 
-        adjustment_factor = 1.0 - (dividend_value / close_before)
-        # опционально: защита от странных значений
-        # if adjustment_factor <= 0:
-        #     continue
-
         # применяем ко ВСЕМ прошлым ценам (по индексам до pos)
-        adj.iloc[:pos] = adj.iloc[:pos] * adjustment_factor
+        adj.iloc[:pos] = adj.iloc[:pos] * (1.0 - dividend_yield)
 
     df['adj_close'] = adj
     return df
