@@ -18,6 +18,7 @@ def main(
     do_adj_close: bool = True,
     do_market_cap: bool = True,
     do_indexes: bool = True,
+    rebuild: bool = False,
     div_folder: Optional[str] = None,
     data_folder: Optional[str] = None,
     metadata_file: Optional[str] = None,
@@ -29,10 +30,10 @@ def main(
         moex.METADATA_FILE = metadata_file
 
     if do_update:
-        print("=== 1. Обновление данных с MOEX ===")
+        print("=== 1. Обновление данных с MOEX ===" + (" (полное перескачивание)" if rebuild else ""))
         # Если этап 3 всё равно пересчитает market cap для всех данных,
         # не тратим время на пересчет для каждого тикера здесь
-        moex.update_all_stocks(calculate_market_cap_flag=not do_market_cap)
+        moex.update_all_stocks(calculate_market_cap_flag=not do_market_cap, rebuild=rebuild)
     else:
         print("=== 1. Обновление данных — пропуск (--no-update) ===")
 
@@ -73,6 +74,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close")
     ap.add_argument("--no-cap", action="store_true", help="Не пересчитывать market_cap")
     ap.add_argument("--no-index", action="store_true", help="Не обновлять индексы")
+    ap.add_argument("--rebuild", action="store_true",
+                    help="Перескачать историю всех тикеров целиком (после смены методики данных)")
     ap.add_argument("--indexes", type=str, default="IMOEX", help="Индексы через запятую (по умолчанию IMOEX)")
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
@@ -84,6 +87,7 @@ if __name__ == "__main__":
         do_adj_close=not args.no_adj,
         do_market_cap=not args.no_cap,
         do_indexes=not args.no_index,
+        rebuild=args.rebuild,
         div_folder=args.div_folder,
         data_folder=args.data_folder,
         metadata_file=args.metadata_file,

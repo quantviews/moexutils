@@ -282,8 +282,8 @@ Calculates and adds 'adj_close' column for all stocks in data folder.
 
 ### Stock Data Columns
 - `date`: Trading date (index)
-- `value_rub`: trading turnover for the period in RUB (renamed ISS candle field `value`) — NOT a price
-- `close`: stock closing price (use this for price-based calculations)
+- `value_rub`: trading turnover for the period in RUB — NOT a price
+- `close`: stock closing price; for daily data this is the official main-session close from the ISS `/history` endpoint (same methodology as indexes)
 - `volume`: Trading volume
 - `ticker`: Stock ticker symbol
 - `shares`: Number of issued shares (added when market cap is calculated)

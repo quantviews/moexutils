@@ -78,13 +78,42 @@ def get_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = 
         session = requests.Session()
 
     try:
-        # Fetch data from the MOEX API with the specified frequency
+        if frequency == 24:
+            # Дневные данные — из официальной истории торгов (/history):
+            # CLOSE здесь — закрытие основной сессии, тот же методический подход,
+            # что у индексов. Свечи ISS, в отличие от истории, включают вечернюю
+            # сессию, из-за чего закрытия акций и индекса были бы несопоставимы.
+            data = apimoex.get_market_history(
+                session=session, security=ticker, start=start, end=end,
+                market='shares', engine='stock')
+            if not data:
+                raise ValueError("The API response is empty.")
+
+            df = pd.DataFrame(data)
+            required = ['TRADEDATE', 'CLOSE', 'VOLUME', 'VALUE']
+            if not all(col in df.columns for col in required):
+                raise KeyError("The expected columns are missing in the response.")
+
+            # История отдается по всем режимам торгов — на каждую дату оставляем
+            # строку главной доски (с максимальным оборотом)
+            df = df.sort_values('VALUE').drop_duplicates(subset='TRADEDATE', keep='last')
+            df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE'])
+            df = df.rename({'TRADEDATE': 'date', 'CLOSE': 'close',
+                            'VOLUME': 'volume', 'VALUE': 'value_rub'}, axis='columns')
+            df = df.set_index('date').sort_index()
+            df = df.drop(columns=[c for c in ('BOARDID',) if c in df.columns])
+            df = df.dropna(subset=['close'])
+            df['volume'] = df['volume'].astype('float64')
+            df['ticker'] = ticker
+            return df
+
+        # Внутридневные и агрегированные частоты — через свечи
         data = apimoex.get_market_candles(session=session, security=ticker, start=start, end=end, interval=frequency)
-        
+
         # Check if the response data is empty
         if not data:
             raise ValueError("The API response is empty.")
-        
+
         df = pd.DataFrame(data)
         if 'begin' in df.columns:
             df['begin'] = pd.to_datetime(df['begin'])
@@ -852,13 +881,15 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
     return df
 
 
-def update_all_stocks(calculate_market_cap_flag: bool = True):
+def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = False):
     """
     Updates data for all stocks that have existing parquet files.
 
     Parameters:
     calculate_market_cap_flag (bool): Если False, market cap на этом этапе не пересчитывается
         (полезно, когда пересчет всё равно делается отдельным шагом, как в update_data.py).
+    rebuild (bool): Если True, история каждого тикера перескачивается целиком
+        (нужно после смены источника данных, чтобы вся история была в единой методике).
     """
     # Get list of all ticker directories
     ticker_dirs = []
@@ -878,8 +909,12 @@ def update_all_stocks(calculate_market_cap_flag: bool = True):
     for ticker in ticker_dirs:
         try:
             logger.info(f"\nUpdating {ticker}...")
-            update_moex_stock(ticker, session=session,
-                              calculate_market_cap_flag=calculate_market_cap_flag)
+            if rebuild:
+                save_moex_stock(ticker, start='2002-01-01', session=session,
+                                calculate_market_cap_flag=calculate_market_cap_flag)
+            else:
+                update_moex_stock(ticker, session=session,
+                                  calculate_market_cap_flag=calculate_market_cap_flag)
         except Exception as e:
             logger.error(f"Error updating {ticker}: {e}")
     

@@ -81,24 +81,44 @@ def metadata_xlsx(tmp_path):
 # ---------------------------------------------------------------- stocks: API parsing
 
 class TestGetMoexStock:
-    def test_parses_candles(self, monkeypatch):
+    def test_daily_uses_official_history(self, monkeypatch):
+        """Дневные данные (frequency=24) идут из /history: CLOSE = закрытие
+        основной сессии, единая методика с индексами; дубли по доскам схлопываются."""
+        history = [
+            {'BOARDID': 'SMAL', 'TRADEDATE': '2025-01-01', 'CLOSE': 99.0, 'VOLUME': 5, 'VALUE': 100.0},
+            {'BOARDID': 'TQBR', 'TRADEDATE': '2025-01-01', 'CLOSE': 100.5, 'VOLUME': 10, 'VALUE': 1000.0},
+            {'BOARDID': 'TQBR', 'TRADEDATE': '2025-01-02', 'CLOSE': 101.0, 'VOLUME': 20, 'VALUE': 2000.0},
+        ]
+        monkeypatch.setattr(mu.apimoex, 'get_market_history',
+                            lambda session, security, start, end, market, engine: history)
+
+        df = mu.get_moex_stock('SBER', start='2025-01-01', end='2025-01-02')
+
+        assert isinstance(df.index, pd.DatetimeIndex)
+        assert len(df) == 2                          # дубль по доске SMAL отброшен
+        assert df.loc['2025-01-01', 'close'] == 100.5  # взята главная доска (max VALUE)
+        assert df.loc['2025-01-01', 'value_rub'] == 1000.0
+        assert df['volume'].dtype == 'float64'
+        assert (df['ticker'] == 'SBER').all()
+        assert 'BOARDID' not in df.columns
+
+    def test_intraday_uses_candles(self, monkeypatch):
         candles = [
-            {'begin': '2025-01-01 00:00:00', 'open': 99.0, 'close': 100.5,
+            {'begin': '2025-01-01 10:00:00', 'open': 99.0, 'close': 100.5,
              'high': 101.0, 'low': 98.0, 'value': 1000.0, 'volume': 10},
-            {'begin': '2025-01-02 00:00:00', 'open': 100.5, 'close': 101.0,
+            {'begin': '2025-01-01 11:00:00', 'open': 100.5, 'close': 101.0,
              'high': 102.0, 'low': 100.0, 'value': 2000.0, 'volume': 20},
         ]
         monkeypatch.setattr(mu.apimoex, 'get_market_candles',
                             lambda session, security, start, end, interval: candles)
 
-        df = mu.get_moex_stock('SBER', start='2025-01-01', end='2025-01-02')
+        df = mu.get_moex_stock('SBER', start='2025-01-01', end='2025-01-02', frequency=60)
 
         assert isinstance(df.index, pd.DatetimeIndex)
-        assert df.index[0] == pd.Timestamp('2025-01-01')
         assert 'value_rub' in df.columns          # value переименован
         assert df['volume'].dtype == 'float64'    # int приведен к float
         assert (df['ticker'] == 'SBER').all()
-        assert df.loc['2025-01-02', 'close'] == 101.0
+        assert df['close'].iloc[-1] == 101.0
 
     def test_start_after_end_raises(self):
         with pytest.raises(ValueError):
@@ -109,7 +129,7 @@ class TestGetMoexStock:
             mu.get_moex_stock('SBER', start='2025-13-45')
 
     def test_empty_response_raises(self, monkeypatch):
-        monkeypatch.setattr(mu.apimoex, 'get_market_candles',
+        monkeypatch.setattr(mu.apimoex, 'get_market_history',
                             lambda **kwargs: [])
         with pytest.raises(RuntimeError, match='empty'):
             mu.get_moex_stock('SBER', start='2025-01-01', end='2025-01-02')
@@ -248,6 +268,20 @@ class TestSaveReadUpdateStock:
 
         mu.update_all_stocks(calculate_market_cap_flag=False)
         assert mc_flags[-2:] == [False, False]  # флаг доходит до каждого тикера
+
+    def test_update_all_stocks_rebuild_redownloads(self, tmp_data_folder, monkeypatch):
+        for ticker in ('AAA', 'BBB'):
+            write_stock_parquet(tmp_data_folder, ticker, make_stock_df(['2025-01-01'], [1]))
+
+        saved = []
+        monkeypatch.setattr(mu, 'save_moex_stock',
+                            lambda ticker, **kwargs: saved.append((ticker, kwargs.get('start'))))
+        monkeypatch.setattr(mu, 'update_moex_stock',
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError('должен быть rebuild')))
+
+        mu.update_all_stocks(rebuild=True)
+        assert sorted(t for t, _ in saved) == ['AAA', 'BBB']
+        assert all(s == '2002-01-01' for _, s in saved)
 
 
 class TestCombineStocks:
@@ -434,13 +468,15 @@ class TestSplits:
         row = splits[splits['ticker'] == 'T']
         assert len(row) == 1
         assert float(row['ratio'].iloc[0]) == 10.0
-        assert row['kind'].iloc[0] == 'price'
+        assert row['kind'].iloc[0] == 'auto'
 
-    def test_real_registry_contains_vtbr_shares_adjustment(self):
+    def test_real_registry_contains_vtbr_consolidation(self):
         splits = mu.load_splits()
-        row = splits[(splits['ticker'] == 'VTBR') & (splits['kind'] == 'shares')]
+        row = splits[splits['ticker'] == 'VTBR']
         assert len(row) == 1
-        assert float(row['ratio'].iloc[0]) == 5000.0
+        assert row['kind'].iloc[0] == 'auto'
+        # ценовая семантика: консолидация 5000:1 → делитель 1/5000
+        assert float(row['ratio'].iloc[0]) == pytest.approx(0.0002)
 
     def test_load_splits_kind_defaults_to_price(self, tmp_path):
         # Старый формат файла без колонки kind (без внешнего реестра)
