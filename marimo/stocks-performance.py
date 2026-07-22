@@ -446,6 +446,7 @@ def _(
     period_end,
     period_label,
     period_start,
+    return_mode,
     sector_block,
     show_market_cap,
     sort_by,
@@ -477,7 +478,7 @@ def _(
         heatmap_block,
         volume_block,
         mo.md("---\n## 🧭 Структура рынка: сравнение с опорной датой"),
-        anchor_date,
+        mo.hstack([anchor_date, return_mode], justify="start"),
         structure_block,
         mo.accordion({
             "📊 Marimekko: динамика с учетом веса в рынке": marimekko_block,
@@ -859,13 +860,19 @@ def _(combined_df, enriched_df, filtered_df, mo, pd, period_end, period_start):
 
 @app.cell(hide_code=True)
 def _(mo):
-    # Опорная дата для анализа структуры рынка
+    # Контролы анализа структуры рынка
     anchor_date = mo.ui.date(value="2022-02-21", label="Опорная дата:")
-    return (anchor_date,)
+    return_mode = mo.ui.radio(
+        options={"Цена": "close", "Полная доходность (дивиденды + сплиты)": "adj_close"},
+        value="Цена",
+        label="Метрика:",
+        inline=True,
+    )
+    return anchor_date, return_mode
 
 
 @app.cell(hide_code=True)
-def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map):
+def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, return_mode, sectors_map):
     # Структура рынка: что изменилось с опорной даты.
     # Отвечает на вопросы: индекс на том же уровне — а рынок тот же?
     # Кто вытащил/утопил капитализацию, как перекроились веса секторов,
@@ -873,18 +880,22 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
     _anchor = pd.Timestamp(anchor_date.value)
     _last_date = combined_df.index.max()
 
+    # Метрика: цена (сплит-скорр. close) или полная доходность (adj_close)
+    _pc = return_mode.value if return_mode.value in combined_df.columns else 'close'
+    _mode_label = 'полная доходность (дивиденды + сплиты)' if _pc == 'adj_close' else 'цена'
+
     # Срез "тогда": последняя котировка каждой бумаги в окне 45 дней до опорной даты
     _win_then = combined_df[(combined_df.index <= _anchor) &
                             (combined_df.index >= _anchor - pd.DateOffset(days=45))]
     _then = _win_then.sort_index().groupby('ticker').tail(1)
-    _then = _then.reset_index()[['ticker', 'close', 'market_cap']].rename(
-        columns={'close': 'close_then', 'market_cap': 'mc_then'})
+    _then = _then.reset_index()[['ticker', _pc, 'market_cap']].rename(
+        columns={_pc: 'close_then', 'market_cap': 'mc_then'})
 
     # Срез "сейчас": только бумаги, торговавшиеся в последние 30 дней (без делистингов)
     _now = combined_df.sort_index().groupby('ticker').tail(1)
     _now = _now[_now.index >= _last_date - pd.DateOffset(days=30)]
-    _now = _now.reset_index()[['ticker', 'close', 'market_cap']].rename(
-        columns={'close': 'close_now', 'market_cap': 'mc_now'})
+    _now = _now.reset_index()[['ticker', _pc, 'market_cap']].rename(
+        columns={_pc: 'close_now', 'market_cap': 'mc_now'})
 
     _st = _then.merge(_now, on='ticker', how='inner').dropna(subset=['close_then', 'close_now'])
 
@@ -908,8 +919,9 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
             if len(_idx_then):
                 _iv_then = float(_idx_then['close'].iloc[-1])
                 _iv_now = float(_idx['close'].iloc[-1])
+                _imx_note = " *(ценовой индекс, без дивидендов)*" if _pc == 'adj_close' else ""
                 _imx_line2 = (f"- **IMOEX:** {_iv_then:,.0f} → {_iv_now:,.0f} ".replace(",", " ")
-                              + f"({_sgn((_iv_now / _iv_then - 1) * 100)})\n")
+                              + f"({_sgn((_iv_now / _iv_then - 1) * 100)}){_imx_note}\n")
         except Exception:
             pass
 
@@ -941,7 +953,7 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, sectors_map)
         _bots_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.px_chg, '%', 0)}" for _r in _bots.itertuples())
 
         _md_struct = mo.md(
-            f"### С {_anchor.strftime('%d.%m.%Y')} (сопоставимых бумаг: {len(_st)})\n\n"
+            f"### С {_anchor.strftime('%d.%m.%Y')} — {_mode_label} (сопоставимых бумаг: {len(_st)})\n\n"
             + _imx_line2
             + f"- **Выше уровня той даты: {_n_up}**, ниже: **{_n_down}**; медианная бумага: {_sgn(_med_chg)}\n"
             + _total_line + _conc_line
