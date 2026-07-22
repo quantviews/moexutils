@@ -441,6 +441,7 @@ def _(
     market_summary,
     min_market_cap,
     mo,
+    pd,
     period_dropdown,
     period_end,
     period_label,
@@ -456,9 +457,19 @@ def _(
     period_start_str = period_start.strftime('%d.%m.%Y')
     period_end_str = period_end.strftime('%d.%m.%Y')
 
+    # Для "1 дня" пишем явно, изменение какой сессии показано
+    if period_dropdown.value == '1d':
+        _period_line = f"**За {period_end_str}** (к закрытию {period_start_str})"
+    else:
+        _period_line = f"**Период:** {period_start_str} - {period_end_str}"
+
+    # Если последняя дата в данных — сегодня, цены могут быть внутридневными
+    if period_end.normalize() == pd.Timestamp.now().normalize():
+        _period_line += " · ⏳ *последняя дата — сегодня: цены на момент обновления данных, сессия может быть не закрыта*"
+
     mo.vstack([
         mo.hstack([period_dropdown, show_market_cap, sort_by, min_market_cap], justify="start"),
-        mo.md(f"## Что произошло на рынке — {period_label}\n**Период:** {period_start_str} - {period_end_str}"),
+        mo.md(f"## Что произошло на рынке — {period_label}\n{_period_line}"),
         market_summary,
         breadth_block,
         index_block,
@@ -629,7 +640,11 @@ def _(go, mo, moex, pd, period_end, period_label, period_start, plotly_available
                                  showarrow=False, xanchor='left', xshift=8,
                                  font=dict(color='#1f77b4', size=13))
 
-            _ret_str = f'{imoex_ret:+.2f}%' if imoex_ret is not None else 'н/д'
+            if imoex_ret is not None:
+                _ret_str = (f'{imoex_ret:+.2f}% (от закрытия {_win.index[0].strftime("%d.%m")}: '
+                            f'{float(_win.iloc[0]):,.0f})')
+            else:
+                _ret_str = 'н/д'
             _trend = ('восходящий (EWMA16 > EWMA64)'
                       if float(_ew16.iloc[-1]) > float(_ew64.iloc[-1])
                       else 'нисходящий (EWMA16 < EWMA64)')
