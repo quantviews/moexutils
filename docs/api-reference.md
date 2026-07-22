@@ -139,6 +139,21 @@ combined = moex.adjust_for_splits(moex.combine_moex_stocks())
 
 ---
 
+## Переименования тикеров
+
+### load_renames / apply_renames
+
+```python
+load_renames(renames_file=None) -> pd.DataFrame
+apply_renames(df, renames_file=None) -> pd.DataFrame
+```
+
+ISS `/history` отдает данные только по текущему secid — на дате переименования история бумаги рвется (TCSG→T, YNDX→YDEX, HHRU→HEAD, MAIL→VKCO, EONR→UPRO, MRKH→RSTI). Реестр `metadata/renames.csv` (`old,new,date` — первый торговый день нового тикера) склеивает истории: строки старого тикера получают `ticker=new`, а исходный тикер каждой строки сохраняется в колонке **`source_ticker`** — склейка остается прозрачной. Строки старого тикера с даты переименования отбрасываются с предупреждением. Цепочки (A→B→C) поддерживаются.
+
+`combine_moex_stocks(merge_renames=True)` применяет склейку по умолчанию; `merge_renames=False` возвращает сырые тикеры. Конвертации с коэффициентом ≠1:1 (например, RSTI→FEES) в реестр не включаются — это не переименования.
+
+---
+
 ## Метаданные и капитализация
 
 ### load_shares_data

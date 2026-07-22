@@ -20,6 +20,7 @@ DATA_FOLDER = os.path.join(BASE_DIR, "data")
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 INDEXES_FOLDER = os.path.join(BASE_DIR, "indexes")
 SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
+RENAMES_FILE = os.path.join(BASE_DIR, "metadata", "renames.csv")
 # Внешний реестр сплитов соседнего проекта dividends (если проекты лежат рядом)
 EXTERNAL_SPLITS_FILE = os.path.join(BASE_DIR, "..", "dividends", "metadata", "splits.json")
 
@@ -526,13 +527,16 @@ def read_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] =
     
     return df
 
-def combine_moex_stocks(data_folder: str | None = None) -> pd.DataFrame:
+def combine_moex_stocks(data_folder: str | None = None, merge_renames: bool = True) -> pd.DataFrame:
     """
     Lists all parquet files in the data folder, reads them, and combines into a unified dataset.
 
     Parameters:
     data_folder (str | None): Папка с подпапками тикеров (<TICKER>/<TICKER>.parquet).
                               По умолчанию — DATA_FOLDER.
+    merge_renames (bool): Склеивать истории переименованных тикеров по
+        metadata/renames.csv (см. apply_renames). Исходный тикер каждой
+        строки остается в колонке source_ticker.
 
     Returns:
     pd.DataFrame: A DataFrame containing combined stock data from all parquet files.
@@ -562,6 +566,8 @@ def combine_moex_stocks(data_folder: str | None = None) -> pd.DataFrame:
     # Combine all DataFrames
     if dfs:
         combined_df = pd.concat(dfs, axis=0)
+        if merge_renames:
+            combined_df = apply_renames(combined_df)
         logger.info(f"\nCombined {len(dfs)} stocks into unified dataset")
         logger.info(f"Total rows: {len(combined_df)}")
         return combined_df
@@ -877,6 +883,64 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
             df.loc[mask, col] = df.loc[mask, col] / float(row.ratio)
         if 'volume' in df.columns:
             df.loc[mask, 'volume'] = df.loc[mask, 'volume'] * float(row.ratio)
+
+    return df
+
+
+def load_renames(renames_file: Optional[str] = None) -> pd.DataFrame:
+    """
+    Загружает реестр переименований тикеров metadata/renames.csv
+    (колонки: old, new, date — первый торговый день под новым тикером).
+    """
+    if renames_file is None:
+        renames_file = RENAMES_FILE
+    if not os.path.exists(renames_file):
+        return pd.DataFrame(columns=['old', 'new', 'date'])
+    return pd.read_csv(renames_file, parse_dates=['date'])
+
+
+def apply_renames(df: pd.DataFrame, renames_file: Optional[str] = None) -> pd.DataFrame:
+    """
+    Склеивает истории переименованных тикеров (TCSG→T, YNDX→YDEX и т.д.):
+    ISS /history отдает данные только по текущему secid, поэтому без склейки
+    история бумаги рвется на дате переименования.
+
+    Склейка прозрачна: исходный тикер каждой строки сохраняется в колонке
+    source_ticker (для непереименованных строк source_ticker == ticker).
+    Строки старого тикера с даты переименования и позже отбрасываются —
+    в этот период торгуется уже новый тикер.
+
+    Parameters:
+    df (pd.DataFrame): данные с колонкой 'ticker' и датами в индексе.
+    renames_file (str | None): путь к реестру; по умолчанию RENAMES_FILE.
+    """
+    if df.empty or 'ticker' not in df.columns:
+        return df
+
+    df = df.copy()
+    if 'source_ticker' not in df.columns:
+        df['source_ticker'] = df['ticker']
+
+    renames = load_renames(renames_file)
+    if renames.empty:
+        return df
+
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+
+    # Хронологический порядок поддерживает цепочки переименований (A→B, затем B→C)
+    for row in renames.sort_values('date').itertuples(index=False):
+        old_mask = df['ticker'] == row.old
+        if not old_mask.any():
+            continue
+        drop_mask = old_mask & (df.index >= pd.Timestamp(row.date))
+        if drop_mask.any():
+            logger.warning(
+                f"[WARN] {row.old}: {int(drop_mask.sum())} строк с "
+                f"{pd.Timestamp(row.date).strftime('%Y-%m-%d')} отброшено при склейке с {row.new}")
+            df = df[~drop_mask]
+            old_mask = df['ticker'] == row.old
+        df.loc[old_mask, 'ticker'] = row.new
 
     return df
 

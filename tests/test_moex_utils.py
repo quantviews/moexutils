@@ -575,6 +575,69 @@ class TestSplits:
         assert result['market_cap'].tolist() == pytest.approx([100000.0, 100000.0])
 
 
+# ---------------------------------------------------------------- renames
+
+class TestRenames:
+    @staticmethod
+    def write_renames(tmp_path, rows):
+        path = tmp_path / "renames.csv"
+        pd.DataFrame(rows, columns=['old', 'new', 'date']).to_csv(path, index=False)
+        return str(path)
+
+    def test_missing_registry_is_noop(self, tmp_path):
+        df = make_stock_df(['2025-01-01'], [100], ticker='OLD')
+        result = mu.apply_renames(df, renames_file=str(tmp_path / 'nope.csv'))
+        assert result['ticker'].tolist() == ['OLD']
+        # колонка прозрачности добавляется всегда
+        assert result['source_ticker'].tolist() == ['OLD']
+
+    def test_old_history_merged_with_source_marker(self, tmp_path):
+        renames = self.write_renames(tmp_path, [('OLD', 'NEW', '2025-01-03')])
+        df = pd.concat([
+            make_stock_df(['2025-01-01', '2025-01-02'], [100, 101], ticker='OLD'),
+            make_stock_df(['2025-01-03', '2025-01-04'], [102, 103], ticker='NEW'),
+        ])
+
+        result = mu.apply_renames(df, renames_file=renames).sort_index()
+
+        assert (result['ticker'] == 'NEW').all()          # единый тикер
+        assert result['source_ticker'].tolist() == ['OLD', 'OLD', 'NEW', 'NEW']
+        assert result['close'].tolist() == [100.0, 101.0, 102.0, 103.0]
+
+    def test_old_rows_after_rename_date_dropped(self, tmp_path):
+        renames = self.write_renames(tmp_path, [('OLD', 'NEW', '2025-01-03')])
+        df = pd.concat([
+            make_stock_df(['2025-01-02', '2025-01-03'], [100, 999], ticker='OLD'),  # 03.01 — мусор
+            make_stock_df(['2025-01-03'], [102], ticker='NEW'),
+        ])
+
+        result = mu.apply_renames(df, renames_file=renames).sort_index()
+
+        assert len(result) == 2                            # строка OLD за 03.01 отброшена
+        assert result['close'].tolist() == [100.0, 102.0]
+
+    def test_combine_merges_renames(self, tmp_path, monkeypatch):
+        folder = tmp_path / "data"
+        folder.mkdir()
+        write_stock_parquet(str(folder), 'OLD', make_stock_df(['2025-01-01'], [100], ticker='OLD'))
+        write_stock_parquet(str(folder), 'NEW', make_stock_df(['2025-01-03'], [102], ticker='NEW'))
+        monkeypatch.setattr(mu, 'RENAMES_FILE',
+                            self.write_renames(tmp_path, [('OLD', 'NEW', '2025-01-03')]))
+
+        df = mu.combine_moex_stocks(data_folder=str(folder))
+        assert set(df['ticker']) == {'NEW'}
+        assert set(df['source_ticker']) == {'OLD', 'NEW'}
+
+        # склейку можно отключить
+        df_raw = mu.combine_moex_stocks(data_folder=str(folder), merge_renames=False)
+        assert set(df_raw['ticker']) == {'OLD', 'NEW'}
+
+    def test_real_registry_contains_tcsg_to_t(self):
+        renames = mu.load_renames()
+        row = renames[(renames['old'] == 'TCSG') & (renames['new'] == 'T')]
+        assert len(row) == 1
+
+
 # ---------------------------------------------------------------- indexes: storage
 
 class TestIndexStorage:
