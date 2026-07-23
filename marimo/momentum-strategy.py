@@ -129,13 +129,28 @@ def _(mo, moex, pd):
         bench_ret_m = _monthly_bench('IMOEX')
         bench_name = 'IMOEX (ценовой — кэш MCFTR не найден)'
 
+    # Трендовые сигналы по дневному IMOEX (для trend filter):
+    # ex-ante — состояние на конец месяца t управляет портфелем месяца t+1
+    try:
+        _imx = moex.read_moex_index('IMOEX')
+        _imx.index = pd.to_datetime(_imx.index)
+        _cl = _imx['close'].astype(float).sort_index()
+        _e16 = _cl.ewm(span=16, adjust=False).mean()
+        _e64 = _cl.ewm(span=64, adjust=False).mean()
+        _ma200 = _cl.rolling(200, min_periods=100).mean()
+        _sig_d = pd.DataFrame({'ewmac': _e16 > _e64, 'ma200': _cl > _ma200})
+        trend_signals = _sig_d.groupby(_sig_d.index.to_period('M')).last()
+        trend_signals.index = trend_signals.index.to_timestamp('M')
+    except Exception:
+        trend_signals = None
+
     bench_status = mo.md(
         f"**Бенчмарк:** {bench_name} · {len(bench_ret_m)} месяцев"
         if len(bench_ret_m) else
         "**Бенчмарк недоступен** — выполните `python update_data.py` (шаг 1b)"
     )
     bench_status
-    return bench_name, bench_ret_m
+    return bench_name, bench_ret_m, trend_signals
 
 
 @app.cell(hide_code=True)
@@ -274,6 +289,8 @@ def _(mo):
       получают больше, буйные меньше — риск распределяется равномернее между
       позициями. Не путать с volatility scaling — тот масштабирует весь портфель.
     - **Volatility scaling** — см. пояснение ниже при включении опции.
+    - **Trend filter** — портфель держится только при аптренде IMOEX
+      (EWMAC 16/64 или цена выше MA200), иначе кэш; см. пояснение при включении.
 
     **Метрики в сводке:**
 
@@ -318,11 +335,16 @@ def _(mo):
     lev_cap_dropdown = mo.ui.dropdown(
         options={"1.0× (без плеча)": 1.0, "1.5×": 1.5, "2.0×": 2.0},
         value="1.5×", label="Макс. плечо:")
+    trend_checkbox = mo.ui.checkbox(value=False, label="Trend filter (по IMOEX)")
+    trend_mode_dropdown = mo.ui.dropdown(
+        options={"EWMAC 16/64": "ewmac", "Цена выше MA200": "ma200"},
+        value="EWMAC 16/64", label="Сигнал тренда:")
     mo.vstack([
         mo.hstack([lookback_slider, skip_slider, hold_slider], justify='start'),
         mo.hstack([q_dropdown, ls_checkbox, tc_slider], justify='start'),
         mo.hstack([topn_slider, missing_dropdown, weighting_dropdown], justify='start'),
         mo.hstack([vol_checkbox, vol_target_slider, lev_cap_dropdown], justify='start'),
+        mo.hstack([trend_checkbox, trend_mode_dropdown], justify='start'),
     ])
     return (
         hold_slider,
@@ -334,6 +356,8 @@ def _(mo):
         skip_slider,
         tc_slider,
         topn_slider,
+        trend_checkbox,
+        trend_mode_dropdown,
         vol_checkbox,
         vol_target_slider,
         weighting_dropdown,
@@ -376,6 +400,44 @@ def _(mo, vol_checkbox):
 
 
 @app.cell(hide_code=True)
+def _(mo, trend_checkbox):
+    # Пояснение к trend filter (показывается, когда опция включена)
+    if trend_checkbox.value:
+        trend_explain = mo.md(r"""
+    **Как работает trend filter.** Портфель держится только в те месяцы, когда
+    рынок в аптренде; вне тренда — кэш (0%, консервативно, без ставки на остаток):
+
+    $$w^{filtered}_t = w_t \cdot \mathbb{1}[\text{тренд}_t],\qquad
+    \text{тренд}_t = \begin{cases}
+    EWMA_{16} > EWMA_{64} & \text{(EWMAC)}\\
+    P > MA_{200} & \text{(MA200)}
+    \end{cases}$$
+
+    Сигнал считается по дневному IMOEX на конец месяца $t$ и управляет портфелем
+    месяца $t{+}1$ — заглядывания в будущее нет. Выход в кэш и возврат в рынок
+    проходят через оборот и платят издержки.
+
+    Зачем это нужно:
+
+    - **Обрезание хвостов.** Крупнейшие потери рынка РФ (2008: -70%, 2022: -50%)
+      разворачивались месяцами — трендовый сигнал успевает вывести в кэш.
+      Избегание глубоких просадок компаундится сильнее, чем отбор бумаг.
+    - **Защита моментума от самого себя**: momentum crash случается на резких
+      разворотах вверх *после* обвала — фильтр в эти месяцы уже в кэше.
+    - Это time-series momentum (Moskowitz-Ooi-Pedersen) поверх кросс-секционного.
+
+    Цена вопроса: **пила (whipsaw)** на боковике — фильтр выходит/входит с опозданием
+    и теряет на ложных сигналах; в устойчивый бычий год фильтр только мешает.
+    Важно: кэш IMOEX начинается с 2010 года — до этой даты фильтр неактивен
+    (портфель всегда в рынке); удлините кэш индекса для полной истории.
+    """)
+    else:
+        trend_explain = mo.md("")
+    trend_explain
+    return
+
+
+@app.cell(hide_code=True)
 def _(
     apply_holding,
     backtest_monthly,
@@ -396,6 +458,9 @@ def _(
     skip_slider,
     tc_slider,
     topn_slider,
+    trend_checkbox,
+    trend_mode_dropdown,
+    trend_signals,
     vol_checkbox,
     vol_m,
     vol_target_slider,
@@ -407,6 +472,15 @@ def _(
                               ls_checkbox.value, topn_slider.value,
                               weighting=weighting_dropdown.value, vol=vol_m)
     _w_base = apply_holding(_w0, hold_slider.value)
+
+    # Trend filter: вне аптренда IMOEX — в кэш (веса обнуляются).
+    # Где сигнала нет (до начала кэша индекса) — фильтр неактивен (в рынке)
+    trend_share = None
+    if trend_checkbox.value and trend_signals is not None:
+        _gate = (trend_signals[trend_mode_dropdown.value]
+                 .reindex(_w_base.index).astype('float').fillna(1.0))
+        _w_base = _w_base.mul(_gate, axis=0)
+        trend_share = float(_gate.mean())
 
     if vol_checkbox.value:
         # Volatility scaling: плечо = target / realized vol (12 мес, ex-ante).
@@ -442,7 +516,7 @@ def _(
     stats_net_common = perf_stats(bt_single.loc[_common_idx, 'ret_net'])
     common_start = _common_idx.min() if len(_common_idx) else None
     return (bt_single, common_start, leverage_series, stats_bench, stats_gross,
-            stats_net, stats_net_common, weights_single)
+            stats_net, stats_net_common, trend_share, weights_single)
 
 
 @app.cell(hide_code=True)
@@ -456,6 +530,8 @@ def _(
     stats_gross,
     stats_net,
     stats_net_common,
+    trend_mode_dropdown,
+    trend_share,
     vol_target_slider,
     weights_single,
 ):
@@ -473,6 +549,8 @@ def _(
         _w_abs = weights_single.fillna(0.0).abs()
         _avg_pos = float((_w_abs > 0).sum(axis=1).mean())
         _avg_to = float(bt_single['turnover'].mean())
+        _trend_label = {'ewmac': 'EWMAC 16/64', 'ma200': 'выше MA200'}.get(
+            trend_mode_dropdown.value, '')
         single_summary = mo.md(
             f"### Результат (net, после издержек)\n\n"
             f"- **CAGR: {_sgn(stats_net['CAGR'])}** | волатильность {stats_net['Vol'] * 100:.0f}% | "
@@ -496,6 +574,9 @@ def _(
                f"среднее {float(leverage_series.mean()):.2f}×, "
                f"диапазон {float(leverage_series.min()):.2f}—{float(leverage_series.max()):.2f}×"
                if leverage_series is not None else "")
+            + (f"\n- Trend filter ({_trend_label} по IMOEX): "
+               f"в рынке {trend_share * 100:.0f}% месяцев"
+               if trend_share is not None else "")
         )
     single_summary
     return
@@ -773,10 +854,13 @@ def _(
     tc_slider,
     topn_slider,
     train_frac_slider,
+    trend_checkbox,
+    trend_mode_dropdown,
+    trend_signals,
     vol_m,
     weighting_dropdown,
 ):
-    # Walk-forward grid search (издержки/ликвидность/пропуски/взвешивание — из контролов выше)
+    # Walk-forward grid search (издержки/ликвидность/пропуски/взвешивание/тренд-фильтр — из контролов)
     if not run_grid_button.value:
         grid_results = pd.DataFrame()
         grid_best = None
@@ -796,6 +880,13 @@ def _(
         _train_idx = _common[:_split]
         _test_idx = _common[_split:]
 
+        # Trend filter применяется, если включен в контролах одиночной стратегии
+        if trend_checkbox.value and trend_signals is not None:
+            _gate_g = (trend_signals[trend_mode_dropdown.value]
+                       .reindex(_common).astype('float').fillna(1.0))
+        else:
+            _gate_g = None
+
         _rows = []
         grid_best = None
         _best_score = -np.inf
@@ -810,6 +901,8 @@ def _(
                                                     weighting=weighting_dropdown.value,
                                                     vol=vol_m),
                                 _hd)
+                            if _gate_g is not None:
+                                _w_g = _w_g.mul(_gate_g, axis=0)
                             _bt_g = backtest_monthly(_ret, _w_g,
                                                      tc_bps=tc_slider.value,
                                                      missing_mode=missing_dropdown.value)
