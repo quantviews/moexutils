@@ -95,70 +95,80 @@ def _(Path, sys):
     return (moex,)
 
 
-@app.cell
-def _(mo, moex):
-    # Папка с данными: по умолчанию data/ проекта (moex_utils.DATA_FOLDER)
-    data_folder_input = mo.ui.text(
-        value=moex.DATA_FOLDER,
-        label="Папка с данными (parquet):",
-        full_width=True,
-    )
-    data_folder_input
-    return (data_folder_input,)
-
-
-@app.cell
-def _(data_folder_input, mo, os):
-    _data_folder = data_folder_input.value.strip()
-    if os.path.isdir(_data_folder):
-        _available = sorted([
-            d for d in os.listdir(_data_folder)
-            if os.path.isdir(os.path.join(_data_folder, d))
-            and os.path.exists(os.path.join(_data_folder, d, f"{d}.parquet"))
-        ])
+@app.cell(hide_code=True)
+def _(mo, moex, os):
+    # Тикеры из data/ проекта, без старых имен переименованных бумаг (TCSG, YNDX...)
+    _ren = moex.load_renames()
+    _olds = set(_ren['old']) if len(_ren) else set()
+    if os.path.isdir(moex.DATA_FOLDER):
+        _available = sorted(
+            _d for _d in os.listdir(moex.DATA_FOLDER)
+            if os.path.isdir(os.path.join(moex.DATA_FOLDER, _d))
+            and os.path.exists(os.path.join(moex.DATA_FOLDER, _d, f"{_d}.parquet"))
+            and _d not in _olds
+        )
     else:
-        _available = []
+        _available = ["SBER"]
 
     ticker_dropdown = mo.ui.dropdown(
-        options=_available if _available else ["SBER"],
-        value=_available[0] if _available else "SBER",
+        options=_available,
+        value="SBER" if "SBER" in _available else _available[0],
         label="Тикер:",
+        searchable=True,
     )
-    ticker_dropdown
-    return (ticker_dropdown,)
+    # ARIMA чувствительна к смене режимов рынка: короткое окно обычно осмысленнее
+    sample_choice = mo.ui.dropdown(
+        options={"1 год": 1, "3 года": 3, "5 лет": 5, "10 лет": 10, "Вся история": 0},
+        value="3 года",
+        label="Период выборки:",
+    )
+    mo.hstack([ticker_dropdown, sample_choice], justify="start")
+    return sample_choice, ticker_dropdown
 
 
-@app.cell
-def _(data_folder_input, mo, np, os, pd, ticker_dropdown):
-    _folder = data_folder_input.value.strip()
-    _ticker = ticker_dropdown.value
-    _path = os.path.join(_folder, _ticker, f"{_ticker}.parquet")
-
+@app.cell(hide_code=True)
+def _(mo, moex, np, pd, sample_choice, ticker_dropdown):
+    # Загрузка: склейка переименований + сплит-коррекция;
+    # анализируем ряд полной доходности (adj_close = дивиденды + сплиты)
+    _t = ticker_dropdown.value
     try:
-        raw_df = pd.read_parquet(_path)
-        if not isinstance(raw_df.index, pd.DatetimeIndex):
-            raw_df.index = pd.to_datetime(raw_df.index)
-        raw_df = raw_df.sort_index()
+        _frames = [moex.read_moex_stock(_t)]
+        _ren2 = moex.load_renames()
+        if len(_ren2):
+            for _old2 in _ren2.loc[_ren2['new'] == _t, 'old']:
+                try:
+                    _frames.append(moex.read_moex_stock(str(_old2)))
+                except Exception:
+                    pass
+        _raw = pd.concat(_frames)
+        if not isinstance(_raw.index, pd.DatetimeIndex):
+            _raw.index = pd.to_datetime(_raw.index)
+        _raw = moex.apply_renames(_raw)
+        _raw = _raw[_raw['ticker'] == _t]
+        _raw = moex.adjust_for_splits(_raw).sort_index()
+        _raw = _raw[~_raw.index.duplicated(keep='last')]
 
-        # Выбираем столбец цены
-        if "adj_close" in raw_df.columns:
-            price_col = "adj_close"
-        elif "close" in raw_df.columns:
-            price_col = "close"
-        elif "value_rub" in raw_df.columns:
-            price_col = "value_rub"
-        else:
-            raise KeyError("Не найден столбец цены (adj_close / close / value_rub)")
+        _price_col = "adj_close" if "adj_close" in _raw.columns else "close"
+        close_series = _raw[_price_col].dropna().astype(float)
 
-        close_series = raw_df[price_col].dropna().astype(float)
+        if sample_choice.value:
+            close_series = close_series[
+                close_series.index >= close_series.index.max()
+                - pd.DateOffset(years=sample_choice.value)]
+
         log_returns = np.log(close_series / close_series.shift(1)).dropna()
 
-        status_block = mo.md(f"""
-    ### Данные загружены: **{_ticker}**
-    - Период: **{close_series.index.min().strftime('%Y-%m-%d')}** — **{close_series.index.max().strftime('%Y-%m-%d')}**
-    - Наблюдений (цена): **{len(close_series):,}**
-    - Столбец цены: `{price_col}`
-    """)
+        _stitch = ""
+        if 'source_ticker' in _raw.columns and _raw['source_ticker'].nunique() > 1:
+            _stitch = f"- История склеена из: **{' → '.join(_raw['source_ticker'].unique())}**\n"
+        status_block = mo.md(
+            f"### Данные загружены: **{_t}**\n"
+            f"- Период: **{close_series.index.min().strftime('%Y-%m-%d')}** — "
+            f"**{close_series.index.max().strftime('%Y-%m-%d')}**, "
+            f"наблюдений: **{len(close_series)}**\n"
+            f"- Столбец цены: `{_price_col}` (дивиденды + сплиты учтены)\n"
+            + _stitch
+        )
     except Exception as e:
         close_series = pd.Series(dtype=float)
         log_returns = pd.Series(dtype=float)
@@ -364,7 +374,13 @@ def _(
 
     best_order = _best_order if _best_order is not None else (1, 0, 1)
 
-    mo.md(f"### Лучший порядок по {criterion_select.value}: **ARIMA{best_order}** ({criterion_select.value} = {_best_ic:.2f})")
+    if _best_order is None:
+        _msg = ("### Grid search не выполнен: недостаточно данных (> 60 наблюдений). "
+                f"Используется порядок по умолчанию ARIMA{best_order}")
+    else:
+        _msg = (f"### Лучший порядок по {criterion_select.value}: **ARIMA{best_order}** "
+                f"({criterion_select.value} = {_best_ic:.2f})")
+    mo.md(_msg)
     return best_order, grid_df
 
 
@@ -604,9 +620,15 @@ def _(mo):
 
 @app.cell
 def _(garch_p_slider, garch_q_slider, mo, resid):
-    from arch import arch_model as _arch_model
+    try:
+        from arch import arch_model as _arch_model
+    except ImportError:
+        _arch_model = None
 
-    if len(resid) > 60:
+    if _arch_model is None:
+        garch_fit = None
+        garch_block = mo.md("**Пакет `arch` не установлен** — GARCH-блок пропущен: `pip install arch`")
+    elif len(resid) > 60:
         _gp = garch_p_slider.value
         _gq = garch_q_slider.value
 
@@ -1051,13 +1073,26 @@ def _(
         del fig_fwd, ax_fwd
 
         # Таблица прогноза
-        _fwd_table = pd.DataFrame({
+        forecast_table_df = pd.DataFrame({
             "Дата": _forecast_dates.strftime("%Y-%m-%d"),
             "Прогноз цены": [f"{p:.2f}" for p in _fc_prices],
             "Нижняя граница (95%)": [f"{p:.2f}" for p in _fc_lower],
             "Верхняя граница (95%)": [f"{p:.2f}" for p in _fc_upper],
             "Прогноз лог-доходности": [f"{r:.6f}" for r in _fc_mean.values],
         })
+    else:
+        forecast_table_df = pd.DataFrame()
+    return (forecast_table_df,)
+
+
+@app.cell
+def _(forecast_table_df, mo):
+    # Таблица прогноза по дням (раньше собиралась, но не отображалась)
+    if len(forecast_table_df) > 0:
+        forecast_table_view = mo.ui.table(forecast_table_df, label="Прогноз по дням")
+    else:
+        forecast_table_view = mo.md("")
+    forecast_table_view
     return
 
 
