@@ -417,19 +417,27 @@ def _(
 
     stats_net = perf_stats(bt_single['ret_net'], bench_ret_m)
     stats_gross = perf_stats(bt_single['ret_gross'])
-    stats_bench = perf_stats(bench_ret_m.loc[bench_ret_m.index.intersection(bt_single.index)])
-    return bt_single, leverage_series, stats_bench, stats_gross, stats_net, weights_single
+    # Бенчмарк и сопоставимая статистика стратегии — на общем окне
+    # (кэш MCFTR может начинаться позже старта стратегии)
+    _common_idx = bt_single.index.intersection(bench_ret_m.index)
+    stats_bench = perf_stats(bench_ret_m.loc[_common_idx])
+    stats_net_common = perf_stats(bt_single.loc[_common_idx, 'ret_net'])
+    common_start = _common_idx.min() if len(_common_idx) else None
+    return (bt_single, common_start, leverage_series, stats_bench, stats_gross,
+            stats_net, stats_net_common, weights_single)
 
 
 @app.cell(hide_code=True)
 def _(
     bench_name,
     bt_single,
+    common_start,
     leverage_series,
     mo,
     stats_bench,
     stats_gross,
     stats_net,
+    stats_net_common,
     vol_target_slider,
     weights_single,
 ):
@@ -453,10 +461,15 @@ def _(
             f"Sharpe **{stats_net['Sharpe']:.2f}** | MaxDD {_sgn(stats_net['MaxDD'])}\n"
             f"- Gross (до издержек): CAGR {_sgn(stats_gross.get('CAGR'))}, "
             f"Sharpe {stats_gross.get('Sharpe', float('nan')):.2f}\n"
-            f"- Бенчмарк {bench_name}: CAGR {_sgn(stats_bench.get('CAGR'))}, "
-            f"Sharpe {stats_bench.get('Sharpe', float('nan')):.2f}, "
-            f"MaxDD {_sgn(stats_bench.get('MaxDD'))}\n"
-            f"- Information Ratio: **{stats_net.get('IR', float('nan')):.2f}** "
+            + (f"- Сравнение с {bench_name} за общий период "
+               f"(с {common_start:%Y-%m}): бенчмарк CAGR {_sgn(stats_bench.get('CAGR'))}, "
+               f"Sharpe {stats_bench.get('Sharpe', float('nan')):.2f}, "
+               f"MaxDD {_sgn(stats_bench.get('MaxDD'))} · "
+               f"стратегия CAGR {_sgn(stats_net_common.get('CAGR'))}, "
+               f"Sharpe {stats_net_common.get('Sharpe', float('nan')):.2f}, "
+               f"MaxDD {_sgn(stats_net_common.get('MaxDD'))}\n"
+               if common_start is not None else "- Бенчмарк недоступен\n")
+            + f"- Information Ratio: **{stats_net.get('IR', float('nan')):.2f}** "
             f"(tracking error {stats_net.get('TE', float('nan')) * 100:.0f}%)\n"
             f"- Средний месячный оборот: {_avg_to * 100:.0f}% | "
             f"средне позиций: {_avg_pos:.0f} | месяцев: {stats_net['Months']}"
@@ -481,6 +494,14 @@ def _(bench_name, bench_ret_m, bt_single, go, mo, plotly_available):
         _b = bench_ret_m.loc[bench_ret_m.index.intersection(bt_single.index)]
         _eq_bench = (1 + _b).cumprod()
 
+        # Ребейз всех линий к первой ОБЩЕЙ дате: иначе «1» у стратегии и
+        # бенчмарка приходится на разные моменты, и уровни несопоставимы
+        _t0 = _eq_bench.index[0] if len(_eq_bench) else None
+        if _t0 is not None:
+            _eq_net = _eq_net / _eq_net.loc[_t0]
+            _eq_gross = _eq_gross / _eq_gross.loc[_t0]
+            _eq_bench = _eq_bench / _eq_bench.loc[_t0]
+
         _fig = go.Figure()
         _fig.add_scatter(x=_eq_net.index, y=_eq_net.values, name='Стратегия (net)',
                          line=dict(color='#1f77b4', width=2),
@@ -491,9 +512,14 @@ def _(bench_name, bench_ret_m, bt_single, go, mo, plotly_available):
         _fig.add_scatter(x=_eq_bench.index, y=_eq_bench.values, name=bench_name.split(' ')[0],
                          line=dict(color='#7f7f7f', width=1.5, dash='dash'),
                          hovertemplate='%{y:.2f}<extra>бенчмарк</extra>')
+        if _t0 is not None and _eq_net.index[0] < _t0:
+            _fig.add_vline(x=_t0, line_dash='dot', line_color='gray', line_width=1)
+            _fig.add_annotation(x=_t0, y=1, yref='y', text='старт сравнения<br>(есть бенчмарк)',
+                                showarrow=False, xanchor='left', xshift=6,
+                                font=dict(size=10, color='gray'))
         _fig.update_layout(
             height=420, hovermode='x unified',
-            title=dict(text='Рост капитала (1 = старт, лог-шкала)', font_size=14),
+            title=dict(text='Рост капитала (1 = старт сравнения, лог-шкала)', font_size=14),
             yaxis=dict(type='log'),
             legend=dict(orientation='h', y=1.1, x=1, xanchor='right'),
             margin=dict(t=44, l=10, r=10, b=10),
