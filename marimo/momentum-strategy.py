@@ -83,15 +83,21 @@ def _(mo, moex, np, pd):
 
     ret_m = px_m.pct_change(fill_method=None)
 
+    # Фактическая последняя дата дневных данных: месячная панель лейблится
+    # концом периода, но последний месяц может быть незавершенным
+    last_data_date = _c.index.max()
+    _partial = px_m.index.max() > last_data_date
     _bad = int((ret_m <= -1).sum().sum())
     data_status = mo.md(
         f"**Данные:** {px_m.shape[1]} тикеров · {px_m.shape[0]} месяцев "
         f"({px_m.index.min():%Y-%m} — {px_m.index.max():%Y-%m}) · "
         f"цены — `adj_close` (дивиденды + сплиты) · "
         f"месячных доходностей ≤ -100%: {_bad}"
+        + (f" · ⏳ последний месяц не завершен (данные до {last_data_date:%d.%m.%Y})"
+           if _partial else "")
     )
     data_status
-    return liq_m, px_m, ret_m
+    return last_data_date, liq_m, px_m, ret_m
 
 
 @app.cell(hide_code=True)
@@ -476,11 +482,13 @@ def _(bt_single, go, leverage_series, mo, plotly_available):
 
 
 @app.cell(hide_code=True)
-def _(bt_single, go, mo, np, pd, plotly_available):
+def _(bt_single, go, last_data_date, mo, np, pd, plotly_available):
     # Доходности по годам и месяцам (net): строки — годы, последний сверху
     if not plotly_available or len(bt_single) == 0:
         monthly_block = mo.md("")
     else:
+        _partial_note = (f" · последняя ячейка — незавершенный месяц (до {last_data_date:%d.%m})"
+                         if len(bt_single) and bt_single.index.max() > last_data_date else "")
         _r = bt_single['ret_net']
         _tbl = pd.DataFrame({'y': _r.index.year, 'm': _r.index.month, 'v': _r.values})
         _pv = _tbl.pivot_table(index='y', columns='m', values='v', aggfunc='sum')
@@ -504,7 +512,7 @@ def _(bt_single, go, mo, np, pd, plotly_available):
         ))
         _figm.update_layout(
             height=max(300, 26 * len(_ylabels) + 90),
-            title=dict(text='Доходности стратегии по месяцам (net, %)', font_size=13),
+            title=dict(text=f'Доходности стратегии по месяцам (net, %){_partial_note}', font_size=13),
             yaxis=dict(autorange='reversed', type='category'),
             xaxis=dict(side='top'),
             margin=dict(t=70, l=10, r=10, b=10),
@@ -536,6 +544,7 @@ def _(mo, weights_single):
 def _(
     bt_single,
     go,
+    last_data_date,
     mo,
     moex,
     momentum_signal,
@@ -573,6 +582,18 @@ def _(
                          f"{bt_single.loc[_next[0], 'ret_net'] * 100:+.1f}% (net)"
                          if len(_next) else " · следующий месяц еще не завершен")
 
+            # Метка месяца — конец периода; если месяц не завершен, честно
+            # показываем фактическую дату данных и статус состава
+            if _t > last_data_date:
+                _asof = (f"по данным на {last_data_date:%d.%m.%Y} "
+                         f"(месяц не завершен; состав "
+                         + ("финальный: сигнал при skip≥1 не использует цены "
+                            "текущего месяца" if skip_slider.value >= 1
+                            else "предварительный: при skip=0 может измениться "
+                                 "до конца месяца") + ")")
+            else:
+                _asof = f"по данным на {_t:%d.%m.%Y}"
+
             _hover = [
                 f"{_tk}<br>вес: {_v * 100:+.1f}%<br>momentum: {_sig_row.get(_tk, float('nan')) * 100:+.1f}%"
                 f"<br>{_sec_map.get(_tk, 'сектор н/д')}"
@@ -588,7 +609,7 @@ def _(
             _figp.update_layout(
                 height=max(260, 24 * len(_w) + 90),
                 title=dict(
-                    text=f'Портфель, сформированный по данным на {_t:%d.%m.%Y} '
+                    text=f'Портфель, сформированный {_asof} '
                          f'(удерживается в следующем месяце) · позиций: {len(_w)}{_realized}',
                     font_size=12),
                 xaxis=dict(title='Вес (%)', zeroline=True, zerolinecolor='black'),
