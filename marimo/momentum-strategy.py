@@ -228,6 +228,33 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.md(r"""
+    **Параметры коротко:**
+
+    - **Lookback** — окно импульса: за сколько месяцев считается доходность-сигнал.
+    - **Skip** — сколько последних месяцев отрезать из сигнала. `skip=1` исключает
+      краткосрочный разворот (классика «12-1»); `skip=0` — сигнал по самой свежей цене.
+    - **Holding** — период удержания через *перекрывающиеся портфели*: при `hold=6`
+      капитал разбит на 6 «винтажей» по 1/6, каждый месяц обновляется только один
+      из них (средний возраст позиции ~3 мес). Эффект: оборот и издержки в разы
+      ниже, кривая глаже — но сигнал в среднем «старее».
+    - **Квантиль отбора** — какая доля лучших по сигналу бумаг покупается
+      (равными весами).
+    - **Long-Short** — дополнительно шортится нижний квантиль. Ближе к рыночной
+      нейтральности, но шорт на MOEX дорог и доступен не по всем бумагам.
+    - **Издержки (bps)** — стоимость оборота: 15 bps = 0.15% от каждой полной
+      замены позиции (комиссия + спред).
+    - **Top-N по обороту** — вселенная ограничивается N самыми ликвидными
+      бумагами месяца: сигнал в неликвидах на практике не реализуем.
+    - **Пропуск цены** — судьба позиции при исчезновении котировок (делистинг):
+      `exit` — выход по 0% за месяц, `penalize` — консервативный штраф -100%.
+    - **Volatility scaling** — см. пояснение ниже при включении опции.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     lookback_slider = mo.ui.slider(start=1, stop=12, step=1, value=6, label="Lookback (мес):")
     skip_slider = mo.ui.slider(start=0, stop=2, step=1, value=1, label="Skip (мес):")
     hold_slider = mo.ui.slider(start=1, stop=6, step=1, value=1, label="Holding (мес):")
@@ -752,6 +779,47 @@ def _(grid_results, mo):
     else:
         grid_table = mo.md("")
     grid_table
+    return
+
+
+@app.cell(hide_code=True)
+def _(go, grid_results, mo, np, plotly_available):
+    # Карта устойчивости: средний test-Sharpe по lookback × hold.
+    # Усреднение по остальным осям сетки (skip, квантиль, long/short) показывает,
+    # где параметры образуют устойчивое плато, а где — одинокий пик (оверфиттинг).
+    if not plotly_available or len(grid_results) == 0:
+        robustness_block = mo.md("")
+    else:
+        _pv = grid_results.pivot_table(index='hold', columns='lookback',
+                                       values='test_Sharpe', aggfunc='mean')
+        _z = _pv.values
+        _text = [['' if np.isnan(_v) else f'{_v:.2f}' for _v in _row] for _row in _z]
+        _vmax = max(float(np.nanmax(np.abs(_z))), 1e-9)
+
+        _figr2 = go.Figure(go.Heatmap(
+            z=_z,
+            x=[f'lookback {_c}' for _c in _pv.columns],
+            y=[f'hold {_i}' for _i in _pv.index],
+            text=_text, texttemplate='%{text}', textfont_size=13,
+            colorscale='RdYlGn', zmid=0, zmin=-_vmax, zmax=_vmax,
+            showscale=False, xgap=2, ygap=2,
+            hovertemplate='%{x}, %{y}: средний test-Sharpe %{z:.2f}<extra></extra>',
+        ))
+        _figr2.update_layout(
+            height=90 + 60 * len(_pv.index),
+            title=dict(text='Карта устойчивости: средний test-Sharpe '
+                            '(усреднение по skip, квантилю и long/short)',
+                       font_size=13),
+            margin=dict(t=44, l=10, r=10, b=10),
+        )
+        robustness_block = mo.vstack([
+            _figr2,
+            mo.md("*Как читать: доверять стоит области, где соседние ячейки "
+                  "одинаково зеленые (плато). Если лучшая по train конфигурация "
+                  "стоит в одинокой яркой ячейке среди бледных — это, скорее "
+                  "всего, подгонка под train-период, а не сигнал.*"),
+        ])
+    robustness_block
     return
 
 
