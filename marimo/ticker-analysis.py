@@ -1,28 +1,29 @@
 """
-marimo notebook: Анализ доходности и волатильности тикера с учетом дивидендов
+marimo notebook: Анализ тикера — доходность, риск и сопоставление с рынком (IMOEX)
 
 Использование:
-1. Установите marimo: pip install marimo
+1. Установите зависимости: pip install marimo plotly scipy
 2. Запустите ноутбук: marimo edit ticker-analysis.py
-3. Выберите тикер из выпадающего списка
-4. Ноутбук автоматически загрузит данные и рассчитает метрики
+3. Выберите тикер и период
 
 Функционал:
-- Выбор тикера через интерактивный виджет
-- Расчет метрик доходности (CAGR, общая доходность, дивидендная доходность)
-- Расчет волатильности (годовая, downside)
-- Визуализация: цены, распределение доходностей, просадки, волатильность, объемы
+- Полная история бумаги: склейка переименований (TCSG→T и т.д.), сплит-коррекция
+- Сводка: цена/полная доходность, сравнение с IMOEX, бета, альфа, дивдоходность
+- Нормированный график бумаги против индекса, относительная сила
+- Скользящие бета и корреляция к IMOEX, просадки, волатильность
+- Распределение доходностей (гистограмма + Q-Q plot), объемы — в аккордеоне
 
-Все расчеты учитывают дивиденды через adj_close.
+Цены: close — закрытие основной сессии (сплит-скорректированный),
+adj_close — полная доходность (дивиденды + сплиты). IMOEX — ценовой индекс.
 """
 
 import marimo
 
-__generated_with = "0.18.4"
-app = marimo.App(width="medium", css_file="styles.css")
+__generated_with = "0.23.14"
+app = marimo.App(width="medium", app_title="Анализ тикера", css_file="styles.css")
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     # moex_utils лежит в корне проекта (родительская папка от marimo/)
     import sys as _sys
@@ -31,336 +32,463 @@ def _():
     import moex_utils as moex
     import pandas as pd
     import numpy as np
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-    from datetime import datetime, timedelta
-    import os
     import marimo as mo
     from scipy import stats
-    return mo, moex, np, os, pd, plt, stats
-
-
-@app.cell
-def _(moex, os):
-    # Получаем список доступных тикеров из data/ проекта
-    DATA_FOLDER = moex.DATA_FOLDER
-    available_tickers = sorted([
-        d for d in os.listdir(DATA_FOLDER) 
-        if os.path.isdir(os.path.join(DATA_FOLDER, d)) and 
-           os.path.exists(os.path.join(DATA_FOLDER, d, f"{d}.parquet"))
-    ]) if os.path.exists(DATA_FOLDER) else ["SBER", "LKOH", "GAZP"]
-    return (available_tickers,)
-
-
-@app.cell
-def _(available_tickers, mo):
-    # Виджет выбора тикера
-    ticker = mo.ui.dropdown(
-        options=available_tickers,
-        value=available_tickers[0] if available_tickers else "SBER",
-        label="Выберите тикер:"
-    )
-    ticker
-    return (ticker,)
-
-
-@app.cell
-def _(moex, np, pd, ticker):
-    # Загрузка данных
     try:
-        df = moex.read_moex_stock(ticker.value)
-
-        # Проверяем наличие adj_close
-        if 'adj_close' not in df.columns:
-            print(f"⚠️  Внимание: adj_close не найден для {ticker.value}. Используется close.")
-            df['adj_close'] = df['close']
-
-        # Используем adj_close для анализа (с учетом дивидендов)
-        price_series = df['adj_close'].dropna().sort_index()
-
-        # Расчет лог-доходностей
-        log_returns = np.log(price_series / price_series.shift(1)).dropna()
-        simple_returns = price_series.pct_change().dropna()
-
-        print(f"✅ Данные загружены для {ticker.value}")
-        print(f"📅 Период: {df.index.min().strftime('%Y-%m-%d')} - {df.index.max().strftime('%Y-%m-%d')}")
-        print(f"📊 Количество торговых дней: {len(df)}")
-
-    except Exception as e:
-        print(f"❌ Ошибка загрузки данных: {e}")
-        df = pd.DataFrame()
-        price_series = pd.Series()
-        log_returns = pd.Series()
-        simple_returns = pd.Series()
-
-    # df, price_series, log_returns, simple_returns
-    return df, log_returns, price_series, simple_returns
-
-
-@app.cell
-def _(df, log_returns, np, price_series):
-    # Расчет метрик доходности
-    if len(price_series) > 0:
-        start_date = price_series.index.min()
-        end_date = price_series.index.max()
-        years = (end_date - start_date).days / 365.25
-
-        # CAGR (Compound Annual Growth Rate)
-        start_price = price_series.iloc[0]
-        end_price = price_series.iloc[-1]
-        cagr = ((end_price / start_price) ** (1 / years)) - 1 if years > 0 and start_price > 0 else 0
-
-        # CAGR через лог-доходности (более точный)
-        if len(log_returns) > 0:
-            total_log_return = log_returns.sum()
-            cagr_log = np.exp(total_log_return / years) - 1 if years > 0 else 0
-        else:
-            cagr_log = 0
-
-        # Средняя годовая доходность
-        mean_daily_return = log_returns.mean() if len(log_returns) > 0 else 0
-        mean_annual_return = mean_daily_return * 252  # 252 торговых дня в году
-
-        # Общая доходность за период
-        total_return = (end_price / start_price) - 1 if start_price > 0 else 0
-
-        # Дивидендная доходность (разница между adj_close и close)
-        if 'close' in df.columns and 'adj_close' in df.columns:
-            close_cagr = ((df['close'].iloc[-1] / df['close'].iloc[0]) ** (1 / years)) - 1 if years > 0 and df['close'].iloc[0] > 0 else 0
-            dividend_yield = cagr - close_cagr
-        else:
-            dividend_yield = 0
-            close_cagr = 0
-
-        metrics_return = {
-            'CAGR (цена + дивиденды)': f"{cagr:.2%}",
-            'CAGR (через лог-доходности)': f"{cagr_log:.2%}",
-            'Средняя годовая доходность': f"{mean_annual_return:.2%}",
-            'Общая доходность за период': f"{total_return:.2%}",
-            'CAGR (только цена)': f"{close_cagr:.2%}",
-            'Дивидендная доходность (годовая)': f"{dividend_yield:.2%}",
-            'Период анализа (лет)': f"{years:.2f}"
-        }
-    else:
-        metrics_return = {}
-        cagr = 0
-        cagr_log = 0
-        mean_annual_return = 0
-        total_return = 0
-        dividend_yield = 0
-        years = 0
-
-    metrics_return, cagr, cagr_log, mean_annual_return, total_return, dividend_yield, years
-    return (metrics_return,)
-
-
-@app.cell
-def _(log_returns, np):
-    # Расчет волатильности
-    if len(log_returns) > 0:
-        # Волатильность (стандартное отклонение)
-        daily_volatility = log_returns.std()
-        annual_volatility = daily_volatility * np.sqrt(252)
-
-        # Downside volatility (только отрицательные доходности)
-        downside_returns = log_returns[log_returns < 0]
-        downside_volatility = downside_returns.std() * np.sqrt(252) if len(downside_returns) > 0 else 0
-
-        # Дневная волатильность
-        daily_volatility_pct = daily_volatility * 100
-
-        metrics_volatility = {
-            'Дневная волатильность': f"{daily_volatility_pct:.2f}%",
-            'Годовая волатильность': f"{annual_volatility:.2%}",
-            'Downside волатильность (годовая)': f"{downside_volatility:.2%}"
-        }
-    else:
-        metrics_volatility = {}
-        annual_volatility = 0
-        daily_volatility = 0
-        downside_volatility = 0
-
-    metrics_volatility, annual_volatility, daily_volatility, downside_volatility
-    return (metrics_volatility,)
-
-
-@app.cell
-def _(metrics_return, metrics_volatility, mo):
-    # Вывод всех метрик
-    return_metrics = mo.md(f"""
-    ## 📈 Метрики доходности
-
-    {chr(10).join([f"- **{k}**: {v}" for k, v in metrics_return.items()])}
-    """)
-
-    volatility_metrics = mo.md(f"""
-    ## 📊 Метрики волатильности
-
-    {chr(10).join([f"- **{k}**: {v}" for k, v in metrics_volatility.items()])}
-    """)
-
-    [return_metrics, volatility_metrics]
-    return
-
-
-@app.cell
-def _(df, plt, ticker):
-    # График 1: Цены Close vs Adj Close
-    if len(df) > 0 and 'close' in df.columns and 'adj_close' in df.columns:
-        try:
-            plt.close(1)  # Закрываем предыдущую фигуру, если она существует
-        except:
-            pass
-        fig1, ax1_plot = plt.subplots(num=1, figsize=(14, 6))
-
-        ax1_plot.plot(df.index, df['close'], label='Close (цена)', color='blue', alpha=0.7, linewidth=1.5)
-        ax1_plot.plot(df.index, df['adj_close'], label='Adj Close (цена + дивиденды)', color='orange', alpha=0.7, linewidth=1.5)
-
-        ax1_plot.set_title(f'{ticker.value} - Сравнение цен Close и Adj Close', fontsize=14, fontweight='bold')
-        ax1_plot.set_xlabel('Дата', fontsize=12)
-        ax1_plot.set_ylabel('Цена (RUB)', fontsize=12)
-        ax1_plot.legend(fontsize=11)
-        ax1_plot.grid(True, alpha=0.3)
-        ax1_plot.tick_params(axis='x', rotation=45)
-
-        plt.tight_layout()
-        plt.show()
-        del fig1, ax1_plot
-    else:
-        print("Нет данных для построения графика")
-    return
-
-
-@app.cell
-def _(log_returns, plt, stats):
-    # График 2: Распределение доходностей
-    # Добавлен ticker в зависимости для принудительного обновления при смене тикера
-    if len(log_returns) > 0:
-        try:
-            plt.close(2)  # Закрываем предыдущую фигуру, если она существует
-        except:
-            pass
-        fig2, (ax2_hist, ax2_qq) = plt.subplots(1, 2, num=2, figsize=(14, 5))
-
-        # Гистограмма доходностей
-        ax2_hist.hist(log_returns * 100, bins=50, alpha=0.7, color='steelblue', edgecolor='black')
-        ax2_hist.axvline(log_returns.mean() * 100, color='red', linestyle='--', linewidth=2, label=f'Среднее: {log_returns.mean()*100:.2f}%')
-        ax2_hist.set_title('Распределение дневных доходностей', fontsize=12, fontweight='bold')
-        ax2_hist.set_xlabel('Доходность (%)', fontsize=11)
-        ax2_hist.set_ylabel('Частота', fontsize=11)
-        ax2_hist.legend()
-        ax2_hist.grid(True, alpha=0.3)
-
-        # Q-Q plot для проверки нормальности
-        stats.probplot(log_returns, dist="norm", plot=ax2_qq)
-        ax2_qq.set_title('Q-Q Plot (проверка нормальности)', fontsize=12, fontweight='bold')
-        ax2_qq.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        plt.show()
-        del fig2, ax2_hist, ax2_qq
-    else:
-        print("Нет данных для построения графика")
-    return
-
-
-@app.cell
-def _(plt, price_series, simple_returns, ticker):
-    # График 3: Просадки (Drawdown)
-    if len(price_series) > 0 and len(simple_returns) > 0:
-        cumulative = (1 + simple_returns).cumprod()
-        running_max = cumulative.cummax()
-        drawdown = (cumulative - running_max) / running_max
-
-        fig3, (ax3_cum, ax3_dd) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
-
-        # График цены и максимума
-        ax3_cum.plot(cumulative.index, cumulative.values, label='Накопленная доходность', color='blue', linewidth=2)
-        ax3_cum.plot(running_max.index, running_max.values, label='Растущий максимум', color='green', linestyle='--', linewidth=1.5)
-        ax3_cum.fill_between(cumulative.index, cumulative.values, running_max.values, 
-                         where=(cumulative < running_max), alpha=0.3, color='red', label='Просадка')
-        ax3_cum.set_title(f'{ticker.value} - Накопленная доходность и просадки', fontsize=14, fontweight='bold')
-        ax3_cum.set_ylabel('Накопленная доходность', fontsize=12)
-        ax3_cum.legend(fontsize=11)
-        ax3_cum.grid(True, alpha=0.3)
-
-        # График просадок
-        ax3_dd.fill_between(drawdown.index, 0, drawdown.values * 100, alpha=0.5, color='red')
-        ax3_dd.plot(drawdown.index, drawdown.values * 100, color='darkred', linewidth=1.5)
-        ax3_dd.set_title('Просадка (Drawdown) в процентах', fontsize=12, fontweight='bold')
-        ax3_dd.set_xlabel('Дата', fontsize=12)
-        ax3_dd.set_ylabel('Просадка (%)', fontsize=12)
-        ax3_dd.grid(True, alpha=0.3)
-        ax3_dd.tick_params(axis='x', rotation=45)
-
-        plt.tight_layout()
-        plt.show()
-        del fig3, ax3_cum, ax3_dd
-    else:
-        print("Нет данных для построения графика")
-    return
-
-
-@app.cell
-def _(log_returns, np, plt, ticker):
-    # График 4: Скользящая волатильность
-    if len(log_returns) > 0:
-        # Скользящая волатильность (30, 60, 90 дней)
-        windows = [30, 60, 90, 252]
-        fig4, ax4 = plt.subplots(figsize=(14, 6))
-
-        for window in windows:
-            rolling_vol = log_returns.rolling(window=window).std() * np.sqrt(252) * 100
-            ax4.plot(rolling_vol.index, rolling_vol.values, 
-                   label=f'{window} дней', linewidth=1.5, alpha=0.8)
-
-        ax4.set_title(f'{ticker.value} - Скользящая годовая волатильность', fontsize=14, fontweight='bold')
-        ax4.set_xlabel('Дата', fontsize=12)
-        ax4.set_ylabel('Волатильность (%)', fontsize=12)
-        ax4.legend(fontsize=11)
-        ax4.grid(True, alpha=0.3)
-        ax4.tick_params(axis='x', rotation=45)
-
-        plt.tight_layout()
-        plt.show()
-        del fig4, ax4
-    else:
-        print("Нет данных для построения графика")
-    return
-
-
-@app.cell
-def _(df, plt, ticker):
-    # График 5: Объемы торгов
-    if len(df) > 0 and 'volume' in df.columns:
-        fig5, (ax5_price, ax5_vol) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
-
-        # Цена и объем
-        ax5_price.plot(df.index, df['adj_close'], color='blue', linewidth=1.5)
-        ax5_price.set_ylabel('Цена (RUB)', fontsize=12, color='blue')
-        ax5_price.tick_params(axis='y', labelcolor='blue')
-        ax5_price.set_title(f'{ticker.value} - Цена и объем торгов', fontsize=14, fontweight='bold')
-        ax5_price.grid(True, alpha=0.3)
-
-        ax5_vol.bar(df.index, df['volume'], color='gray', alpha=0.6, width=0.8)
-        ax5_vol.set_ylabel('Объем', fontsize=12)
-        ax5_vol.set_xlabel('Дата', fontsize=12)
-        ax5_vol.grid(True, alpha=0.3, axis='y')
-        ax5_vol.tick_params(axis='x', rotation=45)
-
-        plt.tight_layout()
-        plt.show()
-        del fig5, ax5_price, ax5_vol
-    else:
-        print("Нет данных для построения графика")
-    return
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        plotly_available = True
+    except ImportError:
+        go, make_subplots = None, None
+        plotly_available = False
+    return go, make_subplots, mo, moex, np, pd, plotly_available, stats
 
 
 @app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
- 
-    """)
+def _(moex):
+    # Список тикеров: файлы из data/, кроме старых имен переименованных бумаг
+    import os as _os
+    _renames_df = moex.load_renames()
+    _old_names = set(_renames_df['old']) if len(_renames_df) else set()
+    if _os.path.exists(moex.DATA_FOLDER):
+        available_tickers = sorted(
+            _d for _d in _os.listdir(moex.DATA_FOLDER)
+            if _os.path.isdir(_os.path.join(moex.DATA_FOLDER, _d))
+            and _os.path.exists(_os.path.join(moex.DATA_FOLDER, _d, f"{_d}.parquet"))
+            and _d not in _old_names
+        )
+    else:
+        available_tickers = ["SBER"]
+    return (available_tickers,)
+
+
+@app.cell(hide_code=True)
+def _(available_tickers, mo):
+    ticker = mo.ui.dropdown(
+        options=available_tickers,
+        value="SBER" if "SBER" in available_tickers else available_tickers[0],
+        label="Тикер:",
+        searchable=True,
+    )
+    period_choice = mo.ui.dropdown(
+        options={"1 год": "1y", "3 года": "3y", "5 лет": "5y",
+                 "С 2022": "2022", "Вся история": "all"},
+        value="3 года",
+        label="Период:",
+    )
+    return period_choice, ticker
+
+
+@app.cell(hide_code=True)
+def _(moex, pd, period_choice, ticker):
+    # Полная история бумаги: основной файл + файлы старых имен (renames.csv),
+    # склейка с source_ticker, затем сплит-коррекция цен
+    _frames = [moex.read_moex_stock(ticker.value)]
+    _ren = moex.load_renames()
+    if len(_ren):
+        for _old in _ren.loc[_ren['new'] == ticker.value, 'old']:
+            try:
+                _frames.append(moex.read_moex_stock(str(_old)))
+            except Exception:
+                pass
+
+    df_full = pd.concat(_frames)
+    if not isinstance(df_full.index, pd.DatetimeIndex):
+        df_full.index = pd.to_datetime(df_full.index)
+    df_full = moex.apply_renames(df_full)
+    df_full = df_full[df_full['ticker'] == ticker.value]
+    df_full = moex.adjust_for_splits(df_full).sort_index()
+    df_full = df_full[~df_full.index.duplicated(keep='last')]
+    if 'adj_close' not in df_full.columns:
+        df_full['adj_close'] = df_full['close']
+
+    # Обрезка по выбранному периоду
+    _end = df_full.index.max()
+    if period_choice.value == 'all':
+        df = df_full
+    elif period_choice.value == '2022':
+        df = df_full[df_full.index >= pd.Timestamp('2022-01-01')]
+    else:
+        _n_years = {'1y': 1, '3y': 3, '5y': 5}[period_choice.value]
+        df = df_full[df_full.index >= _end - pd.DateOffset(years=_n_years)]
+    return df, df_full
+
+
+@app.cell(hide_code=True)
+def _(df, moex, pd):
+    # IMOEX за тот же период (локальный кэш indexes/IMOEX.parquet)
+    try:
+        _idx = moex.read_moex_index('IMOEX')
+        _idx.index = pd.to_datetime(_idx.index)
+        index_close = _idx['close'].astype(float).sort_index()
+        index_close = index_close[(index_close.index >= df.index.min()) &
+                                  (index_close.index <= df.index.max())]
+    except Exception:
+        index_close = pd.Series(dtype=float)
+    return (index_close,)
+
+
+@app.cell(hide_code=True)
+def _(df, df_full, index_close, np, pd):
+    # Расчет всех метрик за выбранный период
+    price = df['close'].astype(float).dropna()
+    adj = df['adj_close'].astype(float).dropna()
+    ret_d = np.log(adj / adj.shift(1)).dropna()
+    idx_ret_d = (np.log(index_close / index_close.shift(1)).dropna()
+                 if len(index_close) > 1 else pd.Series(dtype=float))
+
+    M = {}
+    if len(price) > 1 and len(adj) > 1:
+        _years = max((adj.index.max() - adj.index.min()).days / 365.25, 1e-9)
+        M['years'] = _years
+        M['last_close'] = float(price.iloc[-1])
+        M['px_total'] = (float(price.iloc[-1]) / float(price.iloc[0]) - 1) * 100
+        M['tr_total'] = (float(adj.iloc[-1]) / float(adj.iloc[0]) - 1) * 100
+        M['cagr_px'] = ((float(price.iloc[-1]) / float(price.iloc[0])) ** (1 / _years) - 1) * 100
+        M['cagr_tr'] = ((float(adj.iloc[-1]) / float(adj.iloc[0])) ** (1 / _years) - 1) * 100
+        M['div_yield_ann'] = M['cagr_tr'] - M['cagr_px']
+
+        M['vol_ann'] = float(ret_d.std()) * np.sqrt(252) * 100
+        _down = ret_d[ret_d < 0]
+        M['downside_ann'] = (float(_down.std()) * np.sqrt(252) * 100) if len(_down) > 1 else float('nan')
+        M['sharpe'] = (float(ret_d.mean()) / float(ret_d.std()) * np.sqrt(252)) if float(ret_d.std()) > 0 else float('nan')
+        M['var5'] = float(np.percentile(ret_d, 5)) * 100
+        M['skew'] = float(ret_d.skew())
+        M['kurt'] = float(ret_d.kurt())
+
+        # Просадки — по полной доходности
+        _cum = adj / adj.iloc[0]
+        dd_series = (_cum / _cum.cummax() - 1) * 100
+        M['max_dd'] = float(dd_series.min())
+        M['dd_now'] = float(dd_series.iloc[-1])
+
+        # 52 недели — по полной истории, не зависит от выбранного периода
+        _y = df_full['close'].astype(float).dropna()
+        _y = _y[_y.index >= _y.index.max() - pd.DateOffset(years=1)]
+        if len(_y) > 1:
+            M['off_52w_high'] = (float(_y.iloc[-1]) / float(_y.max()) - 1) * 100
+            M['above_52w_low'] = (float(_y.iloc[-1]) / float(_y.min()) - 1) * 100
+
+        # Сопоставление с рынком (IMOEX — ценовой индекс)
+        if len(index_close) > 1 and len(idx_ret_d) > 30:
+            M['idx_total'] = (float(index_close.iloc[-1]) / float(index_close.iloc[0]) - 1) * 100
+            M['rel_px'] = M['px_total'] - M['idx_total']
+            M['rel_tr'] = M['tr_total'] - M['idx_total']
+            _al = pd.concat([ret_d.rename('s'), idx_ret_d.rename('m')], axis=1, join='inner').dropna()
+            if len(_al) > 30 and float(_al['m'].var()) > 0:
+                M['beta'] = float(_al['s'].cov(_al['m'])) / float(_al['m'].var())
+                M['corr'] = float(_al['s'].corr(_al['m']))
+                # альфа (годовая): доходность бумаги минус бета × доходность рынка
+                M['alpha_ann'] = (float(_al['s'].mean()) - M['beta'] * float(_al['m'].mean())) * 252 * 100
+    else:
+        dd_series = pd.Series(dtype=float)
+    return M, adj, dd_series, idx_ret_d, price, ret_d
+
+
+@app.cell(hide_code=True)
+def _(M, df, mo, period_choice, ticker):
+    # Сводка
+    def _sgn(_v, _suffix='%', _nd=1):
+        if _v != _v:  # NaN
+            return 'н/д'
+        _cls = 'pos' if _v >= 0 else 'neg'
+        _txt = format(_v, f'+,.{_nd}f').replace(',', ' ')
+        return f'<span class="{_cls}">{_txt}{_suffix}</span>'
+
+    if not M:
+        summary_md = mo.md("Нет данных за выбранный период")
+    else:
+        _src = ""
+        if 'source_ticker' in df.columns and df['source_ticker'].nunique() > 1:
+            _src = (" · история склеена из: "
+                    + " → ".join(df.sort_index()['source_ticker'].unique()))
+        _vs = ""
+        if 'idx_total' in M:
+            _vs = (f"- **Против IMOEX** ({_sgn(M['idx_total'])}): цена {_sgn(M['rel_px'])} "
+                   f"| полная доходность {_sgn(M['rel_tr'])}"
+                   + (f" | бета **{M['beta']:.2f}** | альфа {_sgn(M['alpha_ann'])} годовых"
+                      if 'beta' in M else "") + "\n")
+        _levels = ""
+        if 'off_52w_high' in M:
+            _levels = (f"- **Уровни (52 нед.):** от максимума {_sgn(M['off_52w_high'])}, "
+                       f"от минимума {_sgn(M['above_52w_low'])}; текущая просадка {_sgn(M['dd_now'])}\n")
+
+        _period_labels = {'1y': '1 год', '3y': '3 года', '5y': '5 лет',
+                          '2022': 'с 2022', 'all': 'вся история'}
+        summary_md = mo.md(
+            f"## {ticker.value} — {M['last_close']:,.2f} руб".replace(',', ' ')
+            + f" · период: {_period_labels.get(period_choice.value, period_choice.value)}"
+            + f" ({df.index.min().strftime('%d.%m.%Y')} — {df.index.max().strftime('%d.%m.%Y')}){_src}\n\n"
+            + f"- **Цена:** {_sgn(M['px_total'])} за период (CAGR {_sgn(M['cagr_px'])}) | "
+            + f"**полная доходность:** {_sgn(M['tr_total'])} (CAGR {_sgn(M['cagr_tr'])}) | "
+            + f"дивиденды ≈ {_sgn(M['div_yield_ann'])} годовых\n"
+            + _vs + _levels
+        )
+    return (summary_md,)
+
+
+@app.cell(hide_code=True)
+def _(M, adj, go, index_close, mo, plotly_available, price, ticker):
+    # Нормированный график: бумага (цена и полная доходность) против IMOEX, старт = 100
+    if not plotly_available or not M:
+        block_overview = mo.md("")
+    else:
+        _figo = go.Figure()
+        _figo.add_scatter(x=price.index, y=price / price.iloc[0] * 100,
+                          name=f'{ticker.value} (цена)',
+                          line=dict(color='#1f77b4', width=1.8),
+                          hovertemplate='%{y:.1f}<extra>цена</extra>')
+        _figo.add_scatter(x=adj.index, y=adj / adj.iloc[0] * 100,
+                          name=f'{ticker.value} (полная доходность)',
+                          line=dict(color='#2ca02c', width=1.6),
+                          hovertemplate='%{y:.1f}<extra>полная дох.</extra>')
+        if len(index_close) > 1:
+            _figo.add_scatter(x=index_close.index, y=index_close / index_close.iloc[0] * 100,
+                              name='IMOEX', line=dict(color='#7f7f7f', width=1.4, dash='dot'),
+                              hovertemplate='%{y:.1f}<extra>IMOEX</extra>')
+        _figo.add_hline(y=100, line_color='black', line_width=0.7)
+        _figo.update_layout(
+            height=420, hovermode='x unified',
+            title=dict(text='Динамика, старт периода = 100', font_size=14),
+            legend=dict(orientation='h', y=1.1, x=1, xanchor='right'),
+            margin=dict(t=44, l=10, r=10, b=10),
+        )
+        block_overview = _figo
+    return (block_overview,)
+
+
+@app.cell(hide_code=True)
+def _(M, go, index_close, mo, plotly_available, price, ticker):
+    # Относительная сила: цена бумаги / IMOEX (нормировано, >100 — обгоняет рынок)
+    if not plotly_available or not M or len(index_close) < 2:
+        block_rs = mo.md("*Относительная сила: нет данных IMOEX за период*") if M else mo.md("")
+    else:
+        _joint = price.to_frame('p').join(index_close.to_frame('i'), how='inner').dropna()
+        _rs = (_joint['p'] / _joint['p'].iloc[0]) / (_joint['i'] / _joint['i'].iloc[0]) * 100
+        _figr = go.Figure()
+        _figr.add_scatter(x=_rs.index, y=_rs.values, name='RS',
+                          line=dict(color='#9467bd', width=1.8),
+                          hovertemplate='%{y:.1f}<extra>RS</extra>')
+        _figr.add_hline(y=100, line_dash='dash', line_color='gray', line_width=1)
+        _figr.update_layout(
+            height=240,
+            title=dict(text=f'Относительная сила {ticker.value} / IMOEX '
+                            f'(выше 100 — обгоняет рынок)', font_size=13),
+            margin=dict(t=40, l=10, r=10, b=10),
+        )
+        block_rs = _figr
+    return (block_rs,)
+
+
+@app.cell(hide_code=True)
+def _(M, go, idx_ret_d, mo, pd, plotly_available, ret_d):
+    # Скользящие бета и корреляция к IMOEX (окно 126 торговых дней ≈ полгода)
+    if not plotly_available or not M or len(idx_ret_d) < 150:
+        block_beta = mo.md("")
+    else:
+        _al2 = pd.concat([ret_d.rename('s'), idx_ret_d.rename('m')], axis=1, join='inner').dropna()
+        _rbeta = _al2['s'].rolling(126).cov(_al2['m']) / _al2['m'].rolling(126).var()
+        _rcorr = _al2['s'].rolling(126).corr(_al2['m'])
+        _figb2 = go.Figure()
+        _figb2.add_scatter(x=_rbeta.index, y=_rbeta.values, name='бета (126д)',
+                           line=dict(color='#d62728', width=1.6),
+                           hovertemplate='%{y:.2f}<extra>бета</extra>')
+        _figb2.add_scatter(x=_rcorr.index, y=_rcorr.values, name='корреляция (126д)',
+                           line=dict(color='#1f77b4', width=1.2, dash='dot'),
+                           hovertemplate='%{y:.2f}<extra>корреляция</extra>')
+        _figb2.add_hline(y=1, line_dash='dash', line_color='gray', line_width=0.8)
+        _figb2.update_layout(
+            height=260, hovermode='x unified',
+            title=dict(text='Скользящие бета и корреляция к IMOEX', font_size=13),
+            legend=dict(orientation='h', y=1.15, x=1, xanchor='right'),
+            margin=dict(t=44, l=10, r=10, b=10),
+        )
+        block_beta = _figb2
+    return (block_beta,)
+
+
+@app.cell(hide_code=True)
+def _(M, dd_series, go, mo, plotly_available, ticker):
+    # Просадки по полной доходности
+    if not plotly_available or not M or len(dd_series) == 0:
+        block_dd = mo.md("")
+    else:
+        _figd = go.Figure()
+        _figd.add_scatter(x=dd_series.index, y=dd_series.values, fill='tozeroy',
+                          line=dict(color='#d62728', width=1.2),
+                          fillcolor='rgba(214,39,40,0.25)',
+                          hovertemplate='%{y:.1f}%<extra>просадка</extra>')
+        _dd_min_date = dd_series.idxmin()
+        _figd.add_annotation(x=_dd_min_date, y=float(dd_series.min()),
+                             text=f"max DD {dd_series.min():.1f}%",
+                             showarrow=True, arrowhead=1, yshift=-4)
+        _figd.update_layout(
+            height=260,
+            title=dict(text=f'Просадки {ticker.value} (по полной доходности)', font_size=13),
+            yaxis=dict(ticksuffix='%'),
+            margin=dict(t=40, l=10, r=10, b=10),
+        )
+        block_dd = _figd
+    return (block_dd,)
+
+
+@app.cell(hide_code=True)
+def _(M, mo):
+    # Метрики тремя колонками
+    def _sgn(_v, _suffix='%', _nd=1):
+        if _v != _v:
+            return 'н/д'
+        _cls = 'pos' if _v >= 0 else 'neg'
+        _txt = format(_v, f'+,.{_nd}f').replace(',', ' ')
+        return f'<span class="{_cls}">{_txt}{_suffix}</span>'
+
+    if not M:
+        metrics_md = mo.md("")
+    else:
+        _c1 = mo.md(
+            "**Доходность**\n\n"
+            f"- Цена за период: {_sgn(M['px_total'])}\n"
+            f"- Полная за период: {_sgn(M['tr_total'])}\n"
+            f"- CAGR (цена): {_sgn(M['cagr_px'])}\n"
+            f"- CAGR (полная): {_sgn(M['cagr_tr'])}\n"
+            f"- Дивиденды (годовых): {_sgn(M['div_yield_ann'])}"
+        )
+        _c2 = mo.md(
+            "**Риск**\n\n"
+            f"- Волатильность: {M['vol_ann']:.0f}%\n"
+            f"- Downside-вола: {M['downside_ann']:.0f}%\n"
+            f"- Max drawdown: {_sgn(M['max_dd'])}\n"
+            f"- VaR 5% (день): {_sgn(M['var5'], '%', 2)}\n"
+            f"- Sharpe (rf=0): {M['sharpe']:.2f}"
+        )
+        if 'beta' in M:
+            _c3 = mo.md(
+                "**Против рынка**\n\n"
+                f"- IMOEX за период: {_sgn(M.get('idx_total', float('nan')))}\n"
+                f"- Отставание/опережение (цена): {_sgn(M['rel_px'])}\n"
+                f"- Бета: {M['beta']:.2f}\n"
+                f"- Корреляция: {M['corr']:.2f}\n"
+                f"- Альфа (годовых): {_sgn(M['alpha_ann'])}"
+            )
+        else:
+            _c3 = mo.md("**Против рынка**\n\nнет данных IMOEX")
+        metrics_md = mo.hstack([_c1, _c2, _c3], justify='start', gap=3)
+    return (metrics_md,)
+
+
+@app.cell(hide_code=True)
+def _(M, make_subplots, mo, np, plotly_available, ret_d, stats):
+    # Распределение дневных доходностей: гистограмма + нормальная кривая, Q-Q plot
+    if not plotly_available or not M or len(ret_d) < 30:
+        block_dist = mo.md("")
+    else:
+        _r = ret_d * 100
+        _figh = make_subplots(rows=1, cols=2,
+                              subplot_titles=('Распределение дневных доходностей', 'Q-Q plot'))
+        _figh.add_histogram(x=_r, nbinsx=60, name='доходности',
+                            marker_color='#1f77b4', opacity=0.75, row=1, col=1)
+        _xs = np.linspace(float(_r.min()), float(_r.max()), 200)
+        _pdf = stats.norm.pdf(_xs, float(_r.mean()), float(_r.std()))
+        _binw = (float(_r.max()) - float(_r.min())) / 60
+        _figh.add_scatter(x=_xs, y=_pdf * len(_r) * _binw, name='нормальное',
+                          line=dict(color='#d62728', width=1.6), row=1, col=1)
+        _figh.add_vline(x=M['var5'], line_dash='dash', line_color='black',
+                        annotation_text=f"VaR5 {M['var5']:.1f}%", row=1, col=1)
+
+        (_osm, _osr), (_sl, _ic, _rq) = stats.probplot(ret_d, dist='norm')
+        _figh.add_scatter(x=_osm, y=_osr * 100, mode='markers', name='квантили',
+                          marker=dict(size=3, color='#1f77b4'), row=1, col=2)
+        _figh.add_scatter(x=_osm, y=(_sl * _osm + _ic) * 100, mode='lines', name='норм. линия',
+                          line=dict(color='#d62728', width=1.4), row=1, col=2)
+        _figh.update_layout(
+            height=340, showlegend=False,
+            title=dict(text=f"Асимметрия {M['skew']:.2f} · эксцесс {M['kurt']:.1f} "
+                            f"(у нормального 0)", font_size=12),
+            margin=dict(t=64, l=10, r=10, b=10),
+        )
+        block_dist = _figh
+    return (block_dist,)
+
+
+@app.cell(hide_code=True)
+def _(M, go, mo, np, plotly_available, ret_d):
+    # Скользящая годовая волатильность
+    if not plotly_available or not M or len(ret_d) < 60:
+        block_vol = mo.md("")
+    else:
+        _figv = go.Figure()
+        for _w, _cl in ((30, '#1f77b4'), (90, '#ff7f0e'), (252, '#2ca02c')):
+            if len(ret_d) > _w:
+                _rv = ret_d.rolling(_w).std() * np.sqrt(252) * 100
+                _figv.add_scatter(x=_rv.index, y=_rv.values, name=f'{_w} дней',
+                                  line=dict(color=_cl, width=1.4),
+                                  hovertemplate='%{y:.0f}%<extra>' + f'{_w}д</extra>')
+        _figv.update_layout(
+            height=280, hovermode='x unified',
+            title=dict(text='Скользящая годовая волатильность', font_size=13),
+            yaxis=dict(ticksuffix='%'),
+            legend=dict(orientation='h', y=1.12, x=1, xanchor='right'),
+            margin=dict(t=42, l=10, r=10, b=10),
+        )
+        block_vol = _figv
+    return (block_vol,)
+
+
+@app.cell(hide_code=True)
+def _(M, df, go, mo, plotly_available):
+    # Объем торгов (оборот, млн руб) со средним за 20 дней
+    if not plotly_available or not M or 'value_rub' not in df.columns:
+        block_volume = mo.md("")
+    else:
+        _val = df['value_rub'].astype(float).dropna() / 1e6
+        _figvol = go.Figure()
+        _figvol.add_bar(x=_val.index, y=_val.values, name='оборот/день',
+                        marker_color='rgba(31,119,180,0.45)',
+                        hovertemplate='%{y:,.0f} млн<extra></extra>')
+        _ma = _val.rolling(20).mean()
+        _figvol.add_scatter(x=_ma.index, y=_ma.values, name='среднее 20д',
+                            line=dict(color='#d62728', width=1.5),
+                            hovertemplate='%{y:,.0f} млн<extra>MA20</extra>')
+        _figvol.update_layout(
+            height=280,
+            title=dict(text='Оборот торгов, млн руб', font_size=13),
+            legend=dict(orientation='h', y=1.12, x=1, xanchor='right'),
+            margin=dict(t=42, l=10, r=10, b=10),
+        )
+        block_volume = _figvol
+    return (block_volume,)
+
+
+@app.cell(hide_code=True)
+def _(
+    block_beta,
+    block_dd,
+    block_dist,
+    block_overview,
+    block_rs,
+    block_vol,
+    block_volume,
+    metrics_md,
+    mo,
+    period_choice,
+    summary_md,
+    ticker,
+):
+    # Основной layout
+    mo.vstack([
+        mo.hstack([ticker, period_choice], justify='start'),
+        summary_md,
+        block_overview,
+        block_rs,
+        block_beta,
+        metrics_md,
+        block_dd,
+        mo.accordion({
+            "📊 Распределение доходностей": block_dist,
+            "📈 Скользящая волатильность": block_vol,
+            "💹 Оборот торгов": block_volume,
+        }),
+    ])
     return
 
 
