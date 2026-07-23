@@ -387,6 +387,130 @@ def _(bt_single, go, mo, plotly_available):
 
 
 @app.cell(hide_code=True)
+def _(bt_single, go, mo, np, pd, plotly_available):
+    # Доходности по годам и месяцам (net): строки — годы, последний сверху
+    if not plotly_available or len(bt_single) == 0:
+        monthly_block = mo.md("")
+    else:
+        _r = bt_single['ret_net']
+        _tbl = pd.DataFrame({'y': _r.index.year, 'm': _r.index.month, 'v': _r.values})
+        _pv = _tbl.pivot_table(index='y', columns='m', values='v', aggfunc='sum')
+        _pv = _pv.reindex(columns=range(1, 13))
+        _pv['year'] = (1 + _r).groupby(_r.index.year).prod() - 1
+        _pv = _pv.sort_index(ascending=False)
+
+        _z = _pv.values * 100
+        _xlabels = ['Янв', 'Фев', 'Мар', 'Апр', 'Май', 'Июн', 'Июл', 'Авг',
+                    'Сен', 'Окт', 'Ноя', 'Дек', 'Год']
+        _ylabels = [str(_y) for _y in _pv.index]
+        _text = [['' if np.isnan(_v) else f'{_v:+.1f}' for _v in _row] for _row in _z]
+        _vmax = max(float(np.nanpercentile(np.abs(_z), 95)), 1e-9)
+
+        _figm = go.Figure(go.Heatmap(
+            z=_z, x=_xlabels, y=_ylabels,
+            text=_text, texttemplate='%{text}', textfont_size=10,
+            colorscale='RdYlGn', zmid=0, zmin=-_vmax, zmax=_vmax,
+            showscale=False, xgap=1, ygap=1,
+            hovertemplate='%{y} %{x}: %{z:+.2f}%<extra></extra>',
+        ))
+        _figm.update_layout(
+            height=max(300, 26 * len(_ylabels) + 90),
+            title=dict(text='Доходности стратегии по месяцам (net, %)', font_size=13),
+            yaxis=dict(autorange='reversed', type='category'),
+            xaxis=dict(side='top'),
+            margin=dict(t=70, l=10, r=10, b=10),
+        )
+        monthly_block = _figm
+    monthly_block
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo, weights_single):
+    # Выбор месяца для просмотра состава портфеля (по умолчанию — последний)
+    _active = weights_single.index[weights_single.abs().sum(axis=1) > 0]
+    _opts = {_i.strftime('%Y-%m'): _i for _i in reversed(list(_active))}
+    if _opts:
+        month_dropdown = mo.ui.dropdown(
+            options=_opts, value=list(_opts)[0],
+            label='Состав портфеля на месяц:', searchable=True,
+        )
+        _md_ctrl = month_dropdown
+    else:
+        month_dropdown = None
+        _md_ctrl = mo.md("")
+    _md_ctrl
+    return (month_dropdown,)
+
+
+@app.cell(hide_code=True)
+def _(
+    bt_single,
+    go,
+    mo,
+    moex,
+    momentum_signal,
+    month_dropdown,
+    lookback_slider,
+    pd,
+    plotly_available,
+    px_m,
+    skip_slider,
+    weights_single,
+):
+    # Структура портфеля на выбранный месяц
+    if month_dropdown is None or not plotly_available:
+        portfolio_block = mo.md("")
+    else:
+        _t = month_dropdown.value
+        _w = weights_single.loc[_t]
+        _w = _w[_w != 0].sort_values()
+
+        if len(_w) == 0:
+            portfolio_block = mo.md("*Портфель на этот месяц пуст*")
+        else:
+            # Сигнал momentum, по которому портфель был сформирован
+            _sig_row = momentum_signal(px_m, lookback_slider.value, skip_slider.value).loc[_t]
+
+            # Сектора из справочника
+            import os as _os3
+            _sec_path = _os3.path.join(moex.BASE_DIR, 'metadata', 'sectors.csv')
+            _sec_map = (pd.read_csv(_sec_path).set_index('ticker')['sector']
+                        if _os3.path.exists(_sec_path) else pd.Series(dtype=object))
+
+            # Реализованная доходность портфеля в следующем месяце (если он уже прошел)
+            _next = bt_single.index[bt_single.index > _t]
+            _realized = (f" · реализовано в след. месяце: "
+                         f"{bt_single.loc[_next[0], 'ret_net'] * 100:+.1f}% (net)"
+                         if len(_next) else " · следующий месяц еще не завершен")
+
+            _hover = [
+                f"{_tk}<br>вес: {_v * 100:+.1f}%<br>momentum: {_sig_row.get(_tk, float('nan')) * 100:+.1f}%"
+                f"<br>{_sec_map.get(_tk, 'сектор н/д')}"
+                for _tk, _v in _w.items()
+            ]
+            _figp = go.Figure(go.Bar(
+                x=_w.values * 100, y=_w.index, orientation='h',
+                marker_color=['green' if _v >= 0 else 'red' for _v in _w.values],
+                text=[f'{_v * 100:+.1f}%' for _v in _w.values],
+                textposition='outside',
+                hovertext=_hover, hoverinfo='text',
+            ))
+            _figp.update_layout(
+                height=max(260, 24 * len(_w) + 90),
+                title=dict(
+                    text=f'Портфель, сформированный по данным на {_t:%d.%m.%Y} '
+                         f'(удерживается в следующем месяце) · позиций: {len(_w)}{_realized}',
+                    font_size=12),
+                xaxis=dict(title='Вес (%)', zeroline=True, zerolinecolor='black'),
+                margin=dict(t=48, l=10, r=10, b=10),
+            )
+            portfolio_block = _figp
+    portfolio_block
+    return
+
+
+@app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
     ---
