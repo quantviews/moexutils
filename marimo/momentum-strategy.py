@@ -83,6 +83,14 @@ def _(mo, moex, np, pd):
 
     ret_m = px_m.pct_change(fill_method=None)
 
+    # Волатильность бумаг для inverse-vol взвешивания: дневные доходности,
+    # окно 63 торговых дня (квартал), аннуализация, срез на конец месяца.
+    # Ex-ante: оценка на конец месяца t применяется к портфелю месяца t+1.
+    _ret_d = _px_d.pct_change(fill_method=None)
+    _vol_d = _ret_d.rolling(63, min_periods=21).std() * np.sqrt(252)
+    vol_m = _vol_d.groupby(_vol_d.index.to_period('M')).last()
+    vol_m.index = vol_m.index.to_timestamp('M')
+
     # Фактическая последняя дата дневных данных: месячная панель лейблится
     # концом периода, но последний месяц может быть незавершенным
     last_data_date = _c.index.max()
@@ -97,7 +105,7 @@ def _(mo, moex, np, pd):
            if _partial else "")
     )
     data_status
-    return last_data_date, liq_m, px_m, ret_m
+    return last_data_date, liq_m, px_m, ret_m, vol_m
 
 
 @app.cell(hide_code=True)
@@ -136,7 +144,19 @@ def _(np, pd):
         """P(t-skip) / P(t-lookback-skip) - 1"""
         return px.shift(skip) / px.shift(lookback + skip) - 1.0
 
-    def build_rebal_weights(sig, liq, q, long_short, top_n_liq):
+    def build_rebal_weights(sig, liq, q, long_short, top_n_liq,
+                            weighting='equal', vol=None):
+        """weighting='equal' — равные веса внутри квантиля;
+        'invvol' — вес ∝ 1/σ бумаги (нормировка до 1 внутри лонгов/шортов)."""
+
+        def _leg_weights(t, names, sign):
+            if weighting == 'invvol' and vol is not None and t in vol.index:
+                _iv = 1.0 / vol.loc[t, names]
+                _iv = _iv.replace([np.inf, -np.inf], np.nan).dropna()
+                if len(_iv):
+                    return sign * _iv / _iv.sum()
+            return pd.Series(sign / len(names), index=names)
+
         w = pd.DataFrame(0.0, index=sig.index, columns=sig.columns)
         for t in sig.index:
             s = sig.loc[t].dropna()
@@ -151,11 +171,11 @@ def _(np, pd):
                         continue
             s = s.sort_values()
             k = max(1, int(np.floor(len(s) * q)))
+            _wl = _leg_weights(t, s.index[-k:], 1.0)
+            w.loc[t, _wl.index] = _wl.values
             if long_short:
-                w.loc[t, s.index[-k:]] = 1.0 / k
-                w.loc[t, s.index[:k]] = -1.0 / k
-            else:
-                w.loc[t, s.index[-k:]] = 1.0 / k
+                _ws = _leg_weights(t, s.index[:k], -1.0)
+                w.loc[t, _ws.index] = _ws.values
         return w
 
     def apply_holding(w_rebal, hold):
@@ -248,6 +268,10 @@ def _(mo):
       бумагами месяца: сигнал в неликвидах на практике не реализуем.
     - **Пропуск цены** — судьба позиции при исчезновении котировок (делистинг):
       `exit` — выход по 0% за месяц, `penalize` — консервативный штраф -100%.
+    - **Взвешивание** — внутри выбранного квантиля: равные веса или
+      *inverse-vol* (вес ∝ 1/σ бумаги, σ — за 63 торговых дня): спокойные бумаги
+      получают больше, буйные меньше — риск распределяется равномернее между
+      позициями. Не путать с volatility scaling — тот масштабирует весь портфель.
     - **Volatility scaling** — см. пояснение ниже при включении опции.
     """)
     return
@@ -267,6 +291,9 @@ def _(mo):
     missing_dropdown = mo.ui.dropdown(options={"exit (выход по 0%)": "exit",
                                                "penalize (-100%)": "penalize"},
                                       value="exit (выход по 0%)", label="Пропуск цены:")
+    weighting_dropdown = mo.ui.dropdown(
+        options={"Равные веса": "equal", "Inverse-vol (вес ∝ 1/σ бумаги)": "invvol"},
+        value="Равные веса", label="Взвешивание:")
     vol_checkbox = mo.ui.checkbox(value=False, label="Volatility scaling")
     vol_target_slider = mo.ui.slider(start=10, stop=30, step=1, value=15,
                                      label="Целевая волатильность (% годовых):")
@@ -276,7 +303,7 @@ def _(mo):
     mo.vstack([
         mo.hstack([lookback_slider, skip_slider, hold_slider], justify='start'),
         mo.hstack([q_dropdown, ls_checkbox, tc_slider], justify='start'),
-        mo.hstack([topn_slider, missing_dropdown], justify='start'),
+        mo.hstack([topn_slider, missing_dropdown, weighting_dropdown], justify='start'),
         mo.hstack([vol_checkbox, vol_target_slider, lev_cap_dropdown], justify='start'),
     ])
     return (
@@ -291,6 +318,7 @@ def _(mo):
         topn_slider,
         vol_checkbox,
         vol_target_slider,
+        weighting_dropdown,
     )
 
 
@@ -351,12 +379,15 @@ def _(
     tc_slider,
     topn_slider,
     vol_checkbox,
+    vol_m,
     vol_target_slider,
+    weighting_dropdown,
 ):
     # Бэктест одиночной стратегии
     _sig = momentum_signal(px_m, lookback_slider.value, skip_slider.value)
     _w0 = build_rebal_weights(_sig, liq_m, q_dropdown.value,
-                              ls_checkbox.value, topn_slider.value)
+                              ls_checkbox.value, topn_slider.value,
+                              weighting=weighting_dropdown.value, vol=vol_m)
     _w_base = apply_holding(_w0, hold_slider.value)
 
     if vol_checkbox.value:
@@ -581,6 +612,7 @@ def _(
     plotly_available,
     px_m,
     skip_slider,
+    vol_m,
     weights_single,
 ):
     # Структура портфеля на выбранный месяц
@@ -621,8 +653,10 @@ def _(
             else:
                 _asof = f"по данным на {_t:%d.%m.%Y}"
 
+            _vol_row = vol_m.loc[_t] if _t in vol_m.index else pd.Series(dtype=float)
             _hover = [
                 f"{_tk}<br>вес: {_v * 100:+.1f}%<br>momentum: {_sig_row.get(_tk, float('nan')) * 100:+.1f}%"
+                f"<br>σ 63д: {_vol_row.get(_tk, float('nan')) * 100:.0f}%"
                 f"<br>{_sec_map.get(_tk, 'сектор н/д')}"
                 for _tk, _v in _w.items()
             ]
@@ -695,8 +729,10 @@ def _(
     tc_slider,
     topn_slider,
     train_frac_slider,
+    vol_m,
+    weighting_dropdown,
 ):
-    # Walk-forward grid search (издержки/ликвидность/пропуски — из контролов выше)
+    # Walk-forward grid search (издержки/ликвидность/пропуски/взвешивание — из контролов выше)
     if not run_grid_button.value:
         grid_results = pd.DataFrame()
         grid_best = None
@@ -726,7 +762,9 @@ def _(
                         for _ls in (False, True):
                             _sig_g = momentum_signal(_px, _lb, _sk)
                             _w_g = apply_holding(
-                                build_rebal_weights(_sig_g, _liq, _qq, _ls, topn_slider.value),
+                                build_rebal_weights(_sig_g, _liq, _qq, _ls, topn_slider.value,
+                                                    weighting=weighting_dropdown.value,
+                                                    vol=vol_m),
                                 _hd)
                             _bt_g = backtest_monthly(_ret, _w_g,
                                                      tc_bps=tc_slider.value,
