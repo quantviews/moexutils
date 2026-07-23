@@ -118,7 +118,8 @@ def _(mo, moex, pd):
             _s = _i['close'].astype(float).sort_index()
             _pm = _s.groupby(_s.index.to_period('M')).last()
             _pm.index = _pm.index.to_timestamp('M')
-            return _pm.pct_change(fill_method=None).rename('bench_ret')
+            # dropna: первый месяц pct_change — NaN, он ломал бы ребейз графика
+            return _pm.pct_change(fill_method=None).dropna().rename('bench_ret')
         except Exception:
             return pd.Series(dtype=float)
 
@@ -491,7 +492,7 @@ def _(bench_name, bench_ret_m, bt_single, go, mo, plotly_available):
     else:
         _eq_net = (1 + bt_single['ret_net']).cumprod()
         _eq_gross = (1 + bt_single['ret_gross']).cumprod()
-        _b = bench_ret_m.loc[bench_ret_m.index.intersection(bt_single.index)]
+        _b = bench_ret_m.loc[bench_ret_m.index.intersection(bt_single.index)].dropna()
         _eq_bench = (1 + _b).cumprod()
 
         # Ребейз всех линий к первой ОБЩЕЙ дате: иначе «1» у стратегии и
