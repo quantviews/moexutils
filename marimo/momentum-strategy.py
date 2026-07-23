@@ -234,13 +234,21 @@ def _(mo):
     missing_dropdown = mo.ui.dropdown(options={"exit (выход по 0%)": "exit",
                                                "penalize (-100%)": "penalize"},
                                       value="exit (выход по 0%)", label="Пропуск цены:")
+    vol_checkbox = mo.ui.checkbox(value=False, label="Volatility scaling")
+    vol_target_slider = mo.ui.slider(start=10, stop=30, step=1, value=15,
+                                     label="Целевая волатильность (% годовых):")
+    lev_cap_dropdown = mo.ui.dropdown(
+        options={"1.0× (без плеча)": 1.0, "1.5×": 1.5, "2.0×": 2.0},
+        value="1.5×", label="Макс. плечо:")
     mo.vstack([
         mo.hstack([lookback_slider, skip_slider, hold_slider], justify='start'),
         mo.hstack([q_dropdown, ls_checkbox, tc_slider], justify='start'),
         mo.hstack([topn_slider, missing_dropdown], justify='start'),
+        mo.hstack([vol_checkbox, vol_target_slider, lev_cap_dropdown], justify='start'),
     ])
     return (
         hold_slider,
+        lev_cap_dropdown,
         lookback_slider,
         ls_checkbox,
         missing_dropdown,
@@ -248,7 +256,44 @@ def _(mo):
         skip_slider,
         tc_slider,
         topn_slider,
+        vol_checkbox,
+        vol_target_slider,
     )
+
+
+@app.cell(hide_code=True)
+def _(mo, vol_checkbox):
+    # Пояснение к volatility scaling (показывается, когда опция включена)
+    if vol_checkbox.value:
+        vol_explain = mo.md(r"""
+    **Как работает volatility scaling.** Экспозиция портфеля масштабируется так,
+    чтобы его *ожидаемая* волатильность равнялась целевой:
+
+    $$lev_t = \min\!\left(\frac{\sigma_{target}}{\hat\sigma_t},\ cap\right),
+    \qquad w^{scaled}_t = lev_t \cdot w_t$$
+
+    где $\hat\sigma_t$ — реализованная волатильность стратегии за последние
+    12 месяцев (только прошлые данные — без заглядывания в будущее; оценка
+    на конец месяца $t$ применяется к портфелю, который держится в $t{+}1$).
+
+    Зачем это нужно:
+
+    - **Постоянный риск.** Без скейлинга портфель несет вдвое больше риска в
+      кризис, чем в спокойный год, — хотя вы «держите ту же стратегию».
+    - **Защита от momentum crash.** Крупнейшие провалы моментума (2009, 2020)
+      случаются при высокой волатильности — скейлинг механически режет
+      экспозицию именно в такие периоды.
+    - Волатильность предсказуема (кластеризуется), в отличие от доходности, —
+      поэтому такое масштабирование исторически улучшает Sharpe.
+
+    Цена вопроса: дополнительный оборот (издержки растут), а $lev_t > 1$
+    означает плечо — при «Макс. плечо = 1.0×» стратегия только снижает
+    экспозицию в бурные периоды, никогда не занимая.
+    """)
+    else:
+        vol_explain = mo.md("")
+    vol_explain
+    return
 
 
 @app.cell(hide_code=True)
@@ -258,11 +303,13 @@ def _(
     bench_ret_m,
     build_rebal_weights,
     hold_slider,
+    lev_cap_dropdown,
     liq_m,
     lookback_slider,
     ls_checkbox,
     missing_dropdown,
     momentum_signal,
+    np,
     perf_stats,
     px_m,
     q_dropdown,
@@ -270,27 +317,58 @@ def _(
     skip_slider,
     tc_slider,
     topn_slider,
+    vol_checkbox,
+    vol_target_slider,
 ):
     # Бэктест одиночной стратегии
     _sig = momentum_signal(px_m, lookback_slider.value, skip_slider.value)
     _w0 = build_rebal_weights(_sig, liq_m, q_dropdown.value,
                               ls_checkbox.value, topn_slider.value)
-    weights_single = apply_holding(_w0, hold_slider.value)
+    _w_base = apply_holding(_w0, hold_slider.value)
+
+    if vol_checkbox.value:
+        # Volatility scaling: плечо = target / realized vol (12 мес, ex-ante).
+        # Оценка волатильности на конец месяца t применяется к весам t,
+        # которые работают в t+1 — заглядывания в будущее нет.
+        _bt_raw = backtest_monthly(ret_m, _w_base, tc_bps=0,
+                                   missing_mode=missing_dropdown.value)
+        _sigma = _bt_raw['ret_gross'].rolling(12, min_periods=6).std(ddof=0) * np.sqrt(12)
+        _lev = (vol_target_slider.value / 100.0 / _sigma)
+        _lev = _lev.replace([np.inf, -np.inf], np.nan)
+        _lev = _lev.clip(upper=float(lev_cap_dropdown.value)).fillna(1.0)
+        leverage_series = _lev
+        weights_single = _w_base.mul(_lev, axis=0)
+    else:
+        leverage_series = None
+        weights_single = _w_base
+
     bt_single = backtest_monthly(ret_m, weights_single,
                                  tc_bps=tc_slider.value,
                                  missing_mode=missing_dropdown.value)
     # первые lookback+skip месяцев сигнала нет — отбрасываем разогрев
     _warmup = lookback_slider.value + skip_slider.value + 1
     bt_single = bt_single.iloc[_warmup:]
+    if leverage_series is not None:
+        leverage_series = leverage_series.iloc[_warmup:]
 
     stats_net = perf_stats(bt_single['ret_net'], bench_ret_m)
     stats_gross = perf_stats(bt_single['ret_gross'])
     stats_bench = perf_stats(bench_ret_m.loc[bench_ret_m.index.intersection(bt_single.index)])
-    return bt_single, stats_bench, stats_gross, stats_net, weights_single
+    return bt_single, leverage_series, stats_bench, stats_gross, stats_net, weights_single
 
 
 @app.cell(hide_code=True)
-def _(bench_name, bt_single, mo, stats_bench, stats_gross, stats_net, weights_single):
+def _(
+    bench_name,
+    bt_single,
+    leverage_series,
+    mo,
+    stats_bench,
+    stats_gross,
+    stats_net,
+    vol_target_slider,
+    weights_single,
+):
     # Сводка одиночной стратегии
     def _sgn(_v, _suffix='%', _nd=1, _mult=100):
         if _v is None or _v != _v:
@@ -318,6 +396,11 @@ def _(bench_name, bt_single, mo, stats_bench, stats_gross, stats_net, weights_si
             f"(tracking error {stats_net.get('TE', float('nan')) * 100:.0f}%)\n"
             f"- Средний месячный оборот: {_avg_to * 100:.0f}% | "
             f"средне позиций: {_avg_pos:.0f} | месяцев: {stats_net['Months']}"
+            + (f"\n- Vol scaling: цель {vol_target_slider.value}%, "
+               f"реализовано {stats_net['Vol'] * 100:.0f}%; плечо: "
+               f"среднее {float(leverage_series.mean()):.2f}×, "
+               f"диапазон {float(leverage_series.min()):.2f}—{float(leverage_series.max()):.2f}×"
+               if leverage_series is not None else "")
         )
     single_summary
     return
@@ -357,8 +440,8 @@ def _(bench_name, bench_ret_m, bt_single, go, mo, plotly_available):
 
 
 @app.cell(hide_code=True)
-def _(bt_single, go, mo, plotly_available):
-    # Просадки стратегии (net) и месячный оборот
+def _(bt_single, go, leverage_series, mo, plotly_available):
+    # Просадки стратегии (net), месячный оборот и плечо (если vol scaling включен)
     if not plotly_available or len(bt_single) == 0:
         dd_to_block = mo.md("")
     else:
@@ -373,6 +456,11 @@ def _(bt_single, go, mo, plotly_available):
         _figd.add_bar(x=bt_single.index, y=bt_single['turnover'] * 100,
                       name='оборот', marker_color='rgba(31,119,180,0.4)', yaxis='y2',
                       hovertemplate='%{y:.0f}%<extra>оборот</extra>')
+        if leverage_series is not None:
+            _figd.add_scatter(x=leverage_series.index, y=leverage_series * 100,
+                              name='плечо (экспозиция)', yaxis='y2',
+                              line=dict(color='#ff7f0e', width=1.6),
+                              hovertemplate='%{y:.0f}%<extra>плечо</extra>')
         _figd.update_layout(
             height=300,
             title=dict(text='Просадки (net) и месячный оборот', font_size=13),
