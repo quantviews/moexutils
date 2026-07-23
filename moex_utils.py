@@ -87,6 +87,8 @@ def get_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = 
             # сессию, из-за чего закрытия акций и индекса были бы несопоставимы.
             data = apimoex.get_market_history(
                 session=session, security=ticker, start=start, end=end,
+                columns=('BOARDID', 'TRADEDATE', 'OPEN', 'LOW', 'HIGH',
+                         'CLOSE', 'WAPRICE', 'VOLUME', 'VALUE'),
                 market='shares', engine='stock')
             if not data:
                 raise ValueError("The API response is empty.")
@@ -100,7 +102,8 @@ def get_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = 
             # строку главной доски (с максимальным оборотом)
             df = df.sort_values('VALUE').drop_duplicates(subset='TRADEDATE', keep='last')
             df['TRADEDATE'] = pd.to_datetime(df['TRADEDATE'])
-            df = df.rename({'TRADEDATE': 'date', 'CLOSE': 'close',
+            df = df.rename({'TRADEDATE': 'date', 'OPEN': 'open', 'LOW': 'low',
+                            'HIGH': 'high', 'CLOSE': 'close', 'WAPRICE': 'waprice',
                             'VOLUME': 'volume', 'VALUE': 'value_rub'}, axis='columns')
             df = df.set_index('date').sort_index()
             df = df.drop(columns=[c for c in ('BOARDID',) if c in df.columns])
@@ -869,7 +872,7 @@ def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd
 
     # adj_close намеренно НЕ корректируем: calculate_adj_close создает его
     # сразу в пост-сплитовой базе, повторная поправка исказила бы ряд
-    price_cols = [c for c in ('close', 'open', 'high', 'low') if c in df.columns]
+    price_cols = [c for c in ('close', 'open', 'high', 'low', 'waprice') if c in df.columns]
     for row in splits.itertuples(index=False):
         ticker_mask = df['ticker'] == row.ticker
         if not ticker_mask.any():

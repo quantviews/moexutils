@@ -83,14 +83,23 @@ def metadata_xlsx(tmp_path):
 class TestGetMoexStock:
     def test_daily_uses_official_history(self, monkeypatch):
         """Дневные данные (frequency=24) идут из /history: CLOSE = закрытие
-        основной сессии, единая методика с индексами; дубли по доскам схлопываются."""
+        основной сессии, единая методика с индексами; дубли по доскам схлопываются;
+        запрашиваются OHLC и WAPRICE."""
         history = [
-            {'BOARDID': 'SMAL', 'TRADEDATE': '2025-01-01', 'CLOSE': 99.0, 'VOLUME': 5, 'VALUE': 100.0},
-            {'BOARDID': 'TQBR', 'TRADEDATE': '2025-01-01', 'CLOSE': 100.5, 'VOLUME': 10, 'VALUE': 1000.0},
-            {'BOARDID': 'TQBR', 'TRADEDATE': '2025-01-02', 'CLOSE': 101.0, 'VOLUME': 20, 'VALUE': 2000.0},
+            {'BOARDID': 'SMAL', 'TRADEDATE': '2025-01-01', 'OPEN': 98.0, 'LOW': 97.0,
+             'HIGH': 100.0, 'CLOSE': 99.0, 'WAPRICE': 98.5, 'VOLUME': 5, 'VALUE': 100.0},
+            {'BOARDID': 'TQBR', 'TRADEDATE': '2025-01-01', 'OPEN': 99.0, 'LOW': 98.0,
+             'HIGH': 101.0, 'CLOSE': 100.5, 'WAPRICE': 100.0, 'VOLUME': 10, 'VALUE': 1000.0},
+            {'BOARDID': 'TQBR', 'TRADEDATE': '2025-01-02', 'OPEN': 100.5, 'LOW': 100.0,
+             'HIGH': 102.0, 'CLOSE': 101.0, 'WAPRICE': 100.8, 'VOLUME': 20, 'VALUE': 2000.0},
         ]
-        monkeypatch.setattr(mu.apimoex, 'get_market_history',
-                            lambda session, security, start, end, market, engine: history)
+        requested = {}
+
+        def fake_history(session, security, start, end, columns, market, engine):
+            requested['columns'] = columns
+            return history
+
+        monkeypatch.setattr(mu.apimoex, 'get_market_history', fake_history)
 
         df = mu.get_moex_stock('SBER', start='2025-01-01', end='2025-01-02')
 
@@ -98,9 +107,14 @@ class TestGetMoexStock:
         assert len(df) == 2                          # дубль по доске SMAL отброшен
         assert df.loc['2025-01-01', 'close'] == 100.5  # взята главная доска (max VALUE)
         assert df.loc['2025-01-01', 'value_rub'] == 1000.0
+        assert df.loc['2025-01-01', 'open'] == 99.0
+        assert df.loc['2025-01-01', 'high'] == 101.0
+        assert df.loc['2025-01-01', 'low'] == 98.0
+        assert df.loc['2025-01-01', 'waprice'] == 100.0
         assert df['volume'].dtype == 'float64'
         assert (df['ticker'] == 'SBER').all()
         assert 'BOARDID' not in df.columns
+        assert {'OPEN', 'LOW', 'HIGH', 'WAPRICE'} <= set(requested['columns'])
 
     def test_intraday_uses_candles(self, monkeypatch):
         candles = [
@@ -499,10 +513,13 @@ class TestSplits:
         splits = self.write_splits(tmp_path, [('TEST', '2025-01-03', 10)])
         df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
                            [1000, 1010, 101, 102])
+        df['waprice'] = [990.0, 1000.0, 100.5, 101.5]
 
         result = mu.adjust_for_splits(df, splits_file=splits)
 
         assert result['close'].tolist() == pytest.approx([100.0, 101.0, 101.0, 102.0])
+        # waprice — тоже ценовая колонка, корректируется
+        assert result['waprice'].tolist() == pytest.approx([99.0, 100.0, 100.5, 101.5])
         # объем до сплита умножается на ratio
         assert result['volume'].tolist() == pytest.approx([100.0, 100.0, 10.0, 10.0])
         # исходный DataFrame не изменен
