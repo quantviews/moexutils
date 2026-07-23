@@ -637,7 +637,8 @@ def _(
                 height=max(260, 24 * len(_w) + 90),
                 title=dict(
                     text=f'Портфель, сформированный {_asof} '
-                         f'(удерживается в следующем месяце) · позиций: {len(_w)}{_realized}',
+                         f'(удерживается в следующем месяце) · позиций: {len(_w)} · '
+                         f'экспозиция Σ|w| = {_w.abs().sum() * 100:.0f}%{_realized}',
                     font_size=12),
                 xaxis=dict(title='Вес (%)', zeroline=True, zerolinecolor='black'),
                 margin=dict(t=48, l=10, r=10, b=10),
