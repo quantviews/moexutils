@@ -22,7 +22,7 @@ def main(
     div_folder: Optional[str] = None,
     data_folder: Optional[str] = None,
     metadata_file: Optional[str] = None,
-    index_tickers: Optional[str] = "IMOEX",
+    index_tickers: Optional[str] = "IMOEX,MCFTR",
 ) -> None:
     if data_folder is not None:
         moex.DATA_FOLDER = data_folder
@@ -76,7 +76,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-index", action="store_true", help="Не обновлять индексы")
     ap.add_argument("--rebuild", action="store_true",
                     help="Перескачать историю всех тикеров целиком (после смены методики данных)")
-    ap.add_argument("--indexes", type=str, default="IMOEX", help="Индексы через запятую (по умолчанию IMOEX)")
+    ap.add_argument("--indexes", type=str, default="IMOEX,MCFTR",
+                    help="Индексы через запятую (по умолчанию IMOEX,MCFTR)")
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
     ap.add_argument("--metadata-file", type=str, default=None, help="Путь к Excel с метаданными (metadata/stock-index-base.xlsx)")

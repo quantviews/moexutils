@@ -116,26 +116,38 @@ def _(moex, pd, period_choice, ticker):
 
 @app.cell(hide_code=True)
 def _(df, moex, pd):
-    # IMOEX за тот же период (локальный кэш indexes/IMOEX.parquet)
-    try:
-        _idx = moex.read_moex_index('IMOEX')
-        _idx.index = pd.to_datetime(_idx.index)
-        index_close = _idx['close'].astype(float).sort_index()
-        index_close = index_close[(index_close.index >= df.index.min()) &
-                                  (index_close.index <= df.index.max())]
-    except Exception:
-        index_close = pd.Series(dtype=float)
-    return (index_close,)
+    # Индексы за тот же период (локальный кэш indexes/):
+    # IMOEX — ценовой, MCFTR — полной доходности (брутто, с дивидендами)
+    def _load_idx(_name):
+        try:
+            _i = moex.read_moex_index(_name)
+            _i.index = pd.to_datetime(_i.index)
+            _s = _i['close'].astype(float).sort_index()
+            return _s[(_s.index >= df.index.min()) & (_s.index <= df.index.max())]
+        except Exception:
+            return pd.Series(dtype=float)
+
+    index_close = _load_idx('IMOEX')
+    mcftr_close = _load_idx('MCFTR')
+
+    # Бенчмарк для полной доходности бумаги: MCFTR; пока кэша нет — IMOEX
+    if len(mcftr_close) > 1:
+        bench_close, bench_name = mcftr_close, 'MCFTR'
+    else:
+        bench_close, bench_name = index_close, 'IMOEX'
+    return bench_close, bench_name, index_close, mcftr_close
 
 
 @app.cell(hide_code=True)
-def _(df, df_full, index_close, np, pd):
-    # Расчет всех метрик за выбранный период
+def _(bench_close, df, df_full, index_close, np, pd):
+    # Расчет всех метрик за выбранный период.
+    # Бета/корреляция/альфа — против бенчмарка полной доходности (MCFTR,
+    # при отсутствии кэша — IMOEX): обе стороны включают дивиденды.
     price = df['close'].astype(float).dropna()
     adj = df['adj_close'].astype(float).dropna()
     ret_d = np.log(adj / adj.shift(1)).dropna()
-    idx_ret_d = (np.log(index_close / index_close.shift(1)).dropna()
-                 if len(index_close) > 1 else pd.Series(dtype=float))
+    idx_ret_d = (np.log(bench_close / bench_close.shift(1)).dropna()
+                 if len(bench_close) > 1 else pd.Series(dtype=float))
 
     M = {}
     if len(price) > 1 and len(adj) > 1:
@@ -169,16 +181,19 @@ def _(df, df_full, index_close, np, pd):
             M['off_52w_high'] = (float(_y.iloc[-1]) / float(_y.max()) - 1) * 100
             M['above_52w_low'] = (float(_y.iloc[-1]) / float(_y.min()) - 1) * 100
 
-        # Сопоставление с рынком (IMOEX — ценовой индекс)
-        if len(index_close) > 1 and len(idx_ret_d) > 30:
+        # Сопоставление с рынком: цена — против IMOEX (ценовой индекс),
+        # полная доходность — против бенчмарка (MCFTR / фоллбэк IMOEX)
+        if len(index_close) > 1:
             M['idx_total'] = (float(index_close.iloc[-1]) / float(index_close.iloc[0]) - 1) * 100
             M['rel_px'] = M['px_total'] - M['idx_total']
-            M['rel_tr'] = M['tr_total'] - M['idx_total']
+        if len(bench_close) > 1 and len(idx_ret_d) > 30:
+            M['bench_total'] = (float(bench_close.iloc[-1]) / float(bench_close.iloc[0]) - 1) * 100
+            M['rel_tr'] = M['tr_total'] - M['bench_total']
             _al = pd.concat([ret_d.rename('s'), idx_ret_d.rename('m')], axis=1, join='inner').dropna()
             if len(_al) > 30 and float(_al['m'].var()) > 0:
                 M['beta'] = float(_al['s'].cov(_al['m'])) / float(_al['m'].var())
                 M['corr'] = float(_al['s'].corr(_al['m']))
-                # альфа (годовая): доходность бумаги минус бета × доходность рынка
+                # альфа (годовая): доходность бумаги минус бета × доходность бенчмарка
                 M['alpha_ann'] = (float(_al['s'].mean()) - M['beta'] * float(_al['m'].mean())) * 252 * 100
     else:
         dd_series = pd.Series(dtype=float)
@@ -186,7 +201,7 @@ def _(df, df_full, index_close, np, pd):
 
 
 @app.cell(hide_code=True)
-def _(M, df, mo, period_choice, ticker):
+def _(M, bench_name, df, mo, period_choice, ticker):
     # Сводка
     def _sgn(_v, _suffix='%', _nd=1):
         if _v != _v:  # NaN
@@ -202,12 +217,15 @@ def _(M, df, mo, period_choice, ticker):
         if 'source_ticker' in df.columns and df['source_ticker'].nunique() > 1:
             _src = (" · история склеена из: "
                     + " → ".join(df.sort_index()['source_ticker'].unique()))
-        _vs = ""
+        _vs_parts = []
         if 'idx_total' in M:
-            _vs = (f"- **Против IMOEX** ({_sgn(M['idx_total'])}): цена {_sgn(M['rel_px'])} "
-                   f"| полная доходность {_sgn(M['rel_tr'])}"
-                   + (f" | бета **{M['beta']:.2f}** | альфа {_sgn(M['alpha_ann'])} годовых"
-                      if 'beta' in M else "") + "\n")
+            _vs_parts.append(f"цена vs IMOEX ({_sgn(M['idx_total'])}): {_sgn(M['rel_px'])}")
+        if 'bench_total' in M:
+            _vs_parts.append(f"полная vs {bench_name} ({_sgn(M['bench_total'])}): {_sgn(M['rel_tr'])}")
+        if 'beta' in M:
+            _vs_parts.append(f"бета **{M['beta']:.2f}**")
+            _vs_parts.append(f"альфа {_sgn(M['alpha_ann'])} годовых")
+        _vs = ("- **Против рынка:** " + " | ".join(_vs_parts) + "\n") if _vs_parts else ""
         _levels = ""
         if 'off_52w_high' in M:
             _levels = (f"- **Уровни (52 нед.):** от максимума {_sgn(M['off_52w_high'])}, "
@@ -228,8 +246,8 @@ def _(M, df, mo, period_choice, ticker):
 
 
 @app.cell(hide_code=True)
-def _(M, adj, go, index_close, mo, plotly_available, price, ticker):
-    # Нормированный график: бумага (цена и полная доходность) против IMOEX, старт = 100
+def _(M, adj, go, index_close, mcftr_close, mo, plotly_available, price, ticker):
+    # Нормированный график, старт = 100: цена ↔ IMOEX, полная доходность ↔ MCFTR
     if not plotly_available or not M:
         block_overview = mo.md("")
     else:
@@ -244,8 +262,14 @@ def _(M, adj, go, index_close, mo, plotly_available, price, ticker):
                           hovertemplate='%{y:.1f}<extra>полная дох.</extra>')
         if len(index_close) > 1:
             _figo.add_scatter(x=index_close.index, y=index_close / index_close.iloc[0] * 100,
-                              name='IMOEX', line=dict(color='#7f7f7f', width=1.4, dash='dot'),
+                              name='IMOEX (цена)',
+                              line=dict(color='#7f7f7f', width=1.4, dash='dot'),
                               hovertemplate='%{y:.1f}<extra>IMOEX</extra>')
+        if len(mcftr_close) > 1:
+            _figo.add_scatter(x=mcftr_close.index, y=mcftr_close / mcftr_close.iloc[0] * 100,
+                              name='MCFTR (полная дох.)',
+                              line=dict(color='#8c564b', width=1.4, dash='dash'),
+                              hovertemplate='%{y:.1f}<extra>MCFTR</extra>')
         _figo.add_hline(y=100, line_color='black', line_width=0.7)
         _figo.update_layout(
             height=420, hovermode='x unified',
@@ -258,12 +282,13 @@ def _(M, adj, go, index_close, mo, plotly_available, price, ticker):
 
 
 @app.cell(hide_code=True)
-def _(M, go, index_close, mo, plotly_available, price, ticker):
-    # Относительная сила: цена бумаги / IMOEX (нормировано, >100 — обгоняет рынок)
-    if not plotly_available or not M or len(index_close) < 2:
-        block_rs = mo.md("*Относительная сила: нет данных IMOEX за период*") if M else mo.md("")
+def _(M, adj, bench_close, bench_name, go, mo, plotly_available, ticker):
+    # Относительная сила: полная доходность бумаги / бенчмарк полной доходности
+    # (нормировано, >100 — обгоняет рынок)
+    if not plotly_available or not M or len(bench_close) < 2:
+        block_rs = mo.md("*Относительная сила: нет данных индекса за период*") if M else mo.md("")
     else:
-        _joint = price.to_frame('p').join(index_close.to_frame('i'), how='inner').dropna()
+        _joint = adj.to_frame('p').join(bench_close.to_frame('i'), how='inner').dropna()
         _rs = (_joint['p'] / _joint['p'].iloc[0]) / (_joint['i'] / _joint['i'].iloc[0]) * 100
         _figr = go.Figure()
         _figr.add_scatter(x=_rs.index, y=_rs.values, name='RS',
@@ -272,8 +297,8 @@ def _(M, go, index_close, mo, plotly_available, price, ticker):
         _figr.add_hline(y=100, line_dash='dash', line_color='gray', line_width=1)
         _figr.update_layout(
             height=240,
-            title=dict(text=f'Относительная сила {ticker.value} / IMOEX '
-                            f'(выше 100 — обгоняет рынок)', font_size=13),
+            title=dict(text=f'Относительная сила {ticker.value} / {bench_name} '
+                            f'(полная доходность; выше 100 — обгоняет рынок)', font_size=13),
             margin=dict(t=40, l=10, r=10, b=10),
         )
         block_rs = _figr
@@ -281,8 +306,8 @@ def _(M, go, index_close, mo, plotly_available, price, ticker):
 
 
 @app.cell(hide_code=True)
-def _(M, go, idx_ret_d, mo, pd, plotly_available, ret_d):
-    # Скользящие бета и корреляция к IMOEX (окно 126 торговых дней ≈ полгода)
+def _(M, bench_name, go, idx_ret_d, mo, pd, plotly_available, ret_d):
+    # Скользящие бета и корреляция к бенчмарку (окно 126 торговых дней ≈ полгода)
     if not plotly_available or not M or len(idx_ret_d) < 150:
         block_beta = mo.md("")
     else:
@@ -299,7 +324,7 @@ def _(M, go, idx_ret_d, mo, pd, plotly_available, ret_d):
         _figb2.add_hline(y=1, line_dash='dash', line_color='gray', line_width=0.8)
         _figb2.update_layout(
             height=260, hovermode='x unified',
-            title=dict(text='Скользящие бета и корреляция к IMOEX', font_size=13),
+            title=dict(text=f'Скользящие бета и корреляция к {bench_name}', font_size=13),
             legend=dict(orientation='h', y=1.15, x=1, xanchor='right'),
             margin=dict(t=44, l=10, r=10, b=10),
         )
@@ -333,7 +358,7 @@ def _(M, dd_series, go, mo, plotly_available, ticker):
 
 
 @app.cell(hide_code=True)
-def _(M, mo):
+def _(M, bench_name, mo):
     # Метрики тремя колонками
     def _sgn(_v, _suffix='%', _nd=1):
         if _v != _v:
@@ -364,14 +389,14 @@ def _(M, mo):
         if 'beta' in M:
             _c3 = mo.md(
                 "**Против рынка**\n\n"
-                f"- IMOEX за период: {_sgn(M.get('idx_total', float('nan')))}\n"
-                f"- Отставание/опережение (цена): {_sgn(M['rel_px'])}\n"
-                f"- Бета: {M['beta']:.2f}\n"
-                f"- Корреляция: {M['corr']:.2f}\n"
+                f"- IMOEX (цена): {_sgn(M.get('idx_total', float('nan')))}\n"
+                f"- {bench_name} (полная): {_sgn(M.get('bench_total', float('nan')))}\n"
+                f"- Опережение (полная): {_sgn(M.get('rel_tr', float('nan')))}\n"
+                f"- Бета к {bench_name}: {M['beta']:.2f} (корр. {M['corr']:.2f})\n"
                 f"- Альфа (годовых): {_sgn(M['alpha_ann'])}"
             )
         else:
-            _c3 = mo.md("**Против рынка**\n\nнет данных IMOEX")
+            _c3 = mo.md("**Против рынка**\n\nнет данных индексов — обновите кэш (`python update_data.py`)")
         metrics_md = mo.hstack([_c1, _c2, _c3], justify='start', gap=3)
     return (metrics_md,)
 
