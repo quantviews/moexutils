@@ -229,7 +229,9 @@ def _(np, pd):
     def max_drawdown(eq):
         return float((eq / eq.cummax() - 1.0).min())
 
-    def perf_stats(ret, bench=None, freq=12):
+    def perf_stats(ret, bench=None, freq=12, rf=None):
+        """rf — месячная безрисковая ставка (Series в долях): Sharpe считается
+        по избыточной доходности ret - rf; CAGR/Vol/MaxDD — по сырой."""
         ret = ret.dropna()
         if ret.empty:
             return {}
@@ -237,10 +239,12 @@ def _(np, pd):
         _years = len(ret) / freq
         cagr = float(eq.iloc[-1] ** (1 / _years) - 1) if eq.iloc[-1] > 0 and _years > 0 else np.nan
         vol = float(ret.std(ddof=0) * np.sqrt(freq))
+        _ex = (ret - rf.reindex(ret.index).fillna(0.0)).dropna() if rf is not None else ret
+        _ex_vol = float(_ex.std(ddof=0) * np.sqrt(freq))
         out = {
             'CAGR': cagr,
             'Vol': vol,
-            'Sharpe': float(ret.mean() * freq / vol) if vol > 0 else np.nan,
+            'Sharpe': float(_ex.mean() * freq / _ex_vol) if _ex_vol > 0 else np.nan,
             'MaxDD': max_drawdown(eq),
             'Months': int(len(ret)),
         }
@@ -295,8 +299,12 @@ def _(mo):
     **Метрики в сводке:**
 
     - **CAGR** — среднегодовой темп роста капитала (сложный процент).
-    - **Sharpe** — доходность на единицу риска: средняя годовая доходность /
-      волатильность (rf=0). Выше 1 на длинном окне — редкость.
+    - **Sharpe** — избыточная доходность на единицу риска: средняя доходность
+      *сверх безрисковой ставки* / волатильность. По умолчанию rf — ключевая
+      ставка ЦБ (ряд `metadata/key_rate.csv`, до 09.2013 — ставка
+      рефинансирования); переключается на rf=0 в контролах. При российских
+      ставках разница огромна: rf=0 завышает Sharpe примерно вдвое.
+      Выше 1 на длинном окне — редкость.
     - **MaxDD** — максимальная просадка: худшее падение от пика до дна.
     - **Tracking error (TE)** — волатильность *активной* доходности
       (стратегия − бенчмарк), годовая. Показывает, насколько результат
@@ -339,12 +347,15 @@ def _(mo):
     trend_mode_dropdown = mo.ui.dropdown(
         options={"EWMAC 16/64": "ewmac", "Цена выше MA200": "ma200"},
         value="EWMAC 16/64", label="Сигнал тренда:")
+    rf_dropdown = mo.ui.dropdown(
+        options={"Ключевая ставка ЦБ": "key", "0 (без rf)": "zero"},
+        value="Ключевая ставка ЦБ", label="Безрисковая ставка для Sharpe:")
     mo.vstack([
         mo.hstack([lookback_slider, skip_slider, hold_slider], justify='start'),
         mo.hstack([q_dropdown, ls_checkbox, tc_slider], justify='start'),
         mo.hstack([topn_slider, missing_dropdown, weighting_dropdown], justify='start'),
         mo.hstack([vol_checkbox, vol_target_slider, lev_cap_dropdown], justify='start'),
-        mo.hstack([trend_checkbox, trend_mode_dropdown], justify='start'),
+        mo.hstack([trend_checkbox, trend_mode_dropdown, rf_dropdown], justify='start'),
     ])
     return (
         hold_slider,
@@ -353,6 +364,7 @@ def _(mo):
         ls_checkbox,
         missing_dropdown,
         q_dropdown,
+        rf_dropdown,
         skip_slider,
         tc_slider,
         topn_slider,
@@ -449,12 +461,14 @@ def _(
     lookback_slider,
     ls_checkbox,
     missing_dropdown,
+    moex,
     momentum_signal,
     np,
     perf_stats,
     px_m,
     q_dropdown,
     ret_m,
+    rf_dropdown,
     skip_slider,
     tc_slider,
     topn_slider,
@@ -507,16 +521,24 @@ def _(
     if leverage_series is not None:
         leverage_series = leverage_series.iloc[_warmup:]
 
-    stats_net = perf_stats(bt_single['ret_net'], bench_ret_m)
-    stats_gross = perf_stats(bt_single['ret_gross'])
+    # Безрисковая ставка для Sharpe: месячный ряд ключевой ставки ЦБ
+    if rf_dropdown.value == 'key':
+        rf_monthly = moex.risk_free_monthly(bt_single.index)
+        rf_mean_ann = float(rf_monthly.mean() * 12 * 100)
+    else:
+        rf_monthly = None
+        rf_mean_ann = None
+
+    stats_net = perf_stats(bt_single['ret_net'], bench_ret_m, rf=rf_monthly)
+    stats_gross = perf_stats(bt_single['ret_gross'], rf=rf_monthly)
     # Бенчмарк и сопоставимая статистика стратегии — на общем окне
     # (кэш MCFTR может начинаться позже старта стратегии)
     _common_idx = bt_single.index.intersection(bench_ret_m.index)
-    stats_bench = perf_stats(bench_ret_m.loc[_common_idx])
-    stats_net_common = perf_stats(bt_single.loc[_common_idx, 'ret_net'])
+    stats_bench = perf_stats(bench_ret_m.loc[_common_idx], rf=rf_monthly)
+    stats_net_common = perf_stats(bt_single.loc[_common_idx, 'ret_net'], rf=rf_monthly)
     common_start = _common_idx.min() if len(_common_idx) else None
-    return (bt_single, common_start, leverage_series, stats_bench, stats_gross,
-            stats_net, stats_net_common, trend_share, weights_single)
+    return (bt_single, common_start, leverage_series, rf_mean_ann, stats_bench,
+            stats_gross, stats_net, stats_net_common, trend_share, weights_single)
 
 
 @app.cell(hide_code=True)
@@ -526,6 +548,7 @@ def _(
     common_start,
     leverage_series,
     mo,
+    rf_mean_ann,
     stats_bench,
     stats_gross,
     stats_net,
@@ -577,6 +600,9 @@ def _(
             + (f"\n- Trend filter ({_trend_label} по IMOEX): "
                f"в рынке {trend_share * 100:.0f}% месяцев"
                if trend_share is not None else "")
+            + (f"\n- Sharpe — по избыточной доходности над ключевой ставкой ЦБ "
+               f"(средняя за окно: {rf_mean_ann:.1f}% годовых)"
+               if rf_mean_ann is not None else "\n- Sharpe считается при rf = 0")
         )
     single_summary
     return
@@ -843,6 +869,7 @@ def _(
     liq_m,
     missing_dropdown,
     mo,
+    moex,
     momentum_signal,
     np,
     objective_dropdown,
@@ -850,6 +877,7 @@ def _(
     perf_stats,
     px_m,
     ret_m,
+    rf_dropdown,
     run_grid_button,
     tc_slider,
     topn_slider,
@@ -887,6 +915,9 @@ def _(
         else:
             _gate_g = None
 
+        # Безрисковая ставка — как в контролах одиночной стратегии
+        _rf_g = moex.risk_free_monthly(_common) if rf_dropdown.value == 'key' else None
+
         _rows = []
         grid_best = None
         _best_score = -np.inf
@@ -907,9 +938,9 @@ def _(
                                                      tc_bps=tc_slider.value,
                                                      missing_mode=missing_dropdown.value)
                             _st_tr = perf_stats(_bt_g.loc[_train_idx, 'ret_net'],
-                                                _bench.loc[_train_idx])
+                                                _bench.loc[_train_idx], rf=_rf_g)
                             _st_te = perf_stats(_bt_g.loc[_test_idx, 'ret_net'],
-                                                _bench.loc[_test_idx])
+                                                _bench.loc[_test_idx], rf=_rf_g)
                             _score = _st_tr.get(objective_dropdown.value, np.nan)
                             if _score is None or not np.isfinite(_score):
                                 _score = -np.inf

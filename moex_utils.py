@@ -21,6 +21,7 @@ METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 INDEXES_FOLDER = os.path.join(BASE_DIR, "indexes")
 SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
 RENAMES_FILE = os.path.join(BASE_DIR, "metadata", "renames.csv")
+KEY_RATE_FILE = os.path.join(BASE_DIR, "metadata", "key_rate.csv")
 # Внешний реестр сплитов соседнего проекта dividends (если проекты лежат рядом)
 EXTERNAL_SPLITS_FILE = os.path.join(BASE_DIR, "..", "dividends", "metadata", "splits.json")
 
@@ -945,6 +946,35 @@ def apply_renames(df: pd.DataFrame, renames_file: Optional[str] = None) -> pd.Da
         df.loc[old_mask, 'ticker'] = row.new
 
     return df
+
+
+def load_key_rate(key_rate_file: Optional[str] = None) -> pd.DataFrame:
+    """
+    Загружает историю ключевой ставки ЦБ из metadata/key_rate.csv
+    (колонки: date — дата изменения, rate — ставка в % годовых).
+    До 13.09.2013 в файле используется ставка рефинансирования как прокси.
+    При изменении ставки достаточно дописать одну строку в конец файла.
+    """
+    if key_rate_file is None:
+        key_rate_file = KEY_RATE_FILE
+    if not os.path.exists(key_rate_file):
+        return pd.DataFrame(columns=['date', 'rate'])
+    return pd.read_csv(key_rate_file, parse_dates=['date']).sort_values('date')
+
+
+def risk_free_monthly(dates, key_rate_file: Optional[str] = None) -> pd.Series:
+    """
+    Месячная безрисковая ставка (в долях, не в %) на заданные даты:
+    действующая ключевая ставка ЦБ / 12, ffill по датам изменения;
+    до первой даты ряда — первое значение. Пустой файл → нули.
+    """
+    idx = pd.DatetimeIndex(dates)
+    kr = load_key_rate(key_rate_file)
+    if kr.empty:
+        return pd.Series(0.0, index=idx)
+    s = kr.set_index('date')['rate'].astype(float).sort_index()
+    combined = s.reindex(s.index.union(idx)).ffill().bfill()
+    return combined.reindex(idx) / 100.0 / 12.0
 
 
 def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = False):

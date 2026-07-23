@@ -703,6 +703,35 @@ class TestRenames:
         assert len(row) == 1
 
 
+# ---------------------------------------------------------------- key rate
+
+class TestKeyRate:
+    def test_missing_file_gives_zero_rate(self, tmp_path):
+        dates = pd.to_datetime(['2025-01-31', '2025-02-28'])
+        rf = mu.risk_free_monthly(dates, key_rate_file=str(tmp_path / 'nope.csv'))
+        assert rf.tolist() == [0.0, 0.0]
+
+    def test_ffill_between_changes_and_bfill_before_start(self, tmp_path):
+        path = tmp_path / 'key_rate.csv'
+        pd.DataFrame([('2025-02-15', 12.0), ('2025-04-10', 24.0)],
+                     columns=['date', 'rate']).to_csv(path, index=False)
+
+        dates = pd.to_datetime(['2025-01-31', '2025-02-28', '2025-03-31', '2025-04-30'])
+        rf = mu.risk_free_monthly(dates, key_rate_file=str(path))
+
+        # до первой даты — bfill (12%), между изменениями — ffill,
+        # после второго изменения — 24%; всё в месячных долях (/12/100)
+        assert rf.tolist() == pytest.approx([0.01, 0.01, 0.01, 0.02])
+
+    def test_real_registry_sane(self):
+        kr = mu.load_key_rate()
+        assert len(kr) > 50
+        assert kr['rate'].between(3, 25).all()
+        # известная точка: заморозка 28.02.2022 — ставка 20%
+        row = kr[kr['date'] == '2022-02-28']
+        assert len(row) == 1 and float(row['rate'].iloc[0]) == 20.0
+
+
 # ---------------------------------------------------------------- indexes: storage
 
 class TestIndexStorage:

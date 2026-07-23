@@ -11,6 +11,7 @@
 | `BONDS_FOLDER` | `<корень проекта>/bonds` | Parquet-файлы облигаций (`<SECID>.parquet`) |
 | `INDEXES_FOLDER` | `<корень проекта>/indexes` | Локальный кэш индексов (`<TICKER>.parquet`) |
 | `SPLITS_FILE` | `<корень проекта>/metadata/splits.csv` | Реестр сплитов акций (ticker, date, ratio) |
+| `KEY_RATE_FILE` | `<корень проекта>/metadata/key_rate.csv` | История ключевой ставки ЦБ (для безрисковой ставки) |
 
 Сообщения о ходе работы идут через логгер `moex_utils` (по умолчанию — в stdout, как обычный print; приглушить: `logging.getLogger("moex_utils").setLevel(logging.WARNING)`).
 
@@ -136,6 +137,19 @@ combined = moex.adjust_for_splits(moex.combine_moex_stocks())
 ```
 
 При добавлении нового сплита допишите строку в `metadata/splits.csv`.
+
+---
+
+## Безрисковая ставка
+
+### load_key_rate / risk_free_monthly
+
+```python
+load_key_rate(key_rate_file=None) -> pd.DataFrame
+risk_free_monthly(dates, key_rate_file=None) -> pd.Series
+```
+
+История ключевой ставки ЦБ из `metadata/key_rate.csv` (`date` — дата изменения, `rate` — % годовых; до 13.09.2013 — ставка рефинансирования как прокси). `risk_free_monthly` возвращает месячную ставку в долях (ставка/12) на заданные даты с ffill между изменениями — используется для Sharpe по избыточной доходности. При изменении ставки допишите одну строку в конец файла.
 
 ---
 

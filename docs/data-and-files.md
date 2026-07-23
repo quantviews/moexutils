@@ -24,7 +24,8 @@ moexutils/
 │   ├── stock-index-base.xlsx
 │   ├── sectors.csv         # справочник тикер→сектор (для секторного разреза)
 │   ├── splits.csv          # реестр сплитов: ticker,date,ratio,kind
-│   └── renames.csv         # реестр переименований: old,new,date (склейка историй, источник — в source_ticker)
+│   ├── renames.csv         # реестр переименований: old,new,date (склейка историй, источник — в source_ticker)
+│   └── key_rate.csv        # история ключевой ставки ЦБ: date,rate (безрисковая для Sharpe)
 └── (опционально) ../dividends/data/   # CSV дивидендов для adj_close
     ├── SBER.csv
     └── ...
