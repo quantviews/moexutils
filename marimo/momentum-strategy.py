@@ -356,24 +356,30 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
-    lookback_slider = mo.ui.slider(start=1, stop=12, step=1, value=6, label="Lookback (мес):")
-    skip_slider = mo.ui.slider(start=0, stop=2, step=1, value=1, label="Skip (мес):")
-    hold_slider = mo.ui.slider(start=1, stop=6, step=1, value=1, label="Holding (мес):")
+    # Определения контролов (компоновка — в следующей ячейке)
+    lookback_slider = mo.ui.slider(start=1, stop=12, step=1, value=6,
+                                   label="Lookback, мес:", show_value=True)
+    skip_slider = mo.ui.slider(start=0, stop=2, step=1, value=1,
+                               label="Skip, мес:", show_value=True)
+    hold_slider = mo.ui.slider(start=1, stop=6, step=1, value=1,
+                               label="Holding, мес:", show_value=True)
     q_dropdown = mo.ui.dropdown(options={"10%": 0.1, "20%": 0.2, "30%": 0.3},
-                                value="20%", label="Квантиль отбора:")
+                                value="20%", label="Доля лучших бумаг:")
     ls_checkbox = mo.ui.checkbox(value=False, label="Long-Short (шорт проигравших)")
-    tc_slider = mo.ui.slider(start=0, stop=50, step=5, value=15, label="Издержки (bps за оборот):")
+    tc_slider = mo.ui.slider(start=0, stop=50, step=5, value=15,
+                             label="Издержки, bps за оборот:", show_value=True)
     topn_slider = mo.ui.slider(start=20, stop=100, step=10, value=50,
-                               label="Фильтр ликвидности (top-N по обороту):")
+                               label="Top-N по обороту:", show_value=True)
     missing_dropdown = mo.ui.dropdown(options={"exit (выход по 0%)": "exit",
                                                "penalize (-100%)": "penalize"},
-                                      value="exit (выход по 0%)", label="Пропуск цены:")
+                                      value="exit (выход по 0%)", label="Делистинг:")
     weighting_dropdown = mo.ui.dropdown(
         options={"Равные веса": "equal", "Inverse-vol (вес ∝ 1/σ бумаги)": "invvol"},
         value="Равные веса", label="Взвешивание:")
     vol_checkbox = mo.ui.checkbox(value=False, label="Volatility scaling")
     vol_target_slider = mo.ui.slider(start=10, stop=30, step=1, value=15,
-                                     label="Целевая волатильность (% годовых):")
+                                     label="Целевая волатильность, % годовых:",
+                                     show_value=True)
     lev_cap_dropdown = mo.ui.dropdown(
         options={"1.0× (без плеча)": 1.0, "1.5×": 1.5, "2.0×": 2.0},
         value="1.5×", label="Макс. плечо:")
@@ -383,23 +389,15 @@ def _(mo):
         value="EWMAC 16/64", label="Сигнал тренда:")
     rf_dropdown = mo.ui.dropdown(
         options={"Ключевая ставка ЦБ": "key", "0 (без rf)": "zero"},
-        value="Ключевая ставка ЦБ", label="Безрисковая ставка для Sharpe:")
+        value="Ключевая ставка ЦБ", label="Безрисковая для Sharpe:")
     signal_dropdown = mo.ui.dropdown(
         options={"Momentum": "mom",
                  "Композит: momentum + low-vol + дивиденды": "composite"},
-        value="Momentum", label="Сигнал отбора:")
+        value="Momentum", label="Сигнал:")
     lowvol_w_slider = mo.ui.slider(start=0.0, stop=1.0, step=0.25, value=0.5,
-                                   label="Вес low-vol (momentum = 1):")
+                                   label="Вес low-vol (momentum = 1):", show_value=True)
     div_w_slider = mo.ui.slider(start=0.0, stop=1.0, step=0.25, value=0.5,
-                                label="Вес дивидендов:")
-    mo.vstack([
-        mo.hstack([lookback_slider, skip_slider, hold_slider], justify='start'),
-        mo.hstack([q_dropdown, ls_checkbox, tc_slider], justify='start'),
-        mo.hstack([topn_slider, missing_dropdown, weighting_dropdown], justify='start'),
-        mo.hstack([vol_checkbox, vol_target_slider, lev_cap_dropdown], justify='start'),
-        mo.hstack([trend_checkbox, trend_mode_dropdown, rf_dropdown], justify='start'),
-        mo.hstack([signal_dropdown, lowvol_w_slider, div_w_slider], justify='start'),
-    ])
+                                label="Вес дивидендов:", show_value=True)
     return (
         div_w_slider,
         hold_slider,
@@ -420,6 +418,59 @@ def _(mo):
         vol_target_slider,
         weighting_dropdown,
     )
+
+
+@app.cell(hide_code=True)
+def _(
+    div_w_slider,
+    hold_slider,
+    lev_cap_dropdown,
+    lookback_slider,
+    lowvol_w_slider,
+    ls_checkbox,
+    missing_dropdown,
+    mo,
+    q_dropdown,
+    rf_dropdown,
+    signal_dropdown,
+    skip_slider,
+    tc_slider,
+    topn_slider,
+    trend_checkbox,
+    trend_mode_dropdown,
+    vol_checkbox,
+    vol_target_slider,
+    weighting_dropdown,
+):
+    # Панель параметров: логические группы; зависимые контролы появляются
+    # только при включении своей опции
+    _sig_row = [signal_dropdown, lookback_slider, skip_slider]
+    if signal_dropdown.value == 'composite':
+        _sig_row += [lowvol_w_slider, div_w_slider]
+
+    _risk_row = [vol_checkbox]
+    if vol_checkbox.value:
+        _risk_row += [vol_target_slider, lev_cap_dropdown]
+    _risk_row += [trend_checkbox]
+    if trend_checkbox.value:
+        _risk_row += [trend_mode_dropdown]
+
+    controls_panel = mo.vstack([
+        mo.md("**🎯 Сигнал отбора** — что и за какой период измеряем"),
+        mo.hstack(_sig_row, justify='start', wrap=True),
+        mo.md("**📦 Портфель** — как из сигнала собираются позиции"),
+        mo.hstack([q_dropdown, weighting_dropdown, hold_slider, ls_checkbox],
+                  justify='start', wrap=True),
+        mo.md("**🌐 Вселенная и издержки**"),
+        mo.hstack([topn_slider, tc_slider, missing_dropdown],
+                  justify='start', wrap=True),
+        mo.md("**🛡️ Риск-менеджмент** — надстройки поверх стратегии"),
+        mo.hstack(_risk_row, justify='start', wrap=True),
+        mo.md("**⚙️ Метрики**"),
+        mo.hstack([rf_dropdown], justify='start'),
+    ], gap=0.4)
+    controls_panel
+    return
 
 
 @app.cell(hide_code=True)
@@ -951,7 +1002,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     train_frac_slider = mo.ui.slider(start=50, stop=90, step=5, value=70,
-                                     label="% месяцев на train:")
+                                     label="% месяцев на train:", show_value=True)
     objective_dropdown = mo.ui.dropdown(options=["Sharpe", "IR"], value="Sharpe",
                                         label="Критерий отбора:")
     run_grid_button = mo.ui.run_button(label="Запустить grid search")
