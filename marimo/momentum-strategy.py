@@ -91,6 +91,16 @@ def _(mo, moex, np, pd):
     vol_m = _vol_d.groupby(_vol_d.index.to_period('M')).last()
     vol_m.index = vol_m.index.to_timestamp('M')
 
+    # Дивидендная доходность за 12 мес (фактор для композитного сигнала):
+    # разница полной (adj_close) и ценовой (close) 12-месячной доходности.
+    # Обе серии в единой пост-сплитовой базе — никаких проблем с базой
+    # дивидендов (рестейт ВТБ и т.п.) этот способ не имеет.
+    _px_close_d = _c.pivot_table(index=_c.index, columns='ticker',
+                                 values='close', aggfunc='last').sort_index()
+    _px_close_m = _px_close_d.groupby(_px_close_d.index.to_period('M')).last()
+    _px_close_m.index = _px_close_m.index.to_timestamp('M')
+    div12_m = (px_m / px_m.shift(12) - 1) - (_px_close_m / _px_close_m.shift(12) - 1)
+
     # Фактическая последняя дата дневных данных: месячная панель лейблится
     # концом периода, но последний месяц может быть незавершенным
     last_data_date = _c.index.max()
@@ -105,7 +115,7 @@ def _(mo, moex, np, pd):
            if _partial else "")
     )
     data_status
-    return last_data_date, liq_m, px_m, ret_m, vol_m
+    return div12_m, last_data_date, liq_m, px_m, ret_m, vol_m
 
 
 @app.cell(hide_code=True)
@@ -159,6 +169,26 @@ def _(np, pd):
     def momentum_signal(px, lookback, skip):
         """P(t-skip) / P(t-lookback-skip) - 1"""
         return px.shift(skip) / px.shift(lookback + skip) - 1.0
+
+    def composite_signal(mom_sig, vol_panel, div_panel,
+                         w_mom=1.0, w_lowvol=0.5, w_div=0.5):
+        """Композитный скор: взвешенная сумма кросс-секционных процентильных
+        рангов momentum, low-vol (ниже волатильность — выше ранг) и
+        12-месячной дивидендной доходности. Недостающие факторы бумаги
+        исключаются из знаменателя; momentum обязателен."""
+        r_mom = mom_sig.rank(axis=1, pct=True)
+        r_lowvol = (-vol_panel).rank(axis=1, pct=True)
+        r_div = div_panel.rank(axis=1, pct=True)
+
+        r_lowvol = r_lowvol.reindex(index=r_mom.index, columns=r_mom.columns)
+        r_div = r_div.reindex(index=r_mom.index, columns=r_mom.columns)
+
+        num = (w_mom * r_mom.fillna(0.0) + w_lowvol * r_lowvol.fillna(0.0)
+               + w_div * r_div.fillna(0.0))
+        den = (w_mom * r_mom.notna() + w_lowvol * r_lowvol.notna()
+               + w_div * r_div.notna())
+        score = num / den.replace(0, np.nan)
+        return score.where(r_mom.notna())
 
     def build_rebal_weights(sig, liq, q, long_short, top_n_liq,
                             weighting='equal', vol=None):
@@ -257,7 +287,8 @@ def _(np, pd):
                 out['TE'] = _te
         return out
 
-    return apply_holding, backtest_monthly, build_rebal_weights, max_drawdown, momentum_signal, perf_stats
+    return (apply_holding, backtest_monthly, build_rebal_weights,
+            composite_signal, max_drawdown, momentum_signal, perf_stats)
 
 
 @app.cell(hide_code=True)
@@ -295,6 +326,9 @@ def _(mo):
     - **Volatility scaling** — см. пояснение ниже при включении опции.
     - **Trend filter** — портфель держится только при аптренде IMOEX
       (EWMAC 16/64 или цена выше MA200), иначе кэш; см. пояснение при включении.
+    - **Сигнал отбора** — чистый momentum или композит из трех факторов
+      (momentum + low-vol + дивидендная доходность 12м, взвешенные ранги);
+      см. пояснение при выборе композита.
 
     **Метрики в сводке:**
 
@@ -350,21 +384,33 @@ def _(mo):
     rf_dropdown = mo.ui.dropdown(
         options={"Ключевая ставка ЦБ": "key", "0 (без rf)": "zero"},
         value="Ключевая ставка ЦБ", label="Безрисковая ставка для Sharpe:")
+    signal_dropdown = mo.ui.dropdown(
+        options={"Momentum": "mom",
+                 "Композит: momentum + low-vol + дивиденды": "composite"},
+        value="Momentum", label="Сигнал отбора:")
+    lowvol_w_slider = mo.ui.slider(start=0.0, stop=1.0, step=0.25, value=0.5,
+                                   label="Вес low-vol (momentum = 1):")
+    div_w_slider = mo.ui.slider(start=0.0, stop=1.0, step=0.25, value=0.5,
+                                label="Вес дивидендов:")
     mo.vstack([
         mo.hstack([lookback_slider, skip_slider, hold_slider], justify='start'),
         mo.hstack([q_dropdown, ls_checkbox, tc_slider], justify='start'),
         mo.hstack([topn_slider, missing_dropdown, weighting_dropdown], justify='start'),
         mo.hstack([vol_checkbox, vol_target_slider, lev_cap_dropdown], justify='start'),
         mo.hstack([trend_checkbox, trend_mode_dropdown, rf_dropdown], justify='start'),
+        mo.hstack([signal_dropdown, lowvol_w_slider, div_w_slider], justify='start'),
     ])
     return (
+        div_w_slider,
         hold_slider,
         lev_cap_dropdown,
         lookback_slider,
+        lowvol_w_slider,
         ls_checkbox,
         missing_dropdown,
         q_dropdown,
         rf_dropdown,
+        signal_dropdown,
         skip_slider,
         tc_slider,
         topn_slider,
@@ -450,15 +496,56 @@ def _(mo, trend_checkbox):
 
 
 @app.cell(hide_code=True)
+def _(mo, signal_dropdown):
+    # Пояснение к композитному сигналу (показывается при выборе композита)
+    if signal_dropdown.value == 'composite':
+        composite_explain = mo.md(r"""
+    **Как устроен композитный сигнал.** Вместо одного momentum бумаги
+    ранжируются по трем факторам сразу; скор — взвешенная сумма
+    кросс-секционных процентильных рангов:
+
+    $$score_i = \frac{w_m \cdot rank(mom_i) + w_{lv} \cdot rank(-\sigma_i)
+    + w_d \cdot rank(divyield_i)}{w_m + w_{lv} + w_d}$$
+
+    - **Momentum** — как в базовой стратегии (lookback/skip из контролов выше).
+    - **Low-vol** — ранг по *низкой* волатильности (σ за 63 торговых дня):
+      аномалия низкого риска — спокойные бумаги исторически дают доходность
+      не хуже буйных при меньшем риске.
+    - **Дивиденды** — 12-месячная дивидендная доходность, вычисленная как
+      разница полной (adj_close) и ценовой (close) годовой доходности —
+      без парсинга дивидендных файлов и проблем с базой после сплитов.
+
+    Ранги (а не сырые значения) делают факторы сопоставимыми по масштабу.
+    Если у бумаги нет какого-то фактора (короткая история), он исключается
+    из знаменателя; momentum обязателен. Дальше всё как обычно: top-квантиль
+    по скору, фильтр ликвидности, взвешивание, издержки.
+
+    Зачем: факторы слабо коррелированы, и их сумма дает более стабильный
+    сигнал, чем каждый по отдельности (диверсификация источников альфы —
+    практически единственный «бесплатный обед» при малом числе бумаг).
+    Цена: композит «размывает» чистый momentum — в годы, когда моментум
+    силен, композит отстанет от него.
+    """)
+    else:
+        composite_explain = mo.md("")
+    composite_explain
+    return
+
+
+@app.cell(hide_code=True)
 def _(
     apply_holding,
     backtest_monthly,
     bench_ret_m,
     build_rebal_weights,
+    composite_signal,
+    div12_m,
+    div_w_slider,
     hold_slider,
     lev_cap_dropdown,
     liq_m,
     lookback_slider,
+    lowvol_w_slider,
     ls_checkbox,
     missing_dropdown,
     moex,
@@ -469,6 +556,7 @@ def _(
     q_dropdown,
     ret_m,
     rf_dropdown,
+    signal_dropdown,
     skip_slider,
     tc_slider,
     topn_slider,
@@ -482,6 +570,11 @@ def _(
 ):
     # Бэктест одиночной стратегии
     _sig = momentum_signal(px_m, lookback_slider.value, skip_slider.value)
+    if signal_dropdown.value == 'composite':
+        _sig = composite_signal(_sig, vol_m, div12_m,
+                                w_mom=1.0,
+                                w_lowvol=lowvol_w_slider.value,
+                                w_div=div_w_slider.value)
     _w0 = build_rebal_weights(_sig, liq_m, q_dropdown.value,
                               ls_checkbox.value, topn_slider.value,
                               weighting=weighting_dropdown.value, vol=vol_m)
@@ -546,9 +639,12 @@ def _(
     bench_name,
     bt_single,
     common_start,
+    div_w_slider,
     leverage_series,
+    lowvol_w_slider,
     mo,
     rf_mean_ann,
+    signal_dropdown,
     stats_bench,
     stats_gross,
     stats_net,
@@ -603,6 +699,9 @@ def _(
             + (f"\n- Sharpe — по избыточной доходности над ключевой ставкой ЦБ "
                f"(средняя за окно: {rf_mean_ann:.1f}% годовых)"
                if rf_mean_ann is not None else "\n- Sharpe считается при rf = 0")
+            + (f"\n- Сигнал: композит (momentum 1.0 / low-vol {lowvol_w_slider.value} / "
+               f"дивиденды {div_w_slider.value})"
+               if signal_dropdown.value == 'composite' else "")
         )
     single_summary
     return
@@ -867,6 +966,10 @@ def _(
     bench_ret_m,
     build_rebal_weights,
     liq_m,
+    composite_signal,
+    div12_m,
+    div_w_slider,
+    lowvol_w_slider,
     missing_dropdown,
     mo,
     moex,
@@ -879,6 +982,7 @@ def _(
     ret_m,
     rf_dropdown,
     run_grid_button,
+    signal_dropdown,
     tc_slider,
     topn_slider,
     train_frac_slider,
@@ -927,6 +1031,11 @@ def _(
                     for _qq in (0.1, 0.2):
                         for _ls in (False, True):
                             _sig_g = momentum_signal(_px, _lb, _sk)
+                            if signal_dropdown.value == 'composite':
+                                _sig_g = composite_signal(
+                                    _sig_g, vol_m, div12_m, w_mom=1.0,
+                                    w_lowvol=lowvol_w_slider.value,
+                                    w_div=div_w_slider.value)
                             _w_g = apply_holding(
                                 build_rebal_weights(_sig_g, _liq, _qq, _ls, topn_slider.value,
                                                     weighting=weighting_dropdown.value,
