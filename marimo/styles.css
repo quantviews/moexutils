@@ -1,6 +1,26 @@
-/* Общие стили для marimo-ноутбуков проекта.
+/* Общие стили для marimo-ноутбуков проекта — в фирменном стиле НИУ ВШЭ.
    Подключение: app = marimo.App(css_file="styles.css")
-   Путь берется относительно файла ноутбука. */
+   Путь берется относительно файла ноутбука.
+
+   Цвета приближены к вебу hse.ru (точные коды брендбука — в закрытом
+   Figma-руководстве): глубокий синий #102D69, акцентный синий #0050CF.
+   Шрифт HSE Sans подхватывается, если установлен в системе. */
+
+:root {
+    --hse-navy: #102D69;
+    --hse-blue: #0050CF;
+    --hse-blue-light: #E8EFFA;
+    --hse-border: #D5DEEE;
+}
+
+/* Фирменный шрифт с фолбэком */
+.prose,
+.markdown,
+.marimo-ui-element,
+marimo-ui-element,
+.console-output {
+    font-family: "HSE Sans", "HSE Sans Text", "Segoe UI", Arial, sans-serif;
+}
 
 /* Markdown-вывод (mo.md): базовый текст крупнее */
 .prose {
@@ -8,13 +28,50 @@
     line-height: 1.55;
 }
 
+/* Заголовки — глубокий синий ВШЭ */
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4 {
+    color: var(--hse-navy);
+    font-weight: 600;
+}
+
 .prose h1 { font-size: 1.9rem; }
-.prose h2 { font-size: 1.55rem; }
+
+.prose h2 {
+    font-size: 1.55rem;
+    border-bottom: 2px solid var(--hse-navy);
+    padding-bottom: 0.15em;
+}
+
 .prose h3 { font-size: 1.3rem; }
+
+/* Ссылки */
+.prose a {
+    color: var(--hse-blue);
+}
+
+/* Цитаты/выноски */
+.prose blockquote {
+    border-left: 3px solid var(--hse-blue);
+    background: var(--hse-blue-light);
+}
 
 /* Таблицы в markdown (в т.ч. «Необычная активность») */
 .prose table {
     font-size: 15px;
+    border-color: var(--hse-border);
+}
+
+.prose table th {
+    background: var(--hse-navy);
+    color: #ffffff;
+    font-weight: 600;
+}
+
+.prose table tr:nth-child(even) td {
+    background: var(--hse-blue-light);
 }
 
 /* Интерактивная таблица mo.ui.table */
@@ -27,6 +84,7 @@
 .marimo-ui-element label,
 marimo-ui-element label {
     font-size: 15px;
+    color: var(--hse-navy);
 }
 
 /* Вывод print() в консоли ячейки */
@@ -34,7 +92,8 @@ marimo-ui-element label {
     font-size: 14px;
 }
 
-/* Раскраска плюс/минус в сводках: <span class="pos">+1.2%</span> */
+/* Раскраска плюс/минус в сводках: <span class="pos">+1.2%</span>
+   (семантические цвета, согласованы со шкалой RdYlGn графиков) */
 .prose .pos,
 .pos {
     color: #1a9850;
@@ -45,4 +104,18 @@ marimo-ui-element label {
 .neg {
     color: #d73027;
     font-weight: 600;
+}
+
+/* Темная тема: синие приглушаются до читаемых на темном фоне */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --hse-navy: #8FAEE8;
+        --hse-blue: #6D9BEE;
+        --hse-blue-light: rgba(109, 155, 238, 0.12);
+        --hse-border: #3A4A6B;
+    }
+
+    .prose table th {
+        background: #1E3F7D;
+    }
 }
