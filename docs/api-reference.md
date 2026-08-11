@@ -268,6 +268,19 @@ update_moex_bond(secid, session=None) -> None
 
 ---
 
+### Вселенная облигаций
+
+```python
+save_bonds_params(segment='TQOB', session=None) -> pd.DataFrame
+read_bonds_params() -> pd.DataFrame
+download_bonds_universe(segment='TQOB', start='2014-01-01', session=None) -> int
+update_all_bonds(session=None, refresh_params=True) -> None
+```
+
+`download_bonds_universe` — первичная выгрузка доски: снапшот параметров всех выпусков в `bonds/params.parquet` (колонка `segment`; при повторном снапшоте записи доски заменяются, чужие доски не трогаются) + история цен каждого выпуска. `update_all_bonds` — инкрементальное обновление всех сохранённых выпусков и параметров (шаг 1c в `update_data.py`). Запуск из CLI: `python update_data.py --bonds-init TQOB` (разово), дальше — штатный `update_data.py`.
+
+---
+
 ### calculate_ytm
 
 ```python
@@ -278,13 +291,14 @@ calculate_ytm(price, face_value, coupon_rate, years_to_maturity, coupon_freq=2) 
 
 ---
 
-### calculate_duration
+### calculate_duration / calculate_convexity
 
 ```python
 calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm, coupon_freq=2) -> float
+calculate_convexity(price, face_value, coupon_rate, years_to_maturity, ytm, coupon_freq=2) -> float
 ```
 
-Модифицированная дюрация в годах (через дюрацию Маколея по заданной YTM).
+Модифицированная дюрация (в годах) и модифицированная выпуклость (в годах²) по заданной YTM: dP/P ≈ −D·dy + 0.5·C·dy².
 
 ---
 
@@ -294,7 +308,7 @@ calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm, coupo
 add_bond_metrics(df, params) -> pd.DataFrame
 ```
 
-Добавляет `years_to_maturity`, `ytm`, `duration` к ряду цен. `params` — строка из `get_moex_bond_params` (нужны `FACEVALUE`, `COUPONPERCENT`, `MATDATE`). Цена берётся из `CLOSE`, при отсутствии — из `WAPRICE`. Если `MATDATE` отсутствует, метрики заполняются NaN.
+Добавляет `years_to_maturity`, `ytm`, `duration`, `convexity` к ряду цен. `params` — строка из `get_moex_bond_params` (нужны `FACEVALUE`, `COUPONPERCENT`, `MATDATE`). Цена берётся из `CLOSE`, при отсутствии — из `WAPRICE`. Если `MATDATE` отсутствует, метрики заполняются NaN.
 
 ---
 
@@ -316,6 +330,8 @@ python update_data.py [--no-update] [--no-adj] [--no-cap] [--div-folder PATH] [-
 | `--no-index` | Не обновлять индексы |
 | `--indexes` | Индексы через запятую (по умолчанию `IMOEX`) |
 | `--rebuild` | Перескачать историю всех тикеров целиком (после смены методики данных) |
+| `--no-bonds` | Не обновлять облигации |
+| `--bonds-init` | Первичная выгрузка вселенной облигаций доски (например `TQOB`) |
 | `--div-folder` | Папка с CSV дивидендов (по умолчанию `../dividends/data`) |
 | `--data-folder` | Папка с Parquet |
 | `--metadata-file` | Путь к Excel с метаданными |

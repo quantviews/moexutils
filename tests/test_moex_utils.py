@@ -971,6 +971,73 @@ class TestBondsStorage:
         mu.update_moex_bond('BOND1')  # не должно упасть
 
 
+# ---------------------------------------------------------------- bonds: universe
+
+class TestBondsUniverse:
+    @pytest.fixture(autouse=True)
+    def bonds_folder(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        return str(tmp_path)
+
+    LIST_TQOB = pd.DataFrame({'SECID': ['SU26238RMFS4', 'SU26240RMFS0'],
+                              'SHORTNAME': ['ОФЗ 26238', 'ОФЗ 26240'],
+                              'COUPONPERCENT': [7.1, 7.0]})
+    LIST_TQCB = pd.DataFrame({'SECID': ['RU000A0001'],
+                              'SHORTNAME': ['Корп 1'],
+                              'COUPONPERCENT': [12.0]})
+
+    def test_save_bonds_params_merges_segments(self, bonds_folder, monkeypatch):
+        _lists = {'TQOB': self.LIST_TQOB, 'TQCB': self.LIST_TQCB}
+        monkeypatch.setattr(mu, 'get_moex_bonds_list',
+                            lambda segment, session=None: _lists[segment].copy())
+
+        mu.save_bonds_params('TQOB')
+        mu.save_bonds_params('TQCB')
+
+        params = mu.read_bonds_params()
+        assert len(params) == 3
+        assert set(params['segment']) == {'TQOB', 'TQCB'}
+
+        # повторный снапшот той же доски заменяет её записи, чужие не трогает
+        mu.save_bonds_params('TQOB')
+        params2 = mu.read_bonds_params()
+        assert len(params2) == 3
+
+    def test_download_bonds_universe(self, bonds_folder, monkeypatch):
+        monkeypatch.setattr(mu, 'get_moex_bonds_list',
+                            lambda segment, session=None: self.LIST_TQOB.copy())
+        saved = []
+        monkeypatch.setattr(mu, 'save_moex_bond',
+                            lambda secid, start=None, session=None: saved.append(secid))
+
+        n = mu.download_bonds_universe('TQOB', start='2020-01-01')
+        assert n == 2
+        assert sorted(saved) == ['SU26238RMFS4', 'SU26240RMFS0']
+        assert len(mu.read_bonds_params()) == 2
+
+    def test_update_all_bonds_skips_params_file(self, bonds_folder, monkeypatch):
+        # два выпуска + params.parquet, который не является выпуском
+        idx = pd.to_datetime(['2025-01-01'])
+        for secid in ('BOND1', 'BOND2'):
+            pd.DataFrame({'CLOSE': [100.0]}, index=idx).to_parquet(
+                f"{bonds_folder}/{secid}.parquet")
+        pd.DataFrame({'SECID': ['BOND1'], 'segment': ['TQOB']}).to_parquet(
+            f"{bonds_folder}/params.parquet")
+
+        updated = []
+        monkeypatch.setattr(mu, 'update_moex_bond',
+                            lambda secid, session=None: updated.append(secid))
+        monkeypatch.setattr(mu, 'save_bonds_params',
+                            lambda segment, session=None: pd.DataFrame())
+
+        mu.update_all_bonds()
+        assert sorted(updated) == ['BOND1', 'BOND2']
+
+    def test_read_bonds_params_missing(self):
+        with pytest.raises(FileNotFoundError):
+            mu.read_bonds_params()
+
+
 # ---------------------------------------------------------------- bond metrics
 
 class TestBondMetrics:
@@ -1017,6 +1084,22 @@ class TestBondMetrics:
                                          years_to_maturity=5, ytm=10, coupon_freq=2)
         assert 0 < duration < 5
 
+    def test_convexity_zero_coupon(self):
+        # Бескупонная: единственный CF в периоде n → C = n(n+1)/(f²(1+y_p)²)
+        n, f, ytm = 2, 2, 10.0
+        y_p = ytm / 100 / f
+        expected = n * (n + 1) / (f ** 2 * (1 + y_p) ** 2)
+        convexity = mu.calculate_convexity(price=90, face_value=1000, coupon_rate=0,
+                                           years_to_maturity=1, ytm=ytm, coupon_freq=f)
+        assert convexity == pytest.approx(expected, rel=1e-9)
+
+    def test_convexity_properties(self):
+        # Положительна и растет со сроком
+        c5 = mu.calculate_convexity(100, 1000, 10, 5, 10)
+        c10 = mu.calculate_convexity(100, 1000, 10, 10, 10)
+        assert 0 < c5 < c10
+        assert mu.calculate_convexity(100, 1000, 10, 0, 10) == 0.0
+
     def test_add_bond_metrics(self):
         dates = pd.date_range('2025-01-01', periods=3, freq='D')
         df = pd.DataFrame({'CLOSE': [102, 103, 104]}, index=dates)
@@ -1024,7 +1107,7 @@ class TestBondMetrics:
 
         result = mu.add_bond_metrics(df, params)
 
-        assert {'ytm', 'duration', 'years_to_maturity'} <= set(result.columns)
+        assert {'ytm', 'duration', 'convexity', 'years_to_maturity'} <= set(result.columns)
         assert len(result) == 3
         # срок до погашения убывает с каждым днем
         assert result['years_to_maturity'].is_monotonic_decreasing

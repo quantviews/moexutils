@@ -1403,6 +1403,108 @@ def update_moex_bond(secid: str, session: Optional[requests.Session] = None) -> 
     
     logger.info(f"[OK] Updated bond {secid}")
 
+def save_bonds_params(segment: str = 'TQOB', session: Optional[requests.Session] = None) -> pd.DataFrame:
+    """
+    Снапшот параметров облигаций доски (купон, погашение, номинал и др.)
+    в bonds/params.parquet. Записи других досок сохраняются; по SECID — keep last.
+    """
+    bonds_list = get_moex_bonds_list(segment, session=session)
+    if bonds_list.empty or 'SECID' not in bonds_list.columns:
+        logger.warning(f"[WARN] {segment}: пустой список облигаций — параметры не обновлены")
+        return bonds_list
+
+    bonds_list = bonds_list.copy()
+    bonds_list['segment'] = segment
+
+    os.makedirs(BONDS_FOLDER, exist_ok=True)
+    params_path = os.path.join(BONDS_FOLDER, 'params.parquet')
+    if os.path.exists(params_path):
+        old = pd.read_parquet(params_path)
+        combined = pd.concat([old[old.get('segment') != segment], bonds_list],
+                             ignore_index=True)
+    else:
+        combined = bonds_list
+    combined = combined.drop_duplicates(subset='SECID', keep='last')
+
+    tmp_path = params_path + '.tmp'
+    combined.to_parquet(tmp_path)
+    os.replace(tmp_path, params_path)
+    logger.info(f"[OK] {segment}: параметры {len(bonds_list)} выпусков → {params_path}")
+    return bonds_list
+
+
+def read_bonds_params() -> pd.DataFrame:
+    """Читает снапшот параметров облигаций bonds/params.parquet."""
+    params_path = os.path.join(BONDS_FOLDER, 'params.parquet')
+    if not os.path.exists(params_path):
+        raise FileNotFoundError(
+            f"Файл параметров не найден: {params_path}. "
+            f"Выполните download_bonds_universe() или update_data.py --bonds-init TQOB.")
+    return pd.read_parquet(params_path)
+
+
+def download_bonds_universe(segment: str = 'TQOB', start: str = '2014-01-01',
+                            session: Optional[requests.Session] = None) -> int:
+    """
+    Первичная выгрузка вселенной облигаций доски: снапшот параметров
+    + история цен каждого выпуска в bonds/<SECID>.parquet.
+
+    Returns:
+    int: число успешно сохраненных выпусков.
+    """
+    if session is None:
+        session = requests.Session()
+
+    bonds_list = save_bonds_params(segment, session=session)
+    if bonds_list.empty:
+        return 0
+
+    saved = 0
+    for secid in bonds_list['SECID'].astype(str):
+        try:
+            save_moex_bond(secid, start=start, session=session)
+            saved += 1
+        except Exception as e:
+            logger.error(f"[ERROR] {secid}: не удалось выгрузить историю — {e}")
+    logger.info(f"Выгружено выпусков: {saved} из {len(bonds_list)} ({segment})")
+    return saved
+
+
+def update_all_bonds(session: Optional[requests.Session] = None,
+                     refresh_params: bool = True) -> None:
+    """
+    Инкрементально обновляет все сохраненные выпуски в bonds/
+    и (опционально) снапшот параметров по всем доскам из params.parquet.
+    """
+    if not os.path.isdir(BONDS_FOLDER):
+        logger.info("Папка bonds/ отсутствует — нечего обновлять")
+        return
+
+    secids = [f[:-len('.parquet')] for f in os.listdir(BONDS_FOLDER)
+              if f.endswith('.parquet') and f != 'params.parquet']
+    if not secids:
+        logger.info("В bonds/ нет сохраненных выпусков — выполните download_bonds_universe()")
+        return
+
+    if session is None:
+        session = requests.Session()
+
+    logger.info(f"Found {len(secids)} bonds to update")
+    for secid in secids:
+        try:
+            update_moex_bond(secid, session=session)
+        except Exception as e:
+            logger.error(f"Error updating bond {secid}: {e}")
+
+    params_path = os.path.join(BONDS_FOLDER, 'params.parquet')
+    if refresh_params and os.path.exists(params_path):
+        try:
+            for seg in pd.read_parquet(params_path)['segment'].dropna().unique():
+                save_bonds_params(str(seg), session=session)
+        except Exception as e:
+            logger.warning(f"[WARN] Не удалось обновить параметры облигаций: {e}")
+
+
 def calculate_ytm(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, coupon_freq: int = 2) -> float:
     """
     Calculates Yield to Maturity (YTM) for a bond.
@@ -1473,6 +1575,31 @@ def calculate_duration(price: float, face_value: float, coupon_rate: float, year
     
     return modified_duration
 
+def calculate_convexity(price: float, face_value: float, coupon_rate: float,
+                        years_to_maturity: float, ytm: float, coupon_freq: int = 2) -> float:
+    """
+    Модифицированная выпуклость облигации (в годах²).
+
+    Вторая производная цены по ставке: dP/P ≈ -D·dy + 0.5·C·dy².
+    Параметр price не используется (PV восстанавливается из ytm) —
+    сигнатура симметрична calculate_duration.
+    """
+    coupon = face_value * (coupon_rate / 100) / coupon_freq
+    periods = int(years_to_maturity * coupon_freq)
+    y = ytm / 100 / coupon_freq
+
+    if periods == 0:
+        return 0.0
+
+    cash_flows = [(i, coupon + (face_value if i == periods else 0.0))
+                  for i in range(1, periods + 1)]
+    pv = sum(cf / (1 + y) ** i for i, cf in cash_flows)
+    if pv <= 0:
+        return float('nan')
+    weighted = sum(cf * i * (i + 1) / (1 + y) ** i for i, cf in cash_flows)
+    return weighted / (pv * (coupon_freq ** 2) * (1 + y) ** 2)
+
+
 def add_bond_metrics(df: pd.DataFrame, params: pd.Series) -> pd.DataFrame:
     """
     Adds YTM and duration to bond price DataFrame.
@@ -1507,8 +1634,10 @@ def add_bond_metrics(df: pd.DataFrame, params: pd.Series) -> pd.DataFrame:
         years = float(df.at[idx, 'years_to_maturity'])
         ytm = calculate_ytm(price_pct, face_value, coupon_rate, years, coupon_freq)
         duration = calculate_duration(price_pct, face_value, coupon_rate, years, ytm, coupon_freq)
+        convexity = calculate_convexity(price_pct, face_value, coupon_rate, years, ytm, coupon_freq)
 
         df.at[idx, 'ytm'] = ytm
         df.at[idx, 'duration'] = duration
+        df.at[idx, 'convexity'] = convexity
 
     return df

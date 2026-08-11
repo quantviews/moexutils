@@ -17,6 +17,7 @@ moexutils/
 │   │   └── GAZP.parquet
 │   └── ...
 ├── bonds/
+│   ├── params.parquet      # снапшот параметров выпусков (купон, погашение, доска)
 │   └── <SECID>.parquet
 ├── indexes/
 │   └── IMOEX.parquet       # локальный кэш индексов (update_data.py, шаг 1b)

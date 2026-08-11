@@ -18,11 +18,13 @@ def main(
     do_adj_close: bool = True,
     do_market_cap: bool = True,
     do_indexes: bool = True,
+    do_bonds: bool = True,
+    bonds_init: Optional[str] = None,
     rebuild: bool = False,
     div_folder: Optional[str] = None,
     data_folder: Optional[str] = None,
     metadata_file: Optional[str] = None,
-    index_tickers: Optional[str] = "IMOEX,MCFTR",
+    index_tickers: Optional[str] = "IMOEX,MCFTR,RGBITR",
 ) -> None:
     if data_folder is not None:
         moex.DATA_FOLDER = data_folder
@@ -46,6 +48,16 @@ def main(
                 print(f"[WARN] {idx_ticker}: не удалось обновить индекс — {e}")
     else:
         print("=== 1b. Индексы — пропуск (--no-index) ===")
+
+    if bonds_init:
+        print(f"=== 1c. Облигации: первичная выгрузка вселенной {bonds_init} ===")
+        n = moex.download_bonds_universe(bonds_init)
+        print(f"Выгружено выпусков: {n}")
+    elif do_bonds:
+        print("=== 1c. Обновление облигаций ===")
+        moex.update_all_bonds()
+    else:
+        print("=== 1c. Облигации — пропуск (--no-bonds) ===")
 
     if do_adj_close:
         if div_folder is None:
@@ -76,8 +88,11 @@ if __name__ == "__main__":
     ap.add_argument("--no-index", action="store_true", help="Не обновлять индексы")
     ap.add_argument("--rebuild", action="store_true",
                     help="Перескачать историю всех тикеров целиком (после смены методики данных)")
-    ap.add_argument("--indexes", type=str, default="IMOEX,MCFTR",
-                    help="Индексы через запятую (по умолчанию IMOEX,MCFTR)")
+    ap.add_argument("--indexes", type=str, default="IMOEX,MCFTR,RGBITR",
+                    help="Индексы через запятую (по умолчанию IMOEX,MCFTR,RGBITR)")
+    ap.add_argument("--no-bonds", action="store_true", help="Не обновлять облигации")
+    ap.add_argument("--bonds-init", type=str, default=None,
+                    help="Первичная выгрузка вселенной облигаций доски (например TQOB)")
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
     ap.add_argument("--metadata-file", type=str, default=None, help="Путь к Excel с метаданными (metadata/stock-index-base.xlsx)")
@@ -88,6 +103,8 @@ if __name__ == "__main__":
         do_adj_close=not args.no_adj,
         do_market_cap=not args.no_cap,
         do_indexes=not args.no_index,
+        do_bonds=not args.no_bonds,
+        bonds_init=args.bonds_init,
         rebuild=args.rebuild,
         div_folder=args.div_folder,
         data_folder=args.data_folder,
