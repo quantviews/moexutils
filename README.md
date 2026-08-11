@@ -12,7 +12,7 @@ A Python utility library for fetching and managing stock data from the Moscow Ex
 - Calculate and visualize stock performance
 - **Automatic market cap calculation** using shares data from metadata
 - **Adjusted close price calculation** based on dividend history
-- **Bonds support**: quotes, parameters, YTM and duration metrics
+- **Bonds support**: board-wide monitoring of ALL issues (TQOB/TQCB), exchange YTM and duration, convexity, G-spreads to the OFZ curve
 - Support for different time frequencies (1min, 10min, 1hour, 1day, 1week, 1month, 1quarter)
 
 ## Installation
@@ -127,7 +127,26 @@ combined_df = moex.combine_moex_stocks()
 
 ## Bonds Support
 
-Проект поддерживает основной функционал для облигаций MOEX:
+### Мониторинг всех выпусков (основной механизм)
+
+История торгов **всей доски** запрашивается по датам (одна доска-дата — один постраничный запрос) и копится в `bonds/market_<SEGMENT>.parquet`: новые размещения появляются автоматически, погашенные выпуски отваливаются сами. В строках — биржевые `YIELDCLOSE`/`DURATION`, цены, обороты, купон, номинал, валюта.
+
+```bash
+# разовая инициализация досок (гособлигации + корпоративные)
+python update_data.py --no-update --no-adj --no-cap --bonds-market-init TQOB,TQCB --bonds-market-start 2021-01-01
+
+# дальше доски обновляются штатным запуском (шаг 1c)
+python update_data.py
+```
+
+```python
+df = moex.read_bonds_market()        # все доски одним длинным DataFrame
+df = moex.read_bonds_market('TQCB')  # только корпоративные
+```
+
+Аналитика поверх мониторинга — ноутбук `marimo/bond-market.py`: кривая ОФЗ (сегодня против прошлой даты), G-спреды корпоративных выпусков к кривой, RGBITR vs IMOEX, таблица всех выпусков.
+
+### Работа с отдельными выпусками
 
 - `get_moex_bonds_list(segment='TQCB')` — список облигаций сегмента (корпоративные TQCB, государственные TQOB и др.)
 - `get_moex_bond_params(secid)` — параметры облигации (купон, срок погашения, ISIN, номинал и др.)
@@ -161,7 +180,8 @@ moex.save_moex_bond('SBERB', '2024-01-01')
 
 - `calculate_ytm(price, face_value, coupon_rate, years_to_maturity)` — доходность до погашения
 - `calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm)` — модифицированная дюрация
-- `add_bond_metrics(df, params)` — расчет YTM и duration для временного ряда цен
+- `calculate_convexity(price, face_value, coupon_rate, years_to_maturity, ytm)` — модифицированная выпуклость
+- `add_bond_metrics(df, params)` — расчет YTM, duration и convexity для временного ряда цен
 
 ## API Reference
 
@@ -311,7 +331,10 @@ moexutils/
 │   │   └── SBER.parquet
 │   └── ...
 ├── bonds/              # локальные данные облигаций (не в git)
-│   └── <SECID>.parquet
+│   ├── market_<SEGMENT>.parquet  # мониторинг всех выпусков доски по датам
+│   ├── params.parquet            # снапшот параметров выпусков
+│   └── <SECID>.parquet           # истории отдельных выпусков
+├── indexes/            # локальный кэш индексов (не в git)
 └── metadata/
     └── stock-index-base.xlsx  # Excel file with shares data (Code, date, Number of issued shares)
 ```
@@ -333,7 +356,7 @@ The `metadata/stock-index-base.xlsx` file should contain:
 - сохранение/чтение/инкрементальное обновление Parquet (`save/read/update_moex_stock`, `update_all_stocks`, `combine_moex_stocks`)
 - разбор Excel-метаданных и расчет капитализации (`load_shares_data`, `calculate_market_cap`, ffill/bfill между срезами)
 - математику корректировки на дивиденды (`calculate_adj_close`, включая составные дивиденды)
-- облигации: API, хранение, YTM/дюрация против эталонных значений
+- облигации: API, хранение, мониторинг досок по датам (пагинация, бэкфилл), YTM/дюрация/выпуклость против эталонных значений
 
 Запуск тестов:
 
@@ -348,7 +371,7 @@ pytest -q
 
 Подробный роадмап — в [development-plan.md](development-plan.md):
 
-1. Облигации (загрузка, сохранение в `bonds/`, расчеты YTM/duration) — частично реализовано
+1. Облигации (мониторинг досок, YTM/duration/convexity, G-спреды) — реализовано, идет накопление данных
 2. Производные (фьючерсы/опционы, roll-over и метрики)
 3. Инфраструктура (API, кэш, логирование)
 4. Дополнительные метрики (Sharpe, max drawdown, spread)
