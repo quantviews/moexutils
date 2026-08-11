@@ -1530,6 +1530,143 @@ def update_all_bonds(session: Optional[requests.Session] = None,
             logger.warning(f"[WARN] Не удалось обновить параметры облигаций: {e}")
 
 
+# Колонки, сохраняемые в консолидированном мониторинге досок облигаций
+_BONDS_MARKET_COLS = ['TRADEDATE', 'SECID', 'SHORTNAME', 'CLOSE', 'LEGALCLOSEPRICE',
+                      'YIELDCLOSE', 'DURATION', 'VALUE', 'VOLUME', 'MATDATE',
+                      'FACEVALUE', 'FACEUNIT', 'COUPONPERCENT']
+
+
+def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd.DataFrame:
+    """История торгов ВСЕЙ доски облигаций за одну дату (с пагинацией ISS)."""
+    url = (f"https://iss.moex.com/iss/history/engines/stock/markets/bonds/"
+           f"boards/{segment}/securities.json")
+    pages = []
+    offset = 0
+    for _ in range(200):  # защита от бесконечного цикла
+        resp = session.get(url, params={'date': pd.Timestamp(date).strftime('%Y-%m-%d'),
+                                        'start': offset})
+        resp.raise_for_status()
+        data = resp.json()
+        page = _parse_iss_table(data.get('history'))
+        if page.empty:
+            break
+        pages.append(page)
+        offset += len(page)
+        cursor = _parse_iss_table(data.get('history.cursor'))
+        if cursor.empty or 'TOTAL' not in cursor.columns:
+            break
+        if offset >= int(cursor['TOTAL'].iloc[0]):
+            break
+    if not pages:
+        return pd.DataFrame()
+    df = pd.concat(pages, ignore_index=True)
+    return df[[c for c in _BONDS_MARKET_COLS if c in df.columns]]
+
+
+def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
+                        session: Optional[requests.Session] = None,
+                        max_days: int = 500) -> int:
+    """
+    Консолидированный мониторинг ВСЕХ выпусков доски: история торгов по датам
+    (постранично, вся доска за день одним запросом) дозаписывается в
+    bonds/market_<SEGMENT>.parquet. Новые размещения появляются автоматически,
+    погашенные выпуски перестают приходить сами.
+
+    Returns:
+    int: число добавленных строк.
+    """
+    if session is None:
+        session = requests.Session()
+
+    os.makedirs(BONDS_FOLDER, exist_ok=True)
+    path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
+    existing = pd.read_parquet(path) if os.path.exists(path) else None
+
+    if existing is not None and len(existing):
+        first_date = pd.to_datetime(existing['date'].max()) + pd.Timedelta(days=1)
+    else:
+        first_date = pd.Timestamp(start)
+    today = pd.Timestamp.today().normalize()
+    if first_date > today:
+        logger.info(f"[INFO] {segment}: мониторинг облигаций актуален")
+        return 0
+
+    dates = [d for d in pd.date_range(first_date, today, freq='D')
+             if d.weekday() < 5][:max_days]
+    frames = []
+    for i, d in enumerate(dates, 1):
+        try:
+            page = _fetch_bonds_board_date(segment, d, session)
+        except Exception as e:
+            logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e}")
+            continue
+        if len(page):
+            page = page.copy()
+            page['date'] = pd.to_datetime(page['TRADEDATE'])
+            page['segment'] = segment
+            frames.append(page.drop(columns=['TRADEDATE']))
+        if i % 20 == 0:
+            logger.info(f"[INFO] {segment}: обработано дат {i}/{len(dates)}")
+
+    if not frames:
+        logger.info(f"[INFO] {segment}: новых торговых дат нет")
+        return 0
+
+    new_rows = pd.concat(frames, ignore_index=True)
+    combined = (pd.concat([existing, new_rows], ignore_index=True)
+                if existing is not None else new_rows)
+    combined = combined.drop_duplicates(subset=['date', 'SECID'], keep='last')
+    combined = combined.sort_values(['date', 'SECID'])
+
+    tmp_path = path + '.tmp'
+    combined.to_parquet(tmp_path)
+    os.replace(tmp_path, path)
+    logger.info(f"[OK] {segment}: +{len(new_rows)} строк мониторинга → {path}")
+    return len(new_rows)
+
+
+def read_bonds_market(segment: Optional[str] = None) -> pd.DataFrame:
+    """
+    Читает консолидированный мониторинг облигаций. Без аргумента — все доски,
+    по которым есть bonds/market_*.parquet, одним DataFrame.
+    """
+    if segment is not None:
+        path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"Мониторинг не найден: {path}. Выполните update_bonds_market('{segment}') "
+                f"или update_data.py --bonds-market-init {segment}.")
+        return pd.read_parquet(path)
+
+    frames = []
+    if os.path.isdir(BONDS_FOLDER):
+        for f in sorted(os.listdir(BONDS_FOLDER)):
+            if f.startswith('market_') and f.endswith('.parquet'):
+                frames.append(pd.read_parquet(os.path.join(BONDS_FOLDER, f)))
+    if not frames:
+        raise FileNotFoundError(
+            f"В {BONDS_FOLDER} нет файлов мониторинга market_*.parquet. "
+            f"Выполните update_data.py --bonds-market-init TQOB,TQCB.")
+    return pd.concat(frames, ignore_index=True)
+
+
+def update_bonds_market_all(session: Optional[requests.Session] = None) -> None:
+    """Обновляет мониторинг всех досок, по которым уже есть market_*.parquet."""
+    if not os.path.isdir(BONDS_FOLDER):
+        return
+    segments = [f[len('market_'):-len('.parquet')] for f in os.listdir(BONDS_FOLDER)
+                if f.startswith('market_') and f.endswith('.parquet')]
+    if not segments:
+        return
+    if session is None:
+        session = requests.Session()
+    for seg in segments:
+        try:
+            update_bonds_market(seg, session=session)
+        except Exception as e:
+            logger.error(f"Error updating bonds market {seg}: {e}")
+
+
 def calculate_ytm(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, coupon_freq: int = 2) -> float:
     """
     Calculates Yield to Maturity (YTM) for a bond.

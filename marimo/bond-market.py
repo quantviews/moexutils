@@ -2,8 +2,9 @@
 marimo notebook: Долговой рынок — кривая ОФЗ, доходности выпусков, RGBITR
 
 Использование:
-1. Первичная выгрузка данных: python update_data.py --bonds-init TQOB
-   (дальше выпуски обновляются штатным шагом 1c update_data.py)
+1. Первичная выгрузка данных (мониторинг всех выпусков досок):
+   python update_data.py --no-update --no-adj --no-cap --bonds-market-init TQOB,TQCB
+   (дальше доски обновляются штатным шагом 1c update_data.py)
 2. marimo edit bond-market.py
 
 Функционал:
@@ -77,7 +78,9 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo, moex, pd):
-    # Загрузка вселенной: параметры + история цен каждого выпуска
+    # Загрузка вселенной единым длинным DataFrame.
+    # Приоритет — консолидированный мониторинг досок (bonds/market_*.parquet,
+    # все выпуски, обновляется по датам); фоллбэк — пофайловые истории + params.
     import os as _osb
 
     def _bond_type(_secid):
@@ -88,62 +91,92 @@ def _(mo, moex, pd):
         return {'25': 'ПД', '26': 'ПД', '24': 'ПК', '29': 'ПК',
                 '52': 'ИН', '46': 'АД', '48': 'АД'}.get(_series, 'прочее')
 
+    _LONG_COLS = ['date', 'SECID', 'SHORTNAME', 'CLOSE', 'PRICE_ALT', 'YIELDCLOSE',
+                  'DURATION', 'MATDATE', 'FACEVALUE', 'FACEUNIT', 'COUPONPERCENT',
+                  'segment']
+
+    bonds_long = pd.DataFrame(columns=_LONG_COLS)
+    _src_desc = ''
     try:
-        bonds_params = moex.read_bonds_params()
-        bonds_params = bonds_params.dropna(subset=['SECID']).copy()
-        bonds_params['bond_type'] = bonds_params['SECID'].map(_bond_type)
-        _files = {
-            _f[:-len('.parquet')]
-            for _f in _osb.listdir(moex.BONDS_FOLDER)
-            if _f.endswith('.parquet') and _f != 'params.parquet'
-        }
-        bonds_params = bonds_params[bonds_params['SECID'].isin(_files)]
-        bond_prices = {
-            _s: pd.read_parquet(
-                _osb.path.join(moex.BONDS_FOLDER, f"{_s}.parquet")).sort_index()
-            for _s in bonds_params['SECID']
-        }
-        bonds_ready = len(bond_prices) > 0
-        _status = mo.md(
-            f"**Данные:** {len(bond_prices)} выпусков · последняя дата: "
-            f"{max(_df.index.max() for _df in bond_prices.values()):%d.%m.%Y}"
-        ) if bonds_ready else mo.md("")
+        _mkt = moex.read_bonds_market()
+        _mkt = _mkt.rename(columns={'LEGALCLOSEPRICE': 'PRICE_ALT'})
+        for _c in _LONG_COLS:
+            if _c not in _mkt.columns:
+                _mkt[_c] = None
+        bonds_long = _mkt[_LONG_COLS]
+        _segs = sorted(bonds_long['segment'].dropna().unique())
+        _src_desc = 'мониторинг досок ' + ', '.join(_segs)
     except FileNotFoundError:
-        bonds_params = pd.DataFrame()
-        bond_prices = {}
-        bonds_ready = False
+        try:
+            _params = moex.read_bonds_params().dropna(subset=['SECID'])
+            _params = _params.drop_duplicates(subset=['SECID'], keep='last')
+            _frames = []
+            for _r in _params.itertuples():
+                _fp = _osb.path.join(moex.BONDS_FOLDER, f"{_r.SECID}.parquet")
+                if not _osb.path.exists(_fp):
+                    continue
+                _px = pd.read_parquet(_fp).sort_index()
+                _f = pd.DataFrame({
+                    'date': _px.index,
+                    'SECID': _r.SECID,
+                    'CLOSE': _px.get('CLOSE'),
+                    'PRICE_ALT': _px.get('WAPRICE'),
+                    'YIELDCLOSE': _px.get('YIELDCLOSE'),
+                    'DURATION': _px.get('DURATION'),
+                })
+                _f['SHORTNAME'] = getattr(_r, 'SHORTNAME', _r.SECID)
+                _f['MATDATE'] = getattr(_r, 'MATDATE', None)
+                _f['FACEVALUE'] = getattr(_r, 'FACEVALUE', 1000)
+                _f['FACEUNIT'] = getattr(_r, 'FACEUNIT', 'SUR')
+                _f['COUPONPERCENT'] = getattr(_r, 'COUPONPERCENT', 0)
+                _f['segment'] = getattr(_r, 'segment', '')
+                _frames.append(_f)
+            if _frames:
+                bonds_long = pd.concat(_frames, ignore_index=True)[_LONG_COLS]
+                _src_desc = 'пофайловые истории выпусков'
+        except FileNotFoundError:
+            pass
+
+    bonds_ready = len(bonds_long) > 0
+    if bonds_ready:
+        bonds_long = bonds_long.copy()
+        bonds_long['date'] = pd.to_datetime(bonds_long['date'])
+        bonds_long['bond_type'] = bonds_long['SECID'].map(_bond_type)
         _status = mo.md(
-            "⚠️ **Данные облигаций не выгружены.** Выполните разово:\n\n"
-            "```\npython update_data.py --bonds-init TQOB\n```\n\n"
-            "Дальше выпуски будут обновляться обычным `update_data.py` (шаг 1c)."
+            f"**Данные:** {bonds_long['SECID'].nunique()} выпусков "
+            f"({_src_desc}) · последняя дата: {bonds_long['date'].max():%d.%m.%Y}")
+    else:
+        _status = mo.md(
+            "⚠️ **Данные облигаций не выгружены.** Для мониторинга всех выпусков "
+            "выполните разово:\n\n"
+            "```\npython update_data.py --no-update --no-adj --no-cap "
+            "--bonds-market-init TQOB,TQCB\n```\n\n"
+            "Дальше доски будут обновляться обычным `update_data.py` (шаг 1c)."
         )
     _status
-    return bond_prices, bonds_params, bonds_ready
+    return bonds_long, bonds_ready
 
 
 @app.cell(hide_code=True)
-def _(bond_prices, bonds_params, bonds_ready, moex, pd):
+def _(bonds_long, bonds_ready, moex, pd):
     # Метрики всех выпусков на дату (последняя котировка не старше 14 дней до нее)
     def bonds_snapshot(asof=None):
-        rows = []
-        for _r in bonds_params.itertuples():
-            _px = bond_prices.get(_r.SECID)
-            if _px is None or len(_px) == 0:
-                continue
-            _w = _px if asof is None else _px[_px.index <= asof]
-            if len(_w) == 0:
-                continue
-            _last = _w.iloc[-1]
-            _date = _w.index[-1]
-            if asof is not None and _date < asof - pd.Timedelta(days=14):
-                continue  # выпуск уже не торговался на эту дату
+        _w = bonds_long if asof is None else bonds_long[bonds_long['date'] <= asof]
+        if len(_w) == 0:
+            return pd.DataFrame()
+        _last_rows = _w.sort_values('date').groupby('SECID', as_index=False).tail(1)
+        _ref = _last_rows['date'].max() if asof is None else asof
+        _last_rows = _last_rows[_last_rows['date'] >= _ref - pd.Timedelta(days=14)]
 
-            _price = _last.get('CLOSE')
+        rows = []
+        for _r in _last_rows.itertuples():
+            _date = _r.date
+            _price = _r.CLOSE
             if pd.isna(_price):
-                _price = _last.get('WAPRICE')
-            _mat = pd.to_datetime(getattr(_r, 'MATDATE', None), errors='coerce')
-            _face = float(getattr(_r, 'FACEVALUE', 1000) or 1000)
-            _coupon = float(getattr(_r, 'COUPONPERCENT', 0) or 0)
+                _price = _r.PRICE_ALT
+            _mat = pd.to_datetime(_r.MATDATE, errors='coerce')
+            _face = float(_r.FACEVALUE) if pd.notna(_r.FACEVALUE) else 1000.0
+            _coupon = float(_r.COUPONPERCENT) if pd.notna(_r.COUPONPERCENT) else 0.0
             if pd.isna(_price) or pd.isna(_mat):
                 continue
             _years = (_mat - _date).days / 365.25
@@ -153,7 +186,7 @@ def _(bond_prices, bonds_params, bonds_ready, moex, pd):
 
             # Биржевые YTM/дюрация из истории ISS (точные: с НКД и фактическим
             # графиком купонов); упрощенная модель — фоллбэк для строк без них
-            _y_exch = _last.get('YIELDCLOSE')
+            _y_exch = _r.YIELDCLOSE
             if _y_exch is not None and pd.notna(_y_exch) and 0 < float(_y_exch) < 100:
                 _ytm = float(_y_exch)
                 _src = 'ISS'
@@ -161,7 +194,7 @@ def _(bond_prices, bonds_params, bonds_ready, moex, pd):
                 _ytm = moex.calculate_ytm(_price, _face, _coupon, _years)
                 _src = 'модель'
 
-            _d_exch = _last.get('DURATION')  # ISS отдает дюрацию в днях
+            _d_exch = _r.DURATION  # ISS отдает дюрацию в днях
             if _d_exch is not None and pd.notna(_d_exch) and float(_d_exch) > 0:
                 _dur = float(_d_exch) / 365.25
             else:
@@ -169,10 +202,10 @@ def _(bond_prices, bonds_params, bonds_ready, moex, pd):
 
             rows.append({
                 'SECID': _r.SECID,
-                'name': getattr(_r, 'SHORTNAME', _r.SECID),
+                'name': _r.SHORTNAME if pd.notna(_r.SHORTNAME) else _r.SECID,
                 'type': _r.bond_type,
-                'segment': getattr(_r, 'segment', ''),
-                'faceunit': getattr(_r, 'FACEUNIT', 'SUR') or 'SUR',
+                'segment': _r.segment if pd.notna(_r.segment) else '',
+                'faceunit': _r.FACEUNIT if pd.notna(_r.FACEUNIT) else 'SUR',
                 'maturity': _mat,
                 'years': _years,
                 'coupon': _coupon,
@@ -298,7 +331,7 @@ def _(go, mo, np, pd, plotly_available, snap_now):
         corp_block = mo.md(
             "*Корпоративные облигации не выгружены. Для G-спредов выполните разово:*\n\n"
             "```\npython update_data.py --no-update --no-adj --no-cap "
-            "--bonds-init TQCB --bonds-min-issue 10\n```"
+            "--bonds-market-init TQCB\n```"
         )
     elif len(_ofz) < 3:
         corp_block = mo.md("*Недостаточно точек кривой ОФЗ для расчета спредов*")

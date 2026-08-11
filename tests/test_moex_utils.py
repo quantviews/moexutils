@@ -1059,6 +1059,99 @@ class TestBondsUniverse:
             mu.read_bonds_params()
 
 
+# ------------------------------------------------- bonds: мониторинг досок по датам
+
+class TestBondsMarket:
+    @pytest.fixture(autouse=True)
+    def bonds_folder(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        return str(tmp_path)
+
+    def test_update_fetches_weekdays_and_appends(self, bonds_folder, monkeypatch):
+        requested = []
+
+        def fake_fetch(segment, date, session):
+            requested.append(pd.Timestamp(date))
+            return pd.DataFrame({
+                'TRADEDATE': [pd.Timestamp(date).strftime('%Y-%m-%d')] * 2,
+                'SECID': ['B1', 'B2'],
+                'CLOSE': [100.0, 99.5],
+                'YIELDCLOSE': [15.0, 16.0],
+            })
+
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', fake_fetch)
+
+        start = (pd.Timestamp.today().normalize() - pd.Timedelta(days=6)).strftime('%Y-%m-%d')
+        n = mu.update_bonds_market('TQOB', start=start)
+
+        assert all(d.weekday() < 5 for d in requested)  # выходные не запрашиваются
+        assert n == 2 * len(requested)
+        df = mu.read_bonds_market('TQOB')
+        assert set(['date', 'SECID', 'CLOSE', 'segment']).issubset(df.columns)
+        assert (df['segment'] == 'TQOB').all()
+        assert df['date'].max() == max(requested)
+
+        # повторный запуск в тот же день — данные актуальны, запросов нет
+        requested.clear()
+        assert mu.update_bonds_market('TQOB', start=start) == 0
+        assert requested == []
+
+    def test_fetch_board_date_paginates(self, monkeypatch):
+        cols = ['TRADEDATE', 'SECID', 'CLOSE', 'BOARDID']
+
+        class _Resp:
+            def __init__(self, payload):
+                self._payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self._payload
+
+        class _Session:
+            def get(self, url, params=None):
+                offset = int(params.get('start', 0))
+                rows = {0: [['2025-06-02', 'B1', 100.0, 'TQOB'],
+                            ['2025-06-02', 'B2', 99.0, 'TQOB']],
+                        2: [['2025-06-02', 'B3', 98.0, 'TQOB']]}.get(offset, [])
+                return _Resp({
+                    'history': {'columns': cols, 'data': rows},
+                    'history.cursor': {'columns': ['INDEX', 'TOTAL', 'PAGESIZE'],
+                                       'data': [[offset, 3, 2]]},
+                })
+
+        df = mu._fetch_bonds_board_date('TQOB', '2025-06-02', _Session())
+        assert sorted(df['SECID']) == ['B1', 'B2', 'B3']
+        assert 'BOARDID' not in df.columns  # сохраняется только рабочий набор колонок
+
+    def test_read_all_segments_concat(self, bonds_folder):
+        for seg in ('TQOB', 'TQCB'):
+            pd.DataFrame({'date': pd.to_datetime(['2025-06-02']),
+                          'SECID': [f'{seg}-BOND'], 'segment': [seg]}).to_parquet(
+                os.path.join(bonds_folder, f"market_{seg}.parquet"))
+        df = mu.read_bonds_market()
+        assert len(df) == 2
+        assert set(df['segment']) == {'TQOB', 'TQCB'}
+
+    def test_read_missing_raises(self):
+        with pytest.raises(FileNotFoundError):
+            mu.read_bonds_market()
+        with pytest.raises(FileNotFoundError):
+            mu.read_bonds_market('TQOB')
+
+    def test_update_all_discovers_segments(self, bonds_folder, monkeypatch):
+        for seg in ('TQOB', 'TQCB'):
+            pd.DataFrame({'date': pd.to_datetime(['2025-06-02']),
+                          'SECID': ['X'], 'segment': [seg]}).to_parquet(
+                os.path.join(bonds_folder, f"market_{seg}.parquet"))
+        called = []
+        monkeypatch.setattr(mu, 'update_bonds_market',
+                            lambda seg, session=None: called.append(seg))
+        mu.update_bonds_market_all()
+        assert sorted(called) == ['TQCB', 'TQOB']
+
+
 # ---------------------------------------------------------------- bond metrics
 
 class TestBondMetrics:

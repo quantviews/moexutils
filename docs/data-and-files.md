@@ -72,6 +72,10 @@ moexutils/
 
 Прочие колонки — как в таблице history ISS MOEX.
 
+### Мониторинг досок: `bonds/market_<SEGMENT>.parquet`
+
+Длинная таблица истории торгов **всех выпусков доски** (например `market_TQOB.parquet`, `market_TQCB.parquet`), обновляется по датам через `update_bonds_market`. Колонки: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE` (биржевой YTM, %), `DURATION` (дни), `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`. Уникальность — пара `date`+`SECID`.
+
 ---
 
 ## Метаданные: stock-index-base.xlsx

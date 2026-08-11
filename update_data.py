@@ -21,6 +21,8 @@ def main(
     do_bonds: bool = True,
     bonds_init: Optional[str] = None,
     bonds_min_issue: Optional[float] = None,
+    bonds_market_init: Optional[str] = None,
+    bonds_market_start: str = "2024-01-01",
     rebuild: bool = False,
     div_folder: Optional[str] = None,
     data_folder: Optional[str] = None,
@@ -50,7 +52,12 @@ def main(
     else:
         print("=== 1b. Индексы — пропуск (--no-index) ===")
 
-    if bonds_init:
+    if bonds_market_init:
+        print(f"=== 1c. Облигации: инициализация мониторинга досок {bonds_market_init} ===")
+        for seg in [s.strip().upper() for s in bonds_market_init.split(",") if s.strip()]:
+            n = moex.update_bonds_market(seg, start=bonds_market_start)
+            print(f"{seg}: +{n} строк")
+    elif bonds_init:
         print(f"=== 1c. Облигации: первичная выгрузка вселенной {bonds_init} ===")
         n = moex.download_bonds_universe(
             bonds_init,
@@ -59,6 +66,7 @@ def main(
     elif do_bonds:
         print("=== 1c. Обновление облигаций ===")
         moex.update_all_bonds()
+        moex.update_bonds_market_all()
     else:
         print("=== 1c. Облигации — пропуск (--no-bonds) ===")
 
@@ -98,6 +106,10 @@ if __name__ == "__main__":
                     help="Первичная выгрузка вселенной облигаций доски (например TQOB)")
     ap.add_argument("--bonds-min-issue", type=float, default=None,
                     help="Мин. объем выпуска в млрд руб при --bonds-init (для TQCB рекомендуется 10)")
+    ap.add_argument("--bonds-market-init", type=str, default=None,
+                    help="Инициализация мониторинга ВСЕХ выпусков досок через запятую (например TQOB,TQCB)")
+    ap.add_argument("--bonds-market-start", type=str, default="2024-01-01",
+                    help="Начальная дата мониторинга при --bonds-market-init (по умолчанию 2024-01-01)")
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
     ap.add_argument("--metadata-file", type=str, default=None, help="Путь к Excel с метаданными (metadata/stock-index-base.xlsx)")
@@ -111,6 +123,8 @@ if __name__ == "__main__":
         do_bonds=not args.no_bonds,
         bonds_init=args.bonds_init,
         bonds_min_issue=args.bonds_min_issue,
+        bonds_market_init=args.bonds_market_init,
+        bonds_market_start=args.bonds_market_start,
         rebuild=args.rebuild,
         div_folder=args.div_folder,
         data_folder=args.data_folder,
