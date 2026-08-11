@@ -287,14 +287,14 @@ update_all_bonds(session=None, refresh_params=True) -> None
 ### Мониторинг всех выпусков доски (по датам)
 
 ```python
-update_bonds_market(segment='TQOB', start='2024-01-01', session=None, max_days=500) -> int
+update_bonds_market(segment='TQOB', start='2024-01-01', session=None, max_days=3000) -> int
 read_bonds_market(segment=None) -> pd.DataFrame
 update_bonds_market_all(session=None) -> None
 ```
 
 Основной механизм регулярного мониторинга **всех** выпусков доски. Вместо запроса истории по каждому SECID запрашивается история торгов **всей доски за дату** (`/history/.../boards/<segment>/securities?date=...`, с пагинацией) — один проход по недостающим торговым датам (выходные пропускаются). Данные дозаписываются в длинный parquet `bonds/market_<SEGMENT>.parquet` (колонки `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE`, `DURATION`, `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`; дедупликация по `date`+`SECID`, атомарная запись).
 
-Новые размещения появляются в данных автоматически, погашенные выпуски перестают приходить сами — реестр следить не нужно. `read_bonds_market()` без аргумента читает все доски одним DataFrame. `update_bonds_market_all` обновляет каждую доску, по которой уже есть `market_*.parquet` (вызывается в шаге 1c `update_data.py`). Инициализация: `python update_data.py --bonds-market-init TQOB,TQCB` (история с `--bonds-market-start`, по умолчанию 2024-01-01). Ноутбук `marimo/bond-market.py` использует мониторинг как основной источник (пофайловые истории — фоллбэк).
+Если `start` раньше уже сохраненной истории, недостающие даты в начале докачиваются (бэкфилл): повторный `--bonds-market-init TQOB,TQCB --bonds-market-start 2021-01-01` углубит историю, не перекачивая уже сохраненный диапазон. Новые размещения появляются в данных автоматически, погашенные выпуски перестают приходить сами — реестр следить не нужно. `read_bonds_market()` без аргумента читает все доски одним DataFrame. `update_bonds_market_all` обновляет каждую доску, по которой уже есть `market_*.parquet` (вызывается в шаге 1c `update_data.py`). Инициализация: `python update_data.py --bonds-market-init TQOB,TQCB` (история с `--bonds-market-start`, по умолчанию 2024-01-01). Ноутбук `marimo/bond-market.py` использует мониторинг как основной источник (пофайловые истории — фоллбэк).
 
 ---
 

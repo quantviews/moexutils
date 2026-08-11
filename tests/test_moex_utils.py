@@ -1096,6 +1096,37 @@ class TestBondsMarket:
         assert mu.update_bonds_market('TQOB', start=start) == 0
         assert requested == []
 
+    def test_update_backfills_earlier_history(self, bonds_folder, monkeypatch):
+        # уже сохранено [today-10 .. today]; просим start=today-30 → докачка начала
+        today = pd.Timestamp.today().normalize()
+        emin, emax = today - pd.Timedelta(days=10), today
+        pd.DataFrame({'date': [emin, emax], 'SECID': ['B1', 'B1'],
+                      'CLOSE': [100.0, 100.0], 'segment': ['TQOB', 'TQOB']}).to_parquet(
+            os.path.join(bonds_folder, 'market_TQOB.parquet'))
+
+        requested = []
+
+        def fake_fetch(segment, date, session):
+            requested.append(pd.Timestamp(date))
+            return pd.DataFrame({'TRADEDATE': [pd.Timestamp(date).strftime('%Y-%m-%d')],
+                                 'SECID': ['B2'], 'CLOSE': [99.0]})
+
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', fake_fetch)
+        n = mu.update_bonds_market('TQOB', start=(today - pd.Timedelta(days=30)).strftime('%Y-%m-%d'))
+
+        assert n == len(requested) > 0
+        assert all(d < emin for d in requested)  # уже покрытый диапазон не перекачивается
+        df = mu.read_bonds_market('TQOB')
+        assert df['date'].min() == min(requested)
+        assert len(df) == 2 + n
+
+        # малый зазор в начале (праздники) не вызывает вечную докачку
+        requested.clear()
+        assert mu.update_bonds_market(
+            'TQOB', start=(min(requested, default=df['date'].min())
+                           - pd.Timedelta(days=3)).strftime('%Y-%m-%d')) == 0
+        assert requested == []
+
     def test_fetch_board_date_paginates(self, monkeypatch):
         cols = ['TRADEDATE', 'SECID', 'CLOSE', 'BOARDID']
 

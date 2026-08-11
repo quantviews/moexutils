@@ -1565,12 +1565,15 @@ def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd
 
 def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
                         session: Optional[requests.Session] = None,
-                        max_days: int = 500) -> int:
+                        max_days: int = 3000) -> int:
     """
     Консолидированный мониторинг ВСЕХ выпусков доски: история торгов по датам
     (постранично, вся доска за день одним запросом) дозаписывается в
     bonds/market_<SEGMENT>.parquet. Новые размещения появляются автоматически,
     погашенные выпуски перестают приходить сами.
+
+    Если start раньше уже сохраненной истории, недостающие даты в начале
+    докачиваются (бэкфилл): update_bonds_market('TQOB', start='2021-01-01').
 
     Returns:
     int: число добавленных строк.
@@ -1582,17 +1585,24 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
     path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
     existing = pd.read_parquet(path) if os.path.exists(path) else None
 
-    if existing is not None and len(existing):
-        first_date = pd.to_datetime(existing['date'].max()) + pd.Timedelta(days=1)
-    else:
-        first_date = pd.Timestamp(start)
+    first_date = pd.Timestamp(start)
     today = pd.Timestamp.today().normalize()
-    if first_date > today:
+    if existing is not None and len(existing):
+        _emin = pd.to_datetime(existing['date'].min())
+        _emax = pd.to_datetime(existing['date'].max())
+        # Бэкфилл в начале; зазор до 10 дней считаем закрытым (праздники)
+        head = ([] if (_emin - first_date).days <= 10 else
+                [d for d in pd.date_range(first_date, _emin - pd.Timedelta(days=1))
+                 if d.weekday() < 5])
+        tail = [d for d in pd.date_range(_emax + pd.Timedelta(days=1), today)
+                if d.weekday() < 5]
+        dates = (head + tail)[:max_days]
+    else:
+        dates = [d for d in pd.date_range(first_date, today, freq='D')
+                 if d.weekday() < 5][:max_days]
+    if not dates:
         logger.info(f"[INFO] {segment}: мониторинг облигаций актуален")
         return 0
-
-    dates = [d for d in pd.date_range(first_date, today, freq='D')
-             if d.weekday() < 5][:max_days]
     frames = []
     for i, d in enumerate(dates, 1):
         try:
