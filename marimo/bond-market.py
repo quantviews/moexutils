@@ -54,6 +54,11 @@ def _(mo):
 
     Для кривой берутся только **ОФЗ-ПД** (фиксированный купон, серии 25xxx/26xxx):
     у флоатеров (ПК) и линкеров (ИН) доходность из цены так считать нельзя.
+
+    **G-спред** корпоративной облигации = ее YTM минус доходность кривой ОФЗ,
+    интерполированная на тот же срок: премия за кредитный риск эмитента.
+    Широкий спред — рынок сомневается в эмитенте (или выпуск неликвиден),
+    сжатие спредов сегмента — аппетит к риску растет.
     """)
     return
 
@@ -166,6 +171,8 @@ def _(bond_prices, bonds_params, bonds_ready, moex, pd):
                 'SECID': _r.SECID,
                 'name': getattr(_r, 'SHORTNAME', _r.SECID),
                 'type': _r.bond_type,
+                'segment': getattr(_r, 'segment', ''),
+                'faceunit': getattr(_r, 'FACEUNIT', 'SUR') or 'SUR',
                 'maturity': _mat,
                 'years': _years,
                 'coupon': _coupon,
@@ -276,6 +283,88 @@ def _(mo, snap_now, snap_past):
 
 
 @app.cell(hide_code=True)
+def _(go, mo, np, pd, plotly_available, snap_now):
+    # Корпоративные облигации: G-спреды к интерполированной кривой ОФЗ
+    _ofz = (snap_now[snap_now['type'] == 'ПД'].sort_values('years')
+            if len(snap_now) else pd.DataFrame())
+    _corp = (snap_now[(snap_now['segment'] == 'TQCB')
+                      & (snap_now['faceunit'].isin(['SUR', 'RUB']))
+                      & snap_now['ytm'].between(0.1, 60)].copy()
+             if len(snap_now) else pd.DataFrame())
+
+    if not plotly_available or len(snap_now) == 0:
+        corp_block = mo.md("")
+    elif len(_corp) == 0:
+        corp_block = mo.md(
+            "*Корпоративные облигации не выгружены. Для G-спредов выполните разово:*\n\n"
+            "```\npython update_data.py --no-update --no-adj --no-cap "
+            "--bonds-init TQCB --bonds-min-issue 10\n```"
+        )
+    elif len(_ofz) < 3:
+        corp_block = mo.md("*Недостаточно точек кривой ОФЗ для расчета спредов*")
+    else:
+        # G-спред = YTM корпората − YTM ОФЗ, интерполированная на его срок
+        _corp['gspread_bp'] = (
+            _corp['ytm'] - np.interp(_corp['years'], _ofz['years'], _ofz['ytm'])
+        ) * 100
+
+        _figg = go.Figure()
+        _figg.add_scatter(
+            x=_ofz['years'], y=_ofz['ytm'], mode='lines',
+            name='кривая ОФЗ', line=dict(color='#102D69', width=2),
+            hovertemplate='ОФЗ %{x:.1f} лет: %{y:.2f}%<extra></extra>')
+        _figg.add_scatter(
+            x=_corp['years'], y=_corp['ytm'], mode='markers',
+            name='корпораты (TQCB)',
+            marker=dict(size=8, color=_corp['gspread_bp'],
+                        colorscale='RdYlGn', reversescale=True, cmin=0,
+                        cmax=float(_corp['gspread_bp'].quantile(0.95)),
+                        colorbar=dict(title='спред,<br>б.п.')),
+            customdata=_corp[['name', 'gspread_bp']].values,
+            hovertemplate='<b>%{customdata[0]}</b><br>срок: %{x:.1f} лет · '
+                          'YTM: %{y:.2f}%<br>G-спред: %{customdata[1]:+.0f} б.п.'
+                          '<extra></extra>')
+        _figg.update_layout(
+            height=440,
+            title=dict(text='Корпоративные облигации против кривой ОФЗ', font_size=15),
+            xaxis=dict(title='Срок до погашения, лет'),
+            yaxis=dict(title='YTM, % годовых', ticksuffix='%'),
+            legend=dict(orientation='h', y=1.1, x=1, xanchor='right'),
+            margin=dict(t=48, l=10, r=10, b=10),
+        )
+
+        _med = float(_corp['gspread_bp'].median())
+        _wide = _corp.nlargest(5, 'gspread_bp')
+        _tight = _corp.nsmallest(5, 'gspread_bp')
+        _md_corp = mo.md(
+            f"**Корпоративный сегмент:** {len(_corp)} выпусков · "
+            f"медианный G-спред **{_med:.0f} б.п.**\n\n"
+            f"- Самые широкие: " + ", ".join(
+                f"**{_r.name}** {_r.gspread_bp:+.0f}" for _r in _wide.itertuples()) + "\n"
+            f"- Самые узкие: " + ", ".join(
+                f"**{_r.name}** {_r.gspread_bp:+.0f}" for _r in _tight.itertuples())
+        )
+
+        _tbl = _corp.sort_values('gspread_bp', ascending=False)[
+            ['SECID', 'name', 'maturity', 'years', 'price', 'ytm', 'duration', 'gspread_bp']
+        ].copy()
+        _tbl['maturity'] = _tbl['maturity'].dt.strftime('%d.%m.%Y')
+        _tbl.columns = ['SECID', 'Выпуск', 'Погашение', 'Лет', 'Цена %',
+                        'YTM %', 'Дюрация', 'G-спред, б.п.']
+        for _cc, _nd2 in (('Лет', 1), ('Цена %', 2), ('YTM %', 2),
+                          ('Дюрация', 1), ('G-спред, б.п.', 0)):
+            _tbl[_cc] = _tbl[_cc].round(_nd2)
+
+        corp_block = mo.vstack([
+            _md_corp, _figg,
+            mo.ui.table(_tbl, pagination=True, page_size=15,
+                        label='Корпоративные выпуски по G-спреду'),
+        ])
+    corp_block
+    return
+
+
+@app.cell(hide_code=True)
 def _(go, mo, moex, pd, plotly_available):
     # RGBITR (гособлигации, полная доходность) против IMOEX за год
     try:
@@ -326,9 +415,9 @@ def _(mo, snap_now):
     else:
         _t = snap_now.sort_values('years').copy()
         _t['maturity'] = _t['maturity'].dt.strftime('%d.%m.%Y')
-        _t = _t[['SECID', 'name', 'type', 'maturity', 'years',
+        _t = _t[['SECID', 'name', 'type', 'segment', 'maturity', 'years',
                  'coupon', 'price', 'ytm', 'duration', 'convexity', 'src']]
-        _t.columns = ['SECID', 'Выпуск', 'Тип', 'Погашение', 'Лет',
+        _t.columns = ['SECID', 'Выпуск', 'Тип', 'Доска', 'Погашение', 'Лет',
                       'Купон %', 'Цена %', 'YTM %', 'Дюрация', 'Выпуклость', 'Источник']
         for _c, _nd in (('Лет', 1), ('Купон %', 2), ('Цена %', 2),
                         ('YTM %', 2), ('Дюрация', 1), ('Выпуклость', 1)):

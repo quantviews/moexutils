@@ -1444,10 +1444,20 @@ def read_bonds_params() -> pd.DataFrame:
 
 
 def download_bonds_universe(segment: str = 'TQOB', start: str = '2014-01-01',
-                            session: Optional[requests.Session] = None) -> int:
+                            session: Optional[requests.Session] = None,
+                            min_issue_size: Optional[float] = None,
+                            max_issues: Optional[int] = None) -> int:
     """
     Первичная выгрузка вселенной облигаций доски: снапшот параметров
-    + история цен каждого выпуска в bonds/<SECID>.parquet.
+    (полный реестр доски) + история цен отобранных выпусков.
+
+    Parameters:
+    min_issue_size (float | None): минимальный объем выпуска в рублях
+        (ISSUESIZE × FACEVALUE) — фильтр ликвидности; обязателен на практике
+        для корпоративной доски TQCB (тысячи выпусков).
+    max_issues (int | None): максимум выпусков (крупнейшие по объему).
+
+    Погашенные выпуски (MATDATE в прошлом) не скачиваются.
 
     Returns:
     int: число успешно сохраненных выпусков.
@@ -1459,14 +1469,29 @@ def download_bonds_universe(segment: str = 'TQOB', start: str = '2014-01-01',
     if bonds_list.empty:
         return 0
 
+    selected = bonds_list
+    if min_issue_size is not None and 'ISSUESIZE' in selected.columns:
+        _size_rub = (pd.to_numeric(selected['ISSUESIZE'], errors='coerce').fillna(0)
+                     * pd.to_numeric(selected.get('FACEVALUE'), errors='coerce').fillna(1000))
+        selected = selected[_size_rub >= float(min_issue_size)]
+    if 'MATDATE' in selected.columns:
+        _mat = pd.to_datetime(selected['MATDATE'], errors='coerce')
+        selected = selected[_mat.isna() | (_mat > pd.Timestamp.today())]
+    if max_issues is not None and 'ISSUESIZE' in selected.columns and len(selected) > max_issues:
+        selected = selected.sort_values('ISSUESIZE', ascending=False).head(max_issues)
+
+    if len(selected) < len(bonds_list):
+        logger.info(f"[INFO] {segment}: отобрано {len(selected)} из {len(bonds_list)} "
+                    f"выпусков (фильтр объема/погашения)")
+
     saved = 0
-    for secid in bonds_list['SECID'].astype(str):
+    for secid in selected['SECID'].astype(str):
         try:
             save_moex_bond(secid, start=start, session=session)
             saved += 1
         except Exception as e:
             logger.error(f"[ERROR] {secid}: не удалось выгрузить историю — {e}")
-    logger.info(f"Выгружено выпусков: {saved} из {len(bonds_list)} ({segment})")
+    logger.info(f"Выгружено выпусков: {saved} из {len(selected)} ({segment})")
     return saved
 
 

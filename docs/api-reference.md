@@ -273,9 +273,12 @@ update_moex_bond(secid, session=None) -> None
 ```python
 save_bonds_params(segment='TQOB', session=None) -> pd.DataFrame
 read_bonds_params() -> pd.DataFrame
-download_bonds_universe(segment='TQOB', start='2014-01-01', session=None) -> int
+download_bonds_universe(segment='TQOB', start='2014-01-01', session=None,
+                        min_issue_size=None, max_issues=None) -> int
 update_all_bonds(session=None, refresh_params=True) -> None
 ```
+
+Фильтры `download_bonds_universe`: `min_issue_size` — минимальный объем выпуска в рублях (ISSUESIZE × FACEVALUE), обязателен на практике для TQCB; `max_issues` — максимум выпусков (крупнейшие по объему); погашенные не скачиваются. Реестр параметров при этом сохраняет полную доску.
 
 `download_bonds_universe` — первичная выгрузка доски: снапшот параметров всех выпусков в `bonds/params.parquet` (колонка `segment`; при повторном снапшоте записи доски заменяются, чужие доски не трогаются) + история цен каждого выпуска. `update_all_bonds` — инкрементальное обновление всех сохранённых выпусков и параметров (шаг 1c в `update_data.py`). Запуск из CLI: `python update_data.py --bonds-init TQOB` (разово), дальше — штатный `update_data.py`.
 
@@ -332,6 +335,7 @@ python update_data.py [--no-update] [--no-adj] [--no-cap] [--div-folder PATH] [-
 | `--rebuild` | Перескачать историю всех тикеров целиком (после смены методики данных) |
 | `--no-bonds` | Не обновлять облигации |
 | `--bonds-init` | Первичная выгрузка вселенной облигаций доски (например `TQOB`) |
+| `--bonds-min-issue` | Мин. объем выпуска в млрд руб при `--bonds-init` (для TQCB рекомендуется 10) |
 | `--div-folder` | Папка с CSV дивидендов (по умолчанию `../dividends/data`) |
 | `--data-folder` | Папка с Parquet |
 | `--metadata-file` | Путь к Excel с метаданными |

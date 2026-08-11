@@ -1015,6 +1015,27 @@ class TestBondsUniverse:
         assert sorted(saved) == ['SU26238RMFS4', 'SU26240RMFS0']
         assert len(mu.read_bonds_params()) == 2
 
+    def test_download_universe_liquidity_and_maturity_filters(self, bonds_folder, monkeypatch):
+        _list = pd.DataFrame({
+            'SECID': ['BIG', 'SMALL', 'MATURED', 'BIG2'],
+            'SHORTNAME': ['Большой', 'Мелкий', 'Погашенный', 'Большой2'],
+            'ISSUESIZE': [3e7, 1e5, 3e7, 2e7],        # × FACEVALUE 1000 → руб
+            'FACEVALUE': [1000, 1000, 1000, 1000],
+            'MATDATE': ['2030-01-01', '2030-01-01', '2020-01-01', '2030-01-01'],
+        })
+        monkeypatch.setattr(mu, 'get_moex_bonds_list',
+                            lambda segment, session=None: _list.copy())
+        saved = []
+        monkeypatch.setattr(mu, 'save_moex_bond',
+                            lambda secid, start=None, session=None: saved.append(secid))
+
+        # мин. объем 10 млрд руб: SMALL отсеян; MATURED погашен; max_issues=1 → BIG
+        n = mu.download_bonds_universe('TQCB', min_issue_size=10e9, max_issues=1)
+        assert n == 1
+        assert saved == ['BIG']
+        # реестр параметров при этом полный (вся доска)
+        assert len(mu.read_bonds_params()) == 4
+
     def test_update_all_bonds_skips_params_file(self, bonds_folder, monkeypatch):
         # два выпуска + params.parquet, который не является выпуском
         idx = pd.to_datetime(['2025-01-01'])

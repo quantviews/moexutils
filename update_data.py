@@ -20,6 +20,7 @@ def main(
     do_indexes: bool = True,
     do_bonds: bool = True,
     bonds_init: Optional[str] = None,
+    bonds_min_issue: Optional[float] = None,
     rebuild: bool = False,
     div_folder: Optional[str] = None,
     data_folder: Optional[str] = None,
@@ -51,7 +52,9 @@ def main(
 
     if bonds_init:
         print(f"=== 1c. Облигации: первичная выгрузка вселенной {bonds_init} ===")
-        n = moex.download_bonds_universe(bonds_init)
+        n = moex.download_bonds_universe(
+            bonds_init,
+            min_issue_size=bonds_min_issue * 1e9 if bonds_min_issue else None)
         print(f"Выгружено выпусков: {n}")
     elif do_bonds:
         print("=== 1c. Обновление облигаций ===")
@@ -93,6 +96,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-bonds", action="store_true", help="Не обновлять облигации")
     ap.add_argument("--bonds-init", type=str, default=None,
                     help="Первичная выгрузка вселенной облигаций доски (например TQOB)")
+    ap.add_argument("--bonds-min-issue", type=float, default=None,
+                    help="Мин. объем выпуска в млрд руб при --bonds-init (для TQCB рекомендуется 10)")
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
     ap.add_argument("--metadata-file", type=str, default=None, help="Путь к Excel с метаданными (metadata/stock-index-base.xlsx)")
@@ -105,6 +110,7 @@ if __name__ == "__main__":
         do_indexes=not args.no_index,
         do_bonds=not args.no_bonds,
         bonds_init=args.bonds_init,
+        bonds_min_issue=args.bonds_min_issue,
         rebuild=args.rebuild,
         div_folder=args.div_folder,
         data_folder=args.data_folder,
