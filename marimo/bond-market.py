@@ -13,9 +13,8 @@ marimo notebook: Долговой рынок — кривая ОФЗ, доход
 - RGBITR (гособлигации, полная доходность) против IMOEX
 - Таблица всех выпусков: цена, YTM, дюрация, выпуклость
 
-Методика: YTM/дюрация/выпуклость считаются приближенно (полугодовой купон,
-без НКД и графика конкретных купонов) — этого достаточно для формы кривой
-и сравнений, но не для торговых котировок.
+Методика: YTM/дюрация — биржевые (YIELDCLOSE/DURATION из истории ISS),
+упрощенная модель — фоллбэк; выпуклость всегда модельная.
 """
 
 import marimo
@@ -146,7 +145,23 @@ def _(bond_prices, bonds_params, bonds_ready, moex, pd):
             if _years <= 0.05:
                 continue
             _price = float(_price)
-            _ytm = moex.calculate_ytm(_price, _face, _coupon, _years)
+
+            # Биржевые YTM/дюрация из истории ISS (точные: с НКД и фактическим
+            # графиком купонов); упрощенная модель — фоллбэк для строк без них
+            _y_exch = _last.get('YIELDCLOSE')
+            if _y_exch is not None and pd.notna(_y_exch) and 0 < float(_y_exch) < 100:
+                _ytm = float(_y_exch)
+                _src = 'ISS'
+            else:
+                _ytm = moex.calculate_ytm(_price, _face, _coupon, _years)
+                _src = 'модель'
+
+            _d_exch = _last.get('DURATION')  # ISS отдает дюрацию в днях
+            if _d_exch is not None and pd.notna(_d_exch) and float(_d_exch) > 0:
+                _dur = float(_d_exch) / 365.25
+            else:
+                _dur = moex.calculate_duration(_price, _face, _coupon, _years, _ytm)
+
             rows.append({
                 'SECID': _r.SECID,
                 'name': getattr(_r, 'SHORTNAME', _r.SECID),
@@ -156,8 +171,9 @@ def _(bond_prices, bonds_params, bonds_ready, moex, pd):
                 'coupon': _coupon,
                 'price': _price,
                 'ytm': _ytm,
-                'duration': moex.calculate_duration(_price, _face, _coupon, _years, _ytm),
+                'duration': _dur,
                 'convexity': moex.calculate_convexity(_price, _face, _coupon, _years, _ytm),
+                'src': _src,
                 'date': _date,
             })
         return pd.DataFrame(rows)
@@ -311,9 +327,9 @@ def _(mo, snap_now):
         _t = snap_now.sort_values('years').copy()
         _t['maturity'] = _t['maturity'].dt.strftime('%d.%m.%Y')
         _t = _t[['SECID', 'name', 'type', 'maturity', 'years',
-                 'coupon', 'price', 'ytm', 'duration', 'convexity']]
+                 'coupon', 'price', 'ytm', 'duration', 'convexity', 'src']]
         _t.columns = ['SECID', 'Выпуск', 'Тип', 'Погашение', 'Лет',
-                      'Купон %', 'Цена %', 'YTM %', 'Дюрация', 'Выпуклость']
+                      'Купон %', 'Цена %', 'YTM %', 'Дюрация', 'Выпуклость', 'Источник']
         for _c, _nd in (('Лет', 1), ('Купон %', 2), ('Цена %', 2),
                         ('YTM %', 2), ('Дюрация', 1), ('Выпуклость', 1)):
             _t[_c] = _t[_c].round(_nd)
@@ -327,11 +343,12 @@ def _(mo, snap_now):
 def _(mo):
     mo.md(r"""
     ---
-    **Ограничения методики**: YTM/дюрация/выпуклость считаются в упрощенной
-    модели (полугодовой купон, без НКД, без фактического графика купонов
-    и амортизации) — форма кривой и ее динамика корректны, но абсолютные
-    уровни могут отличаться от биржевых на десятки б.п. Для флоатеров (ПК)
-    и линкеров (ИН) YTM из цены не имеет смысла — они показаны только в таблице.
+    **Методика**: YTM и дюрация берутся **биржевые** (колонки `YIELDCLOSE` /
+    `DURATION` из истории ISS — рассчитаны с НКД и фактическим графиком
+    купонов); упрощенная модель (полугодовой купон, без НКД) — только фоллбэк
+    для строк без биржевых значений, источник указан в таблице. Выпуклость
+    всегда модельная — биржа ее не публикует. Для флоатеров (ПК) и линкеров
+    (ИН) YTM из цены не имеет смысла — они показаны только в таблице.
     """)
     return
 
