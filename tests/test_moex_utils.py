@@ -397,8 +397,9 @@ class TestAdjClose:
 
         result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
 
-        # Дивиденд 10 при цене 100 → фактор 0.9 ко всем датам до экс-даты включительно
-        assert result['adj_close'].tolist() == pytest.approx([90.0, 90.0, 90.0, 100.0])
+        # T+1: экс-дата = дата отсечки 03.01; дивиденд 10 при цене 100 → фактор 0.9
+        # ко всем датам строго до экс-даты
+        assert result['adj_close'].tolist() == pytest.approx([90.0, 90.0, 100.0, 100.0])
 
     def test_two_dividends_compound(self, tmp_path):
         df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
@@ -407,8 +408,26 @@ class TestAdjClose:
 
         result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
 
-        # Поздний дивиденд: [90, 90, 90, 100]; ранний: фактор 0.9 к первым двум → [81, 81, 90, 100]
-        assert result['adj_close'].tolist() == pytest.approx([81.0, 81.0, 90.0, 100.0])
+        # Поздний дивиденд: [90, 90, 100, 100]; ранний: фактор 0.9 к первой дате → [81, 90, 100, 100]
+        assert result['adj_close'].tolist() == pytest.approx([81.0, 90.0, 100.0, 100.0])
+
+    def test_ex_date_t2_before_july_2023(self, tmp_path):
+        """До 31.07.2023 (T+2) гэп — за торговый день до отсечки, после (T+1) — в день отсечки."""
+        df = make_stock_df(['2023-05-08', '2023-05-10', '2023-05-11', '2023-05-12'],
+                           [100, 100, 95, 95])
+        self.write_dividends(tmp_path, 'TEST', [('2023-05-11', 5.0)])
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+        # экс-дата 10.05: гэп цены на 11.05 здесь условный, важна позиция корректировки
+        assert result['adj_close'].tolist() == pytest.approx([95.0, 100.0, 95.0, 95.0])
+
+    def test_large_dividend_uses_cum_price(self, tmp_path):
+        """Спецдивиденд ~50% (SFIN, 12.2025): доходность — от цены ДО гэпа, а не после."""
+        df = make_stock_df(['2025-12-23', '2025-12-24', '2025-12-25', '2025-12-26'],
+                           [1799.0, 1828.2, 946.8, 961.2])
+        self.write_dividends(tmp_path, 'TEST', [('2025-12-25', 902.0)])
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+        f = 1 - 902.0 / 1828.2
+        assert result['adj_close'].tolist() == pytest.approx([1799.0 * f, 1828.2 * f, 946.8, 961.2])
 
     def test_dividend_before_data_ignored(self, tmp_path):
         df = make_stock_df(['2025-01-10', '2025-01-11'], [100, 100])
@@ -447,14 +466,14 @@ class TestAdjClose:
         monkeypatch.setattr(mu, 'SPLITS_FILE', str(splits))
         monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'nope.json'))
 
-        # дивиденд 101 руб при сырой цене 1010 (старая база) → фактор 0.9
-        self.write_dividends(tmp_path, 'TEST', [('2025-01-02', 101.0)])
+        # экс-дата 02.01: дивиденд 100 руб при сырой цене 1000 (старая база) → фактор 0.9
+        self.write_dividends(tmp_path, 'TEST', [('2025-01-02', 100.0)])
         df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03', '2025-01-04'],
                            [1000, 1010, 101, 102])
         result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
 
-        # база [100, 101, 101, 102], фактор 0.9 к первым двум
-        assert result['adj_close'].tolist() == pytest.approx([90.0, 90.9, 101.0, 102.0])
+        # база [100, 101, 101, 102], фактор 0.9 к первой дате
+        assert result['adj_close'].tolist() == pytest.approx([90.0, 101.0, 101.0, 102.0])
 
     def test_adj_close_restated_dividend_basis(self, tmp_path, monkeypatch):
         """Дивиденды ВТБ-стиля: файл рестейтнут в новую базу (×5000), сырые цены
@@ -473,7 +492,7 @@ class TestAdjClose:
         result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
 
         # база [100, 100, 100, 101]; доходность 7/100 = 7% → фактор 0.93
-        assert result['adj_close'].tolist() == pytest.approx([93.0, 93.0, 100.0, 101.0])
+        assert result['adj_close'].tolist() == pytest.approx([93.0, 100.0, 100.0, 101.0])
 
     def test_adjust_for_splits_leaves_adj_close(self, tmp_path):
         """adjust_for_splits не трогает adj_close — он уже в единой базе."""
@@ -497,7 +516,7 @@ class TestAdjClose:
         mu.add_adj_close_to_all_stocks(str(div_folder))
 
         df = pd.read_parquet(os.path.join(tmp_data_folder, 'TEST', 'TEST.parquet'))
-        assert df['adj_close'].tolist() == pytest.approx([90.0, 90.0])
+        assert df['adj_close'].tolist() == pytest.approx([90.0, 100.0])
 
 
 # ---------------------------------------------------------------- splits
@@ -1044,6 +1063,9 @@ class TestBondsUniverse:
                 f"{bonds_folder}/{secid}.parquet")
         pd.DataFrame({'SECID': ['BOND1'], 'segment': ['TQOB']}).to_parquet(
             f"{bonds_folder}/params.parquet")
+        # мониторинг доски — тоже не выпуск
+        pd.DataFrame({'date': idx, 'SECID': ['BOND1']}).to_parquet(
+            f"{bonds_folder}/market_TQOB.parquet")
 
         updated = []
         monkeypatch.setattr(mu, 'update_moex_bond',
@@ -1127,6 +1149,49 @@ class TestBondsMarket:
                            - pd.Timedelta(days=3)).strftime('%Y-%m-%d')) == 0
         assert requested == []
 
+    def test_update_stops_on_failure_without_gaps(self, bonds_folder, monkeypatch):
+        # сбой на середине хвоста: даты после сбоя не пишутся, чтобы не оставить дыру
+        today = pd.Timestamp.today().normalize()
+        requested = []
+
+        def fake_fetch(segment, date, session):
+            requested.append(pd.Timestamp(date))
+            if len(requested) == 3:
+                raise ConnectionError('ISS down')
+            return pd.DataFrame({'TRADEDATE': [pd.Timestamp(date).strftime('%Y-%m-%d')],
+                                 'SECID': ['B1'], 'CLOSE': [100.0]})
+
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', fake_fetch)
+        n = mu.update_bonds_market('TQOB', start=(today - pd.Timedelta(days=14)).strftime('%Y-%m-%d'))
+
+        assert len(requested) == 3 and n == 2
+        df = mu.read_bonds_market('TQOB')
+        assert df['date'].max() == requested[1]  # следующий запуск продолжит с requested[2]
+
+    def test_backfill_goes_backwards_from_history(self, bonds_folder, monkeypatch):
+        today = pd.Timestamp.today().normalize()
+        emin = today - pd.Timedelta(days=5)
+        pd.DataFrame({'date': [emin, today], 'SECID': ['B1', 'B1'], 'CLOSE': [100.0, 100.0],
+                      'segment': ['TQOB', 'TQOB']}).to_parquet(
+            os.path.join(bonds_folder, 'market_TQOB.parquet'))
+        requested = []
+
+        def fake_fetch(segment, date, session):
+            requested.append(pd.Timestamp(date))
+            if len(requested) == 4:
+                raise ConnectionError('ISS down')
+            return pd.DataFrame({'TRADEDATE': [pd.Timestamp(date).strftime('%Y-%m-%d')],
+                                 'SECID': ['B1'], 'CLOSE': [99.0]})
+
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', fake_fetch)
+        mu.update_bonds_market('TQOB', start=(today - pd.Timedelta(days=40)).strftime('%Y-%m-%d'))
+
+        head = requested[:3]
+        assert head == sorted(head, reverse=True) and head[0] < emin
+        # скачанный кусок примыкает к истории: между ним и emin нет пропущенных будней
+        assert not [d for d in pd.date_range(head[0] + pd.Timedelta(days=1), emin - pd.Timedelta(days=1))
+                    if d.weekday() < 5]
+
     def test_fetch_board_date_paginates(self, monkeypatch):
         cols = ['TRADEDATE', 'SECID', 'CLOSE', 'BOARDID']
 
@@ -1179,8 +1244,34 @@ class TestBondsMarket:
         called = []
         monkeypatch.setattr(mu, 'update_bonds_market',
                             lambda seg, session=None: called.append(seg))
+        repaired = []
+        monkeypatch.setattr(mu, 'repair_bonds_market',
+                            lambda seg, session=None: repaired.append(seg))
         mu.update_bonds_market_all()
         assert sorted(called) == ['TQCB', 'TQOB']
+        assert sorted(repaired) == ['TQCB', 'TQOB']
+
+    def test_repair_fills_inner_gaps(self, bonds_folder, monkeypatch):
+        saved = pd.to_datetime(['2025-06-02', '2025-06-05', '2025-06-06'])
+        pd.DataFrame({'date': saved, 'SECID': ['B1'] * 3, 'CLOSE': [100.0] * 3,
+                      'segment': ['TQOB'] * 3}).to_parquet(
+            os.path.join(bonds_folder, 'market_TQOB.parquet'))
+        requested = []
+
+        def fake_fetch(segment, date, session):
+            requested.append(pd.Timestamp(date))
+            return pd.DataFrame({'TRADEDATE': [pd.Timestamp(date).strftime('%Y-%m-%d')],
+                                 'SECID': ['B1'], 'CLOSE': [101.0]})
+
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', fake_fetch)
+        # календарь шире истории: даты вне [min, max] и выходные не докачиваются
+        calendar = pd.to_datetime(['2025-05-30', '2025-06-02', '2025-06-03', '2025-06-04',
+                                   '2025-06-05', '2025-06-06', '2025-06-07', '2025-06-09'])
+        assert mu.repair_bonds_market('TQOB', calendar=calendar) == 2
+        assert requested == list(pd.to_datetime(['2025-06-03', '2025-06-04']))
+        assert len(mu.read_bonds_market('TQOB')) == 5
+        requested.clear()
+        assert mu.repair_bonds_market('TQOB', calendar=calendar) == 0 and requested == []
 
 
 # ---------------------------------------------------------------- bond metrics
@@ -1273,3 +1364,70 @@ class TestBondMetrics:
 
         result = mu.add_bond_metrics(df, params)
         assert 'ytm' in result.columns
+
+
+# ---------------------------------------------------------------- infrastructure
+
+class TestInfrastructure:
+    def test_session_has_default_timeout(self, monkeypatch):
+        seen = {}
+
+        def fake_request(self, method, url, **kwargs):
+            seen.update(kwargs)
+            return None
+
+        monkeypatch.setattr(mu.requests.Session, 'request', fake_request)
+        session = mu.make_session()
+        session.get('https://iss.moex.com/iss/x.json')
+        assert seen['timeout'] == mu.ISS_TIMEOUT
+        session.get('https://iss.moex.com/iss/x.json', timeout=5)
+        assert seen['timeout'] == 5  # явный таймаут не перекрывается
+
+    def test_atomic_write_leaves_no_tmp_on_failure(self, tmp_path):
+        path = str(tmp_path / 'x.parquet')
+
+        class _Bad(pd.DataFrame):
+            def to_parquet(self, *a, **k):
+                open(a[0], 'w').close()
+                raise OSError('disk full')
+
+        with pytest.raises(OSError):
+            mu._atomic_to_parquet(_Bad({'a': [1]}), path)
+        assert os.listdir(tmp_path) == []
+
+    def test_local_tickers(self, tmp_data_folder):
+        write_stock_parquet(tmp_data_folder, 'AAA', make_stock_df(['2025-01-01'], [1.0], 'AAA'))
+        os.makedirs(os.path.join(tmp_data_folder, 'EMPTY'))
+        assert mu._local_tickers() == ['AAA']
+
+
+class TestKeyRateUpdate:
+    HTML = """<table><tr><th>Дата</th><th>Ставка</th></tr>
+    <tr><td>23.03.2026</td><td>15,00</td></tr>
+    <tr><td>20.03.2026</td><td>15,50</td></tr>
+    <tr><td>16.02.2026</td><td>15,50</td></tr>
+    <tr><td>13.02.2026</td><td>16,00</td></tr></table>"""
+
+    def _session(self, html):
+        class _Resp:
+            text = html
+
+            def raise_for_status(self):
+                pass
+
+        class _Session:
+            def get(self, url, **kwargs):
+                return _Resp()
+
+        return _Session()
+
+    def test_appends_only_changes(self, tmp_path):
+        f = tmp_path / 'key_rate.csv'
+        f.write_text('date,rate\n2025-12-22,16.00\n', encoding='utf-8')
+        assert mu.update_key_rate(str(f), session=self._session(self.HTML)) == 2
+        kr = mu.load_key_rate(str(f))
+        assert list(kr['date'].dt.strftime('%Y-%m-%d')) == ['2025-12-22', '2026-02-16', '2026-03-23']
+        assert list(kr['rate']) == [16.0, 15.5, 15.0]
+        # повторный запуск — дубликатов нет
+        assert mu.update_key_rate(str(f), session=self._session(self.HTML)) == 0
+        assert len(mu.load_key_rate(str(f))) == 3

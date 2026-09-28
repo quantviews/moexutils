@@ -2,12 +2,14 @@
 Обновление данных: загрузка с MOEX, расчёт adj_close и капитализации (market_cap).
 Использует moex_utils.
 
-Запуск: python update_data.py [--no-update] [--no-adj] [--no-cap] [--div-folder PATH]
+Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 2 adj_close → 3 market_cap.
+Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate] [--no-adj] [--no-cap]
 """
 from __future__ import annotations
 
 import argparse
 import os
+import sys
 from typing import Optional
 
 import moex_utils as moex
@@ -19,6 +21,7 @@ def main(
     do_market_cap: bool = True,
     do_indexes: bool = True,
     do_bonds: bool = True,
+    do_key_rate: bool = True,
     bonds_init: Optional[str] = None,
     bonds_min_issue: Optional[float] = None,
     bonds_market_init: Optional[str] = None,
@@ -70,6 +73,15 @@ def main(
     else:
         print("=== 1c. Облигации — пропуск (--no-bonds) ===")
 
+    if do_key_rate:
+        print("=== 1d. Ключевая ставка ЦБ ===")
+        try:
+            moex.update_key_rate()
+        except Exception as e:
+            print(f"[WARN] Ключевая ставка: не удалось обновить — {e}")
+    else:
+        print("=== 1d. Ключевая ставка — пропуск (--no-key-rate) ===")
+
     if do_adj_close:
         if div_folder is None:
             base = os.path.dirname(os.path.abspath(__file__))
@@ -92,6 +104,12 @@ def main(
 
 
 if __name__ == "__main__":
+    # При перенаправлении вывода в файл (планировщик задач) Windows отдает
+    # stdout в кодировке ANSI (cp1252), и первый же print кириллицы роняет прогон
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+
     ap = argparse.ArgumentParser(description="Обновление данных, adj close и капитализации")
     ap.add_argument("--no-update", action="store_true", help="Не обновлять котировки с MOEX")
     ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close")
@@ -102,6 +120,7 @@ if __name__ == "__main__":
     ap.add_argument("--indexes", type=str, default="IMOEX,MCFTR,RGBITR",
                     help="Индексы через запятую (по умолчанию IMOEX,MCFTR,RGBITR)")
     ap.add_argument("--no-bonds", action="store_true", help="Не обновлять облигации")
+    ap.add_argument("--no-key-rate", action="store_true", help="Не обновлять ключевую ставку ЦБ")
     ap.add_argument("--bonds-init", type=str, default=None,
                     help="Первичная выгрузка вселенной облигаций доски (например TQOB)")
     ap.add_argument("--bonds-min-issue", type=float, default=None,
@@ -121,6 +140,7 @@ if __name__ == "__main__":
         do_market_cap=not args.no_cap,
         do_indexes=not args.no_index,
         do_bonds=not args.no_bonds,
+        do_key_rate=not args.no_key_rate,
         bonds_init=args.bonds_init,
         bonds_min_issue=args.bonds_min_issue,
         bonds_market_init=args.bonds_market_init,

@@ -18,7 +18,8 @@ A Python utility library for fetching and managing stock data from the Moscow Ex
 ## Installation
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt            # ядро и тесты
+pip install -r requirements-notebooks.txt  # + marimo-ноутбуки
 ```
 
 or manually:
@@ -87,7 +88,7 @@ moex.update_moex_stock('SBER', calculate_market_cap_flag=False)
 moex.update_all_stocks()
 ```
 
-На Windows полный цикл обновления (котировки → adj_close → market_cap) запускается через `update_data.bat` (двойной клик или планировщик задач). Флаги пробрасываются в `update_data.py`:
+На Windows полный цикл обновления (котировки → индексы → облигации → ключевая ставка ЦБ → adj_close → market_cap) запускается через `update_data.bat` (двойной клик или планировщик задач). Флаги пробрасываются в `update_data.py`:
 
 ```bat
 update_data.bat --no-adj    :: без пересчета adj_close
@@ -371,10 +372,10 @@ pytest -q
 
 Подробный роадмап — в [development-plan.md](development-plan.md):
 
-1. Облигации (мониторинг досок, YTM/duration/convexity, G-спреды) — реализовано, идет накопление данных
-2. Производные (фьючерсы/опционы, roll-over и метрики)
-3. Инфраструктура (API, кэш, логирование)
-4. Дополнительные метрики (Sharpe, max drawdown, spread)
+1. Надежность и качество данных: отчет о качестве, партиционирование мониторинга облигаций, данные вне облачной синхронизации
+2. Облигации: КБД MOEX, терм-спред, breakeven-инфляция, корпоративные спреды
+3. Архитектура: разбиение `moex_utils.py` на пакет с фасадом, `pyproject.toml`, ruff
+4. Производные: фьючерсы FORTS, склейка серий, базис и implied rate
 
 ## Error Handling
 

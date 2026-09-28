@@ -3,5 +3,6 @@ apimoex
 pandas
 pyarrow
 openpyxl
+lxml
 numpy<2
 plotly

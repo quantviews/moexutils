@@ -35,6 +35,54 @@ if not logger.handlers and not logging.getLogger().handlers:
     logger.addHandler(_handler)
     logger.setLevel(logging.INFO)
 
+# Таймаут запроса к ISS по умолчанию (connect, read), сек: без него зависший
+# сокет останавливает весь прогон update_data.py навсегда
+ISS_TIMEOUT = (10, 60)
+
+
+class _IssSession(requests.Session):
+    """requests.Session с таймаутом по умолчанию и повторами на сетевых сбоях/5xx/429."""
+
+    def __init__(self, timeout=ISS_TIMEOUT, retries: int = 3):
+        super().__init__()
+        self._timeout = timeout
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        retry = Retry(total=retries, backoff_factor=1.0,
+                      status_forcelist=(429, 500, 502, 503, 504),
+                      allowed_methods=frozenset(['GET']))
+        adapter = HTTPAdapter(max_retries=retry)
+        self.mount('https://', adapter)
+        self.mount('http://', adapter)
+
+    def request(self, method, url, **kwargs):
+        kwargs.setdefault('timeout', self._timeout)
+        return super().request(method, url, **kwargs)
+
+
+def make_session() -> requests.Session:
+    """HTTP-сессия для ISS MOEX: keep-alive, таймаут и повторы (используется всеми загрузчиками)."""
+    return _IssSession()
+
+
+def _atomic_to_parquet(df: pd.DataFrame, path: str) -> None:
+    """Запись Parquet через временный файл: прерванная запись не оставляет битый файл."""
+    tmp_path = path + ".tmp"
+    try:
+        df.to_parquet(tmp_path)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+def _local_tickers(folder: Optional[str] = None) -> list[str]:
+    """Тикеры, для которых есть локальный файл <folder>/<TICKER>/<TICKER>.parquet."""
+    folder = DATA_FOLDER if folder is None else folder
+    return [item for item in os.listdir(folder)
+            if os.path.isfile(os.path.join(folder, item, f"{item}.parquet"))]
+
+
 def get_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = None, session: Optional[requests.Session] = None, frequency: int = 24) -> pd.DataFrame:
     """
     Fetches stock data from the Moscow Exchange (MOEX) for a given ticker symbol within a specified date range.
@@ -278,9 +326,7 @@ def save_moex_index(ticker: str = 'IMOEX', start: str = '2010-01-01', end: Optio
 
     os.makedirs(INDEXES_FOLDER, exist_ok=True)
     file_path = os.path.join(INDEXES_FOLDER, f"{ticker}.parquet")
-    tmp_path = file_path + ".tmp"
-    df.to_parquet(tmp_path)
-    os.replace(tmp_path, file_path)
+    _atomic_to_parquet(df, file_path)
     logger.info(f"[OK] {ticker}: {len(df):,} rows → {file_path}")
     return file_path
 
@@ -327,9 +373,7 @@ def update_moex_index(ticker: str = 'IMOEX', session: Optional[requests.Session]
     combined_df = pd.concat([existing_df, new_df])
     combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
 
-    tmp_path = file_path + ".tmp"
-    combined_df.to_parquet(tmp_path)
-    os.replace(tmp_path, file_path)
+    _atomic_to_parquet(combined_df, file_path)
     logger.info(f"Updated index {ticker}: {start} → {combined_df.index.max().strftime('%Y-%m-%d')}")
 
 def save_moex_stock(
@@ -416,20 +460,11 @@ def save_moex_stock(
     os.makedirs(tdir, exist_ok=True)
     file_path = os.path.join(tdir, f"{ticker.upper()}.parquet")
 
-    # атомарная запись
-    tmp_path = file_path + ".tmp"
     try:
-        df.to_parquet(tmp_path, index=True)
-        os.replace(tmp_path, file_path)
+        _atomic_to_parquet(df, file_path)
         logger.info(f"[OK] {ticker}: {len(df):,} rows → {file_path}")
         return file_path
     except Exception as e:
-        # если запись сорвалась — удалим tmp и продолжим
-        try:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        except Exception:
-            pass
         logger.error(f"[ERROR] {ticker}: не удалось сохранить Parquet — {e}")
         return None
 
@@ -491,9 +526,7 @@ def update_moex_stock(
                 logger.warning(f"[WARNING] {ticker}: не удалось пересчитать market cap — {e}")
         
         # Атомарная запись: не оставляем битый файл при прерывании
-        tmp_path = file_path + ".tmp"
-        df_updated.to_parquet(tmp_path)
-        os.replace(tmp_path, file_path)
+        _atomic_to_parquet(df_updated, file_path)
 
         logger.info(f"Updated data for ticker: {ticker} from {last_date_str} to {datetime.today().strftime('%Y-%m-%d')}")
     else:
@@ -965,6 +998,60 @@ def load_key_rate(key_rate_file: Optional[str] = None) -> pd.DataFrame:
     return pd.read_csv(key_rate_file, parse_dates=['date']).sort_values('date')
 
 
+CBR_KEY_RATE_URL = "https://www.cbr.ru/hd_base/KeyRate/"
+
+
+def update_key_rate(key_rate_file: Optional[str] = None,
+                    session: Optional[requests.Session] = None) -> int:
+    """
+    Дописывает в metadata/key_rate.csv решения ЦБ по ключевой ставке после
+    последней записи файла. Источник — дневная таблица ставки на cbr.ru;
+    в файл попадают только даты изменения ставки.
+
+    Returns:
+    int: число добавленных изменений ставки.
+    """
+    import io
+
+    if key_rate_file is None:
+        key_rate_file = KEY_RATE_FILE
+    if session is None:
+        session = make_session()
+
+    kr = load_key_rate(key_rate_file)
+    if kr.empty:
+        raise ValueError(f"{key_rate_file}: пустой реестр — начальную историю нужно внести вручную")
+    last_date = pd.Timestamp(kr['date'].iloc[-1])
+    last_rate = float(kr['rate'].iloc[-1])
+
+    resp = session.get(CBR_KEY_RATE_URL, headers={'User-Agent': 'Mozilla/5.0'}, params={
+        'UniDbQuery.Posted': 'True',
+        'UniDbQuery.From': last_date.strftime('%d.%m.%Y'),
+        'UniDbQuery.To': datetime.today().strftime('%d.%m.%Y')})
+    resp.raise_for_status()
+    table = pd.read_html(io.StringIO(resp.text), decimal=',', thousands=' ')[0]
+    table.columns = ['date', 'rate']
+    table['date'] = pd.to_datetime(table['date'], dayfirst=True)
+    table['rate'] = table['rate'].astype(float)
+    table = table[table['date'] > last_date].sort_values('date')
+
+    changes = []
+    for row in table.itertuples(index=False):
+        if abs(row.rate - last_rate) > 1e-9:
+            changes.append((row.date, row.rate))
+            last_rate = row.rate
+    if not changes:
+        logger.info(f"[INFO] Ключевая ставка: изменений после {last_date:%Y-%m-%d} нет")
+        return 0
+
+    with open(key_rate_file, 'a', encoding='utf-8', newline='') as f:
+        for d, r in changes:
+            f.write(f"{d:%Y-%m-%d},{r:.2f}\n")
+    logger.info(f"[OK] Ключевая ставка: +{len(changes)} изменений, "
+                f"последнее {changes[-1][0]:%Y-%m-%d} → {changes[-1][1]:.2f}%")
+    return len(changes)
+
+
 def risk_free_monthly(dates, key_rate_file: Optional[str] = None) -> pd.Series:
     """
     Месячная безрисковая ставка (в долях, не в %) на заданные даты:
@@ -990,15 +1077,7 @@ def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = Fa
     rebuild (bool): Если True, история каждого тикера перескачивается целиком
         (нужно после смены источника данных, чтобы вся история была в единой методике).
     """
-    # Get list of all ticker directories
-    ticker_dirs = []
-    for item in os.listdir(DATA_FOLDER):
-        dir_path = os.path.join(DATA_FOLDER, item)
-        if os.path.isdir(dir_path):
-            parquet_file = os.path.join(dir_path, f"{item}.parquet")
-            if os.path.exists(parquet_file):
-                ticker_dirs.append(item)
-    
+    ticker_dirs = _local_tickers()
     logger.info(f"Found {len(ticker_dirs)} stocks to update")
 
     # Одна HTTP-сессия на весь прогон: keep-alive вместо нового TLS-соединения на тикер
@@ -1018,6 +1097,24 @@ def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = Fa
             logger.error(f"Error updating {ticker}: {e}")
     
     logger.info(f"\nUpdate completed for {len(ticker_dirs)} stocks")
+
+# Переход MOEX на расчеты T+1 по акциям; до этой даты — T+2
+T1_SETTLEMENT_DATE = pd.Timestamp('2023-07-31')
+
+
+def _ex_dividend_pos(index: pd.DatetimeIndex, record_date) -> int:
+    """
+    Позиция экс-дивидендной даты в торговом календаре index.
+
+    В CSV дивидендов хранится дата закрытия реестра R. Купивший в день D
+    попадает в реестр, если расчеты D+k (k торговых дней) не позже R, поэтому
+    экс-дата — k-й с конца торговый день не позже R: при T+1 это сам R
+    (или последний торговый день перед R, если R выходной), при T+2 — день до R.
+    """
+    record_date = pd.Timestamp(record_date)
+    k = 1 if record_date >= T1_SETTLEMENT_DATE else 2
+    return int(index.searchsorted(record_date, side='right')) - k
+
 
 def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     """
@@ -1095,11 +1192,12 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         ex_dividend_date = row.closing_date
         dividend_value = float(row.dividend_value)
 
-        # позиция справа: всё строго ДО экс-даты попадает под корректировку
-        pos = adj.index.searchsorted(ex_dividend_date, side='right')
+        # pos — позиция экс-даты (первого дня без дивиденда); корректируется
+        # всё строго ДО нее, база доходности — последнее закрытие с дивидендом
+        pos = _ex_dividend_pos(adj.index, ex_dividend_date)
 
         # если экс-дата раньше всех наших данных — пропускаем
-        if pos == 0:
+        if pos <= 0:
             continue
 
         yield_candidates = []
@@ -1132,11 +1230,7 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
     Parameters:
     div_folder (str): The path to the folder containing dividend history CSV files.
     """
-    ticker_dirs = [
-        item for item in os.listdir(DATA_FOLDER)
-        if os.path.isdir(os.path.join(DATA_FOLDER, item)) and
-           os.path.exists(os.path.join(DATA_FOLDER, item, f"{item}.parquet"))
-    ]
+    ticker_dirs = _local_tickers()
 
     if not ticker_dirs:
         logger.info("No stock data found in the data folder.")
@@ -1153,9 +1247,13 @@ def add_adj_close_to_all_stocks(div_folder: str) -> None:
             
             # Calculate adjusted close (will overwrite if column already exists)
             df_adj = calculate_adj_close(df, div_folder)
-            
-            df_adj.to_parquet(file_path)
-            
+
+            # Неизменившиеся файлы не перезаписываем: папка проекта синхронизируется
+            # облаком, и массовая перезапись порождает конфликтные копии
+            if df_adj.equals(df):
+                continue
+            _atomic_to_parquet(df_adj, file_path)
+
             logger.info(f"Successfully updated {ticker} with adj_close column.")
             
         except Exception as e:
@@ -1175,11 +1273,7 @@ def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
     Parameters:
     metadata_file (str): Путь к Excel файлу с метаданными о количестве акций.
     """
-    ticker_dirs = [
-        item for item in os.listdir(DATA_FOLDER)
-        if os.path.isdir(os.path.join(DATA_FOLDER, item)) and
-           os.path.exists(os.path.join(DATA_FOLDER, item, f"{item}.parquet"))
-    ]
+    ticker_dirs = _local_tickers()
     
     if not ticker_dirs:
         logger.info("No stock data found in the data folder.")
@@ -1198,7 +1292,9 @@ def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
             df_mc = calculate_market_cap(df, ticker, metadata_file)
             
             if 'market_cap' in df_mc.columns:
-                df_mc.to_parquet(file_path)
+                if df_mc.equals(df):
+                    continue
+                _atomic_to_parquet(df_mc, file_path)
                 logger.info(f"Successfully updated {ticker} with market cap data.")
             else:
                 logger.warning(f"Warning: Could not calculate market cap for {ticker}.")
@@ -1349,9 +1445,7 @@ def save_moex_bond(secid: str, start: str = '2023-01-01', end: Optional[str] = N
     file_path = os.path.join(BONDS_FOLDER, f"{secid}.parquet")
     
     # Atomic write
-    temp_path = file_path + ".tmp"
-    df.to_parquet(temp_path)
-    os.replace(temp_path, file_path)
+    _atomic_to_parquet(df, file_path)
     
     logger.info(f"[OK] Saved bond {secid} to {file_path}")
 
@@ -1397,9 +1491,7 @@ def update_moex_bond(secid: str, session: Optional[requests.Session] = None) -> 
     os.makedirs(BONDS_FOLDER, exist_ok=True)
     file_path = os.path.join(BONDS_FOLDER, f"{secid}.parquet")
     
-    temp_path = file_path + ".tmp"
-    combined_df.to_parquet(temp_path)
-    os.replace(temp_path, file_path)
+    _atomic_to_parquet(combined_df, file_path)
     
     logger.info(f"[OK] Updated bond {secid}")
 
@@ -1426,9 +1518,7 @@ def save_bonds_params(segment: str = 'TQOB', session: Optional[requests.Session]
         combined = bonds_list
     combined = combined.drop_duplicates(subset='SECID', keep='last')
 
-    tmp_path = params_path + '.tmp'
-    combined.to_parquet(tmp_path)
-    os.replace(tmp_path, params_path)
+    _atomic_to_parquet(combined, params_path)
     logger.info(f"[OK] {segment}: параметры {len(bonds_list)} выпусков → {params_path}")
     return bonds_list
 
@@ -1505,8 +1595,10 @@ def update_all_bonds(session: Optional[requests.Session] = None,
         logger.info("Папка bonds/ отсутствует — нечего обновлять")
         return
 
+    # market_*.parquet (мониторинг досок) и params.parquet — не истории выпусков
     secids = [f[:-len('.parquet')] for f in os.listdir(BONDS_FOLDER)
-              if f.endswith('.parquet') and f != 'params.parquet']
+              if f.endswith('.parquet') and f != 'params.parquet'
+              and not f.startswith('market_')]
     if not secids:
         logger.info("В bonds/ нет сохраненных выпусков — выполните download_bonds_universe()")
         return
@@ -1559,8 +1651,12 @@ def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd
             break
     if not pages:
         return pd.DataFrame()
-    df = pd.concat(pages, ignore_index=True)
-    return df[[c for c in _BONDS_MARKET_COLS if c in df.columns]]
+    cols = [c for c in _BONDS_MARKET_COLS if c in pages[0].columns]
+    # Полностью пустые колонки страниц убираем до concat (FutureWarning pandas
+    # о типах для all-NA), затем возвращаем полный набор колонок
+    df = pd.concat([pg[[c for c in cols if c in pg.columns]].dropna(axis=1, how='all')
+                    for pg in pages], ignore_index=True)
+    return df.reindex(columns=cols)
 
 
 def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
@@ -1591,9 +1687,11 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
         _emin = pd.to_datetime(existing['date'].min())
         _emax = pd.to_datetime(existing['date'].max())
         # Бэкфилл в начале; зазор до 10 дней считаем закрытым (праздники)
+        # Бэкфилл идет от сохраненной истории назад: при обрыве прогона
+        # скачанные даты примыкают к истории, и следующий запуск продолжит без дыр
         head = ([] if (_emin - first_date).days <= 10 else
                 [d for d in pd.date_range(first_date, _emin - pd.Timedelta(days=1))
-                 if d.weekday() < 5])
+                 if d.weekday() < 5][::-1])
         tail = [d for d in pd.date_range(_emax + pd.Timedelta(days=1), today)
                 if d.weekday() < 5]
         dates = (head + tail)[:max_days]
@@ -1608,8 +1706,11 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
         try:
             page = _fetch_bonds_board_date(segment, d, session)
         except Exception as e:
-            logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e}")
-            continue
+            # Не перескакиваем дату: следующий запуск стартует от последней
+            # сохраненной даты, пропуск в середине остался бы дырой навсегда
+            logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e} — прогон остановлен, "
+                           f"сохраняю скачанное")
+            break
         if len(page):
             page = page.copy()
             page['date'] = pd.to_datetime(page['TRADEDATE'])
@@ -1628,10 +1729,62 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
     combined = combined.drop_duplicates(subset=['date', 'SECID'], keep='last')
     combined = combined.sort_values(['date', 'SECID'])
 
-    tmp_path = path + '.tmp'
-    combined.to_parquet(tmp_path)
-    os.replace(tmp_path, path)
+    _atomic_to_parquet(combined, path)
     logger.info(f"[OK] {segment}: +{len(new_rows)} строк мониторинга → {path}")
+    return len(new_rows)
+
+
+def repair_bonds_market(segment: str = 'TQOB', session: Optional[requests.Session] = None,
+                        calendar: Optional[pd.DatetimeIndex] = None) -> int:
+    """
+    Докачивает пропущенные торговые даты ВНУТРИ сохраненного мониторинга доски
+    (дыры от сбоев прошлых прогонов). Торговый календарь — даты IMOEX из
+    локального кэша индексов (будни), если calendar не передан.
+
+    Returns:
+    int: число добавленных строк.
+    """
+    path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
+    if not os.path.exists(path):
+        return 0
+    if calendar is None:
+        try:
+            calendar = pd.DatetimeIndex(read_moex_index('IMOEX').index)
+        except FileNotFoundError:
+            logger.info("[INFO] Нет кэша IMOEX — проверка пропусков мониторинга пропущена")
+            return 0
+    existing = pd.read_parquet(path)
+    have = pd.DatetimeIndex(pd.to_datetime(existing['date']).unique())
+    cal = pd.DatetimeIndex(calendar).normalize()
+    cal = cal[(cal >= have.min()) & (cal <= have.max()) & (cal.weekday < 5)]
+    missing = cal.difference(have)
+    if missing.empty:
+        return 0
+
+    logger.info(f"[INFO] {segment}: пропущенных торговых дат в мониторинге — {len(missing)}, докачиваю")
+    if session is None:
+        session = make_session()
+    frames = []
+    for d in missing:
+        try:
+            page = _fetch_bonds_board_date(segment, d, session)
+        except Exception as e:
+            logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e}")
+            continue
+        if len(page):
+            page = page.copy()
+            page['date'] = pd.to_datetime(page['TRADEDATE'])
+            page['segment'] = segment
+            frames.append(page.drop(columns=['TRADEDATE']))
+    if not frames:
+        return 0
+
+    new_rows = pd.concat(frames, ignore_index=True)
+    combined = pd.concat([existing, new_rows], ignore_index=True)
+    combined = combined.drop_duplicates(subset=['date', 'SECID'], keep='last')
+    combined = combined.sort_values(['date', 'SECID'])
+    _atomic_to_parquet(combined, path)
+    logger.info(f"[OK] {segment}: +{len(new_rows)} строк за {len(frames)} пропущенных дат")
     return len(new_rows)
 
 
@@ -1673,6 +1826,7 @@ def update_bonds_market_all(session: Optional[requests.Session] = None) -> None:
     for seg in segments:
         try:
             update_bonds_market(seg, session=session)
+            repair_bonds_market(seg, session=session)
         except Exception as e:
             logger.error(f"Error updating bonds market {seg}: {e}")
 

@@ -39,7 +39,8 @@ df = moex.read_moex_stock('SBER')
 | **update_data.py** | Скрипт: обновление котировок, пересчёт adj_close и капитализации |
 | **update_data.bat** | Windows-обёртка для update_data.py (двойной клик / планировщик задач) |
 | **tests/** | Офлайновые pytest-тесты (MOEX API замокан), также гоняются в CI |
-| **requirements.txt** | Зависимости (в т.ч. numpy<2 для совместимости) |
+| **requirements.txt** | Зависимости ядра и тестов (в т.ч. numpy<2 для совместимости) |
+| **requirements-notebooks.txt** | Дополнительно для marimo-ноутбуков (marimo, statsmodels, arch, PyPortfolioOpt и др.) |
 
 ## Разделы
 
