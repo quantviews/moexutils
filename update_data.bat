@@ -1,14 +1,34 @@
 @echo off
-rem Обновление локальных данных MOEX: котировки акций в data/, adj_close, market_cap.
-rem Запуск: двойной клик или из планировщика. Флаги пробрасываются в update_data.py,
-rem например: update_data.bat --no-adj --no-cap
+rem Update local MOEX data: stocks, indexes, bonds, CBR key rate, adj_close, market_cap.
+rem Run by double click. Flags are passed to update_data.py,
+rem e.g.: update_data.bat --no-adj --no-cap
+rem Interpreter: MOEX_PYTHON env var, else conda env py312, else python from PATH
+rem (the system python has no apimoex). MOEX_NO_PAUSE=1 disables the final pause
+rem (set by scheduled_update.cmd for Task Scheduler).
+rem The file is ASCII-only on purpose: cmd misparses UTF-8 batch files after chcp 65001.
 chcp 65001 >nul
 cd /d "%~dp0"
+set "PYTHONIOENCODING=utf-8"
 
-python update_data.py %*
+set "PY=%MOEX_PYTHON%"
+if not defined PY if exist "H:\conda\envs\py312\python.exe" set "PY=H:\conda\envs\py312\python.exe"
+if not defined PY set "PY=python"
 
+"%PY%" -c "import apimoex" 2>nul
 if errorlevel 1 (
-    echo.
-    echo [ОШИБКА] Обновление завершилось с ошибкой, код %errorlevel%.
+    echo [ERROR] Python "%PY%" cannot import apimoex.
+    echo Set MOEX_PYTHON to the interpreter of the project environment.
+    set "RC=1"
+    goto :end
 )
-pause
+
+"%PY%" update_data.py %*
+set "RC=%errorlevel%"
+if not "%RC%"=="0" (
+    echo.
+    echo [ERROR] Update failed, exit code %RC%.
+)
+
+:end
+if not defined MOEX_NO_PAUSE pause
+exit /b %RC%

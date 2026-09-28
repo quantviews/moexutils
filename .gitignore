@@ -17,3 +17,4 @@ __marimo__/
 *.ods
 *.parquet
 *.csv
+logs/

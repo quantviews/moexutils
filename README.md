@@ -94,6 +94,15 @@ moex.update_all_stocks()
 update_data.bat --no-adj    :: без пересчета adj_close
 ```
 
+Интерпретатор: переменная окружения `MOEX_PYTHON`, иначе conda-окружение `H:\conda\envs\py312`, иначе `python` из PATH (системный python без `apimoex` не подходит — bat сообщит об этом).
+
+**Ночное обновление.** Задача планировщика Windows `MOEX data nightly` запускает `scheduled_update.cmd` вт–сб в 00:30 (покрывает торги пн–пт). Слот выбран свободным от других ночных задач (FedStat с 02:00, еженедельные с 01:00 по воскресеньям): лимит 25 минут, пониженный приоритет, пропущенный запуск не догоняется — следующий прогон докачивает все сам. Лог — `logs/update.log` (ротация после 5 МБ), код выхода виден в планировщике.
+
+```powershell
+Start-ScheduledTask -TaskName 'MOEX data nightly'          # запустить вручную
+Get-ScheduledTaskInfo -TaskName 'MOEX data nightly'        # последний запуск и результат
+```
+
 ### Market Cap Calculation
 
 ```python
