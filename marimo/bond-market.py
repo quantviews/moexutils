@@ -83,7 +83,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo, moex, pd):
     # Загрузка вселенной единым длинным DataFrame.
-    # Приоритет — консолидированный мониторинг досок (bonds/market_*.parquet,
+    # Приоритет — консолидированный мониторинг досок (bonds/market_<SEG>/<YYYY>.parquet,
     # все выпуски, обновляется по датам); фоллбэк — пофайловые истории + params.
     import os as _osb
 

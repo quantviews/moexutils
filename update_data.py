@@ -37,11 +37,19 @@ def main(
     if metadata_file is not None:
         moex.METADATA_FILE = metadata_file
 
+    if div_folder is None:
+        base = os.path.dirname(os.path.abspath(__file__))
+        div_folder = os.path.normpath(os.path.join(base, "..", "dividends", "data"))
+    div_ok = do_adj_close and os.path.isdir(div_folder)
+
     if do_update:
         print("=== 1. Обновление данных с MOEX ===" + (" (полное перескачивание)" if rebuild else ""))
-        # Если этап 3 всё равно пересчитает market cap для всех данных,
-        # не тратим время на пересчет для каждого тикера здесь
-        moex.update_all_stocks(calculate_market_cap_flag=not do_market_cap, rebuild=rebuild)
+        # adj_close и market cap считаются сразу при обновлении тикера: файл пишется
+        # один раз (папка синхронизируется облаком, серия быстрых перезаписей
+        # одного файла порождает конфликтные копии). Шаги 2-3 ниже — сверка:
+        # они пишут только файлы, у которых поменялись дивиденды или метаданные
+        moex.update_all_stocks(calculate_market_cap_flag=do_market_cap, rebuild=rebuild,
+                               div_folder=div_folder if div_ok else None)
     else:
         print("=== 1. Обновление данных — пропуск (--no-update) ===")
 
@@ -83,10 +91,7 @@ def main(
         print("=== 1d. Ключевая ставка — пропуск (--no-key-rate) ===")
 
     if do_adj_close:
-        if div_folder is None:
-            base = os.path.dirname(os.path.abspath(__file__))
-            div_folder = os.path.normpath(os.path.join(base, "..", "dividends", "data"))
-        if not os.path.isdir(div_folder):
+        if not div_ok:
             print(f"[WARN] Папка дивидендов не найдена: {div_folder}. Adj close пропущен.")
         else:
             print("=== 2. Расчёт adjusted close (дивиденды) ===")

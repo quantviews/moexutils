@@ -125,7 +125,7 @@ def get_moex_stock(ticker: str, start: str = '2023-01-01', end: Optional[str] = 
     
     # Use the session if provided, otherwise create a new one
     if session is None:
-        session = requests.Session()
+        session = make_session()
 
     try:
         if frequency == 24:
@@ -263,7 +263,7 @@ def get_moex_index(ticker: str, start: str = '2023-01-01', end: Optional[str] = 
     
     # Use the session if provided, otherwise create a new one
     if session is None:
-        session = requests.Session()
+        session = make_session()
 
     try:
         # Fetch data from MOEX API
@@ -372,6 +372,9 @@ def update_moex_index(ticker: str = 'IMOEX', session: Optional[requests.Session]
 
     combined_df = pd.concat([existing_df, new_df])
     combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
+    if combined_df.equals(existing_df):
+        logger.info(f"[INFO] {ticker}: нет новых данных")
+        return
 
     _atomic_to_parquet(combined_df, file_path)
     logger.info(f"Updated index {ticker}: {start} → {combined_df.index.max().strftime('%Y-%m-%d')}")
@@ -476,12 +479,16 @@ def update_moex_stock(
     calculate_market_cap_flag: bool = True,
     metadata_file: Optional[str] = None,
     frequency: int = 24,
+    div_folder: Optional[str] = None,
 ) -> None:
     """
     Updates the stock data for a given ticker symbol by checking the local Parquet file.
     If the file exists, it fetches new data from the last date in the file to the current date.
-    Автоматически пересчитывает market cap, если calculate_market_cap_flag=True.
-    
+    Автоматически пересчитывает market cap, если calculate_market_cap_flag=True,
+    и adj_close, если передан div_folder — так файл пишется один раз за прогон.
+    Файл не перезаписывается, если данные не изменились (папка синхронизируется
+    облаком, лишние перезаписи порождают конфликтные копии).
+
     Parameters:
     ticker (str): The ticker symbol of the stock to update data for.
     session (requests.Session): An optional requests session to use for making the API call. Default is None, which creates a new session.
@@ -489,6 +496,8 @@ def update_moex_stock(
     metadata_file (str): Путь к Excel файлу с метаданными о количестве акций.
     frequency (int): Частота свечей для дозагрузки (24 = дневные). Должна совпадать
                      с частотой, с которой файл был сохранен изначально.
+    div_folder (str | None): папка CSV дивидендов; если задана, adj_close
+                     пересчитывается здесь же (см. calculate_adj_close).
     """
     ticker = ticker.upper()
 
@@ -509,13 +518,16 @@ def update_moex_stock(
         # Fetch new data from the last date to today
         new_data = get_moex_stock(ticker, start=last_date_str, session=session, frequency=frequency)
         
-        # Append the new data to the existing DataFrame
-        df_updated = pd.concat([df_existing, new_data])
-        
-        # Удаляем дубликаты по индексу (если есть)
-        df_updated = df_updated[~df_updated.index.duplicated(keep='last')]
-        df_updated = df_updated.sort_index()
-        
+        # Перекачанные даты: сырые колонки — из ответа ISS, производные
+        # (adj_close, shares, market_cap) — из файла, пока их не пересчитают.
+        # Простая склейка keep='last' обнуляла их у последней строки при каждом прогоне
+        df_updated = new_data.combine_first(df_existing).sort_index()
+        df_updated = df_updated[list(df_existing.columns) +
+                                [c for c in df_updated.columns if c not in df_existing.columns]]
+
+        if div_folder is not None:
+            df_updated = calculate_adj_close(df_updated, div_folder)
+
         # Пересчитываем market cap для всех данных, если требуется
         if calculate_market_cap_flag:
             try:
@@ -525,6 +537,10 @@ def update_moex_stock(
             except Exception as e:
                 logger.warning(f"[WARNING] {ticker}: не удалось пересчитать market cap — {e}")
         
+        if df_updated.equals(df_existing):
+            logger.info(f"[INFO] {ticker}: нет изменений")
+            return
+
         # Атомарная запись: не оставляем битый файл при прерывании
         _atomic_to_parquet(df_updated, file_path)
 
@@ -1067,7 +1083,8 @@ def risk_free_monthly(dates, key_rate_file: Optional[str] = None) -> pd.Series:
     return combined.reindex(idx) / 100.0 / 12.0
 
 
-def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = False):
+def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = False,
+                      div_folder: Optional[str] = None):
     """
     Updates data for all stocks that have existing parquet files.
 
@@ -1076,12 +1093,14 @@ def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = Fa
         (полезно, когда пересчет всё равно делается отдельным шагом, как в update_data.py).
     rebuild (bool): Если True, история каждого тикера перескачивается целиком
         (нужно после смены источника данных, чтобы вся история была в единой методике).
+    div_folder (str | None): папка CSV дивидендов — adj_close считается сразу
+        при обновлении тикера (одна запись файла вместо нескольких).
     """
     ticker_dirs = _local_tickers()
     logger.info(f"Found {len(ticker_dirs)} stocks to update")
 
     # Одна HTTP-сессия на весь прогон: keep-alive вместо нового TLS-соединения на тикер
-    session = requests.Session()
+    session = make_session()
 
     # Update each stock
     for ticker in ticker_dirs:
@@ -1092,7 +1111,8 @@ def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = Fa
                                 calculate_market_cap_flag=calculate_market_cap_flag)
             else:
                 update_moex_stock(ticker, session=session,
-                                  calculate_market_cap_flag=calculate_market_cap_flag)
+                                  calculate_market_cap_flag=calculate_market_cap_flag,
+                                  div_folder=div_folder)
         except Exception as e:
             logger.error(f"Error updating {ticker}: {e}")
     
@@ -1338,7 +1358,7 @@ def get_moex_bonds_list(segment: str = 'TQCB', session: Optional[requests.Sessio
     pd.DataFrame: DataFrame with bond securities data.
     """
     if session is None:
-        session = requests.Session()
+        session = make_session()
 
     # Фильтрация по доске работает только через путь /boards/<board>/:
     # одноимённый query-параметр ISS молча игнорирует
@@ -1364,7 +1384,7 @@ def get_moex_bond_params(secid: str, session: Optional[requests.Session] = None)
     pd.DataFrame: DataFrame with bond parameters.
     """
     if session is None:
-        session = requests.Session()
+        session = make_session()
     
     url = f"https://iss.moex.com/iss/engines/stock/markets/bonds/securities/{secid}.json"
     params = {'iss.only': 'securities'}
@@ -1393,7 +1413,7 @@ def get_moex_bond_prices(secid: str, start: str = '2023-01-01', end: Optional[st
         end = datetime.today().strftime('%Y-%m-%d')
     
     if session is None:
-        session = requests.Session()
+        session = make_session()
     
     url = f"https://iss.moex.com/iss/history/engines/stock/markets/bonds/securities/{secid}.json"
 
@@ -1516,7 +1536,10 @@ def save_bonds_params(segment: str = 'TQOB', session: Optional[requests.Session]
                              ignore_index=True)
     else:
         combined = bonds_list
-    combined = combined.drop_duplicates(subset='SECID', keep='last')
+    combined = combined.drop_duplicates(subset='SECID', keep='last').reset_index(drop=True)
+    if os.path.exists(params_path) and combined.equals(old.reset_index(drop=True)):
+        logger.info(f"[INFO] {segment}: параметры выпусков не изменились")
+        return bonds_list
 
     _atomic_to_parquet(combined, params_path)
     logger.info(f"[OK] {segment}: параметры {len(bonds_list)} выпусков → {params_path}")
@@ -1553,7 +1576,7 @@ def download_bonds_universe(segment: str = 'TQOB', start: str = '2014-01-01',
     int: число успешно сохраненных выпусков.
     """
     if session is None:
-        session = requests.Session()
+        session = make_session()
 
     bonds_list = save_bonds_params(segment, session=session)
     if bonds_list.empty:
@@ -1604,7 +1627,7 @@ def update_all_bonds(session: Optional[requests.Session] = None,
         return
 
     if session is None:
-        session = requests.Session()
+        session = make_session()
 
     logger.info(f"Found {len(secids)} bonds to update")
     for secid in secids:
@@ -1659,14 +1682,108 @@ def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd
     return df.reindex(columns=cols)
 
 
+def _market_dir(segment: str) -> str:
+    """Папка мониторинга доски: bonds/market_<SEGMENT>/<YYYY>.parquet."""
+    return os.path.join(BONDS_FOLDER, f"market_{segment}")
+
+
+def _market_year_files(segment: str) -> dict[int, str]:
+    """Годовые файлы мониторинга доски: {год: путь}, по возрастанию года."""
+    folder = _market_dir(segment)
+    if not os.path.isdir(folder):
+        return {}
+    files = {}
+    for f in os.listdir(folder):
+        stem = f[:-len('.parquet')]
+        if f.endswith('.parquet') and stem.isdigit():
+            files[int(stem)] = os.path.join(folder, f)
+    return dict(sorted(files.items()))
+
+
+def _market_segments() -> list[str]:
+    """Доски, по которым есть мониторинг (папки market_<SEG>/ и старые market_<SEG>.parquet)."""
+    if not os.path.isdir(BONDS_FOLDER):
+        return []
+    segments = set()
+    for f in os.listdir(BONDS_FOLDER):
+        if not f.startswith('market_'):
+            continue
+        if f.endswith('.parquet'):
+            segments.add(f[len('market_'):-len('.parquet')])
+        elif os.path.isdir(os.path.join(BONDS_FOLDER, f)):
+            segments.add(f[len('market_'):])
+    return sorted(segments)
+
+
+def _merge_market_rows(segment: str, rows: pd.DataFrame) -> None:
+    """
+    Дописывает строки в годовые файлы мониторинга: перезаписываются только
+    годы, в которые попали новые строки (текущий год при ежедневном обновлении).
+    """
+    folder = _market_dir(segment)
+    os.makedirs(folder, exist_ok=True)
+    rows = rows.copy()
+    rows['date'] = pd.to_datetime(rows['date'])
+    for year, part in rows.groupby(rows['date'].dt.year):
+        path = os.path.join(folder, f"{int(year)}.parquet")
+        if os.path.exists(path):
+            part = pd.concat([pd.read_parquet(path), part], ignore_index=True)
+        part = part.drop_duplicates(subset=['date', 'SECID'], keep='last')
+        part = part.sort_values(['date', 'SECID']).reset_index(drop=True)
+        _atomic_to_parquet(part, path)
+
+
+def _migrate_market_legacy(segment: str) -> None:
+    """
+    Разово переносит старый единый файл bonds/market_<SEG>.parquet в годовые
+    файлы. Единый файл целиком перезаписывался при каждом обновлении
+    (десятки МБ для TQCB), и облачная синхронизация гоняла его каждую ночь.
+    Старый файл удаляется только после сверки числа строк.
+    """
+    legacy = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
+    if not os.path.exists(legacy):
+        return
+    df = pd.read_parquet(legacy)
+    if len(df):
+        _merge_market_rows(segment, df)
+        expected = df.drop_duplicates(subset=['date', 'SECID'])
+        years = set(pd.to_datetime(expected['date']).dt.year)
+        written = sum(len(pd.read_parquet(p, columns=['date']))
+                      for y, p in _market_year_files(segment).items() if y in years)
+        if written < len(expected):
+            raise RuntimeError(f"{segment}: перенос мониторинга по годам не сошелся "
+                               f"({written} < {len(expected)} строк), {legacy} оставлен")
+    os.remove(legacy)
+    logger.info(f"[OK] {segment}: мониторинг разбит по годам → {_market_dir(segment)}")
+
+
+def _market_dates(segment: str) -> pd.DatetimeIndex:
+    """Все сохраненные торговые даты мониторинга (читается только колонка date)."""
+    frames = [pd.read_parquet(p, columns=['date']) for p in _market_year_files(segment).values()]
+    if not frames:
+        return pd.DatetimeIndex([])
+    return pd.DatetimeIndex(pd.to_datetime(pd.concat(frames)['date']).unique()).sort_values()
+
+
+def _fetch_market_rows(segment: str, date, session: requests.Session) -> pd.DataFrame:
+    """Строки мониторинга за дату в формате хранения (date, segment вместо TRADEDATE)."""
+    page = _fetch_bonds_board_date(segment, date, session)
+    if not len(page):
+        return page
+    page = page.copy()
+    page['date'] = pd.to_datetime(page['TRADEDATE'])
+    page['segment'] = segment
+    return page.drop(columns=['TRADEDATE'])
+
+
 def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
                         session: Optional[requests.Session] = None,
                         max_days: int = 3000) -> int:
     """
     Консолидированный мониторинг ВСЕХ выпусков доски: история торгов по датам
-    (постранично, вся доска за день одним запросом) дозаписывается в
-    bonds/market_<SEGMENT>.parquet. Новые размещения появляются автоматически,
-    погашенные выпуски перестают приходить сами.
+    (постранично, вся доска за день одним запросом) дозаписывается в годовые
+    файлы bonds/market_<SEGMENT>/<YYYY>.parquet. Новые размещения появляются
+    автоматически, погашенные выпуски перестают приходить сами.
 
     Если start раньше уже сохраненной истории, недостающие даты в начале
     докачиваются (бэкфилл): update_bonds_market('TQOB', start='2021-01-01').
@@ -1675,17 +1792,16 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
     int: число добавленных строк.
     """
     if session is None:
-        session = requests.Session()
+        session = make_session()
 
     os.makedirs(BONDS_FOLDER, exist_ok=True)
-    path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
-    existing = pd.read_parquet(path) if os.path.exists(path) else None
+    _migrate_market_legacy(segment)
+    have = _market_dates(segment)
 
     first_date = pd.Timestamp(start)
     today = pd.Timestamp.today().normalize()
-    if existing is not None and len(existing):
-        _emin = pd.to_datetime(existing['date'].min())
-        _emax = pd.to_datetime(existing['date'].max())
+    if len(have):
+        _emin, _emax = have.min(), have.max()
         # Бэкфилл в начале; зазор до 10 дней считаем закрытым (праздники)
         # Бэкфилл идет от сохраненной истории назад: при обрыве прогона
         # скачанные даты примыкают к истории, и следующий запуск продолжит без дыр
@@ -1704,18 +1820,15 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
     frames = []
     for i, d in enumerate(dates, 1):
         try:
-            page = _fetch_bonds_board_date(segment, d, session)
+            rows = _fetch_market_rows(segment, d, session)
         except Exception as e:
             # Не перескакиваем дату: следующий запуск стартует от последней
             # сохраненной даты, пропуск в середине остался бы дырой навсегда
             logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e} — прогон остановлен, "
                            f"сохраняю скачанное")
             break
-        if len(page):
-            page = page.copy()
-            page['date'] = pd.to_datetime(page['TRADEDATE'])
-            page['segment'] = segment
-            frames.append(page.drop(columns=['TRADEDATE']))
+        if len(rows):
+            frames.append(rows)
         if i % 20 == 0:
             logger.info(f"[INFO] {segment}: обработано дат {i}/{len(dates)}")
 
@@ -1724,13 +1837,8 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
         return 0
 
     new_rows = pd.concat(frames, ignore_index=True)
-    combined = (pd.concat([existing, new_rows], ignore_index=True)
-                if existing is not None else new_rows)
-    combined = combined.drop_duplicates(subset=['date', 'SECID'], keep='last')
-    combined = combined.sort_values(['date', 'SECID'])
-
-    _atomic_to_parquet(combined, path)
-    logger.info(f"[OK] {segment}: +{len(new_rows)} строк мониторинга → {path}")
+    _merge_market_rows(segment, new_rows)
+    logger.info(f"[OK] {segment}: +{len(new_rows)} строк мониторинга → {_market_dir(segment)}")
     return len(new_rows)
 
 
@@ -1744,8 +1852,9 @@ def repair_bonds_market(segment: str = 'TQOB', session: Optional[requests.Sessio
     Returns:
     int: число добавленных строк.
     """
-    path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
-    if not os.path.exists(path):
+    _migrate_market_legacy(segment)
+    have = _market_dates(segment)
+    if not len(have):
         return 0
     if calendar is None:
         try:
@@ -1753,8 +1862,6 @@ def repair_bonds_market(segment: str = 'TQOB', session: Optional[requests.Sessio
         except FileNotFoundError:
             logger.info("[INFO] Нет кэша IMOEX — проверка пропусков мониторинга пропущена")
             return 0
-    existing = pd.read_parquet(path)
-    have = pd.DatetimeIndex(pd.to_datetime(existing['date']).unique())
     cal = pd.DatetimeIndex(calendar).normalize()
     cal = cal[(cal >= have.min()) & (cal <= have.max()) & (cal.weekday < 5)]
     missing = cal.difference(have)
@@ -1767,62 +1874,66 @@ def repair_bonds_market(segment: str = 'TQOB', session: Optional[requests.Sessio
     frames = []
     for d in missing:
         try:
-            page = _fetch_bonds_board_date(segment, d, session)
+            rows = _fetch_market_rows(segment, d, session)
         except Exception as e:
             logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e}")
             continue
-        if len(page):
-            page = page.copy()
-            page['date'] = pd.to_datetime(page['TRADEDATE'])
-            page['segment'] = segment
-            frames.append(page.drop(columns=['TRADEDATE']))
+        if len(rows):
+            frames.append(rows)
     if not frames:
         return 0
 
     new_rows = pd.concat(frames, ignore_index=True)
-    combined = pd.concat([existing, new_rows], ignore_index=True)
-    combined = combined.drop_duplicates(subset=['date', 'SECID'], keep='last')
-    combined = combined.sort_values(['date', 'SECID'])
-    _atomic_to_parquet(combined, path)
+    _merge_market_rows(segment, new_rows)
     logger.info(f"[OK] {segment}: +{len(new_rows)} строк за {len(frames)} пропущенных дат")
     return len(new_rows)
 
 
-def read_bonds_market(segment: Optional[str] = None) -> pd.DataFrame:
+def read_bonds_market(segment: Optional[str] = None, start: Optional[str] = None,
+                      end: Optional[str] = None) -> pd.DataFrame:
     """
-    Читает консолидированный мониторинг облигаций. Без аргумента — все доски,
-    по которым есть bonds/market_*.parquet, одним DataFrame.
+    Читает консолидированный мониторинг облигаций. Без segment — все доски
+    одним DataFrame. start/end (включительно) ограничивают период и читают
+    только нужные годовые файлы.
     """
-    if segment is not None:
-        path = os.path.join(BONDS_FOLDER, f"market_{segment}.parquet")
-        if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"Мониторинг не найден: {path}. Выполните update_bonds_market('{segment}') "
-                f"или update_data.py --bonds-market-init {segment}.")
-        return pd.read_parquet(path)
+    segments = [segment] if segment is not None else _market_segments()
+    if not segments:
+        raise FileNotFoundError(
+            f"В {BONDS_FOLDER} нет мониторинга досок (market_<SEG>/). "
+            f"Выполните update_data.py --bonds-market-init TQOB,TQCB.")
+    lo = pd.Timestamp(start) if start is not None else None
+    hi = pd.Timestamp(end) if end is not None else None
 
     frames = []
-    if os.path.isdir(BONDS_FOLDER):
-        for f in sorted(os.listdir(BONDS_FOLDER)):
-            if f.startswith('market_') and f.endswith('.parquet'):
-                frames.append(pd.read_parquet(os.path.join(BONDS_FOLDER, f)))
+    for seg in segments:
+        _migrate_market_legacy(seg)
+        files = _market_year_files(seg)
+        if not files and segment is not None:
+            raise FileNotFoundError(
+                f"Мониторинг не найден: {_market_dir(seg)}. Выполните update_bonds_market('{seg}') "
+                f"или update_data.py --bonds-market-init {seg}.")
+        for year, path in files.items():
+            if (lo is not None and year < lo.year) or (hi is not None and year > hi.year):
+                continue
+            frames.append(pd.read_parquet(path))
     if not frames:
-        raise FileNotFoundError(
-            f"В {BONDS_FOLDER} нет файлов мониторинга market_*.parquet. "
-            f"Выполните update_data.py --bonds-market-init TQOB,TQCB.")
-    return pd.concat(frames, ignore_index=True)
+        return pd.DataFrame(columns=['date', 'SECID', 'segment'])
+
+    df = pd.concat(frames, ignore_index=True)
+    if lo is not None:
+        df = df[df['date'] >= lo]
+    if hi is not None:
+        df = df[df['date'] <= hi]
+    return df.reset_index(drop=True)
 
 
 def update_bonds_market_all(session: Optional[requests.Session] = None) -> None:
-    """Обновляет мониторинг всех досок, по которым уже есть market_*.parquet."""
-    if not os.path.isdir(BONDS_FOLDER):
-        return
-    segments = [f[len('market_'):-len('.parquet')] for f in os.listdir(BONDS_FOLDER)
-                if f.startswith('market_') and f.endswith('.parquet')]
+    """Обновляет мониторинг всех досок, по которым он уже есть, и докачивает пропуски."""
+    segments = _market_segments()
     if not segments:
         return
     if session is None:
-        session = requests.Session()
+        session = make_session()
     for seg in segments:
         try:
             update_bonds_market(seg, session=session)

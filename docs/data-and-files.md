@@ -17,8 +17,8 @@ moexutils/
 │   │   └── GAZP.parquet
 │   └── ...
 ├── bonds/
-│   ├── market_TQOB.parquet # мониторинг ВСЕХ выпусков доски по датам (гособлигации)
-│   ├── market_TQCB.parquet # то же для корпоративных
+│   ├── market_TQOB/        # мониторинг ВСЕХ выпусков доски по датам (гособлигации), <YYYY>.parquet
+│   ├── market_TQCB/        # то же для корпоративных
 │   ├── params.parquet      # снапшот параметров выпусков (купон, погашение, доска)
 │   └── <SECID>.parquet     # пофайловые истории отдельных выпусков (фоллбэк/глубокая история)
 ├── indexes/
@@ -35,7 +35,7 @@ moexutils/
 ```
 
 - **data/** — локальные котировки: подпапка на тикер, один Parquet на тикер.
-- **bonds/** — локальные данные облигаций: `market_<SEGMENT>.parquet` — мониторинг всех выпусков доски по датам (основной источник для аналитики), плюс один Parquet на SECID для отдельных выпусков.
+- **bonds/** — локальные данные облигаций: `market_<SEGMENT>/<YYYY>.parquet` — мониторинг всех выпусков доски по датам, по годам (основной источник для аналитики), плюс один Parquet на SECID для отдельных выпусков.
 - **metadata/** — Excel с количеством акций по датам (для market_cap).
 - Пути `data/`, `bonds/`, `metadata/` привязаны к папке модуля `moex_utils.py` и не зависят от рабочего каталога.
 - Папка дивидендов задаётся параметром `div_folder` (в `update_data.py` по умолчанию `../dividends/data`).
@@ -74,9 +74,9 @@ moexutils/
 
 Прочие колонки — как в таблице history ISS MOEX.
 
-### Мониторинг досок: `bonds/market_<SEGMENT>.parquet`
+### Мониторинг досок: `bonds/market_<SEGMENT>/<YYYY>.parquet`
 
-Длинная таблица истории торгов **всех выпусков доски** (например `market_TQOB.parquet`, `market_TQCB.parquet`), обновляется по датам через `update_bonds_market`. Колонки: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE` (биржевой YTM, %), `DURATION` (дни), `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`. Уникальность — пара `date`+`SECID`.
+Длинная таблица истории торгов **всех выпусков доски**, разбитая на годовые файлы (`market_TQCB/2025.parquet`, `market_TQCB/2026.parquet`, ...): при ежедневном обновлении перезаписывается только текущий год, а не вся история (для TQCB — десятки МБ, которые иначе каждую ночь гоняла бы облачная синхронизация). Читать — через `read_bonds_market`. Обновляется по датам через `update_bonds_market`. Колонки: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE` (биржевой YTM, %), `DURATION` (дни), `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`. Уникальность — пара `date`+`SECID`.
 
 ---
 

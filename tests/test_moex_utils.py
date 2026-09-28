@@ -266,10 +266,13 @@ class TestSaveReadUpdateStock:
         sessions = []
         mc_flags = []
 
-        def fake_update(ticker, session=None, calculate_market_cap_flag=True):
+        div_folders = []
+
+        def fake_update(ticker, session=None, calculate_market_cap_flag=True, div_folder=None):
             updated.append(ticker)
             sessions.append(session)
             mc_flags.append(calculate_market_cap_flag)
+            div_folders.append(div_folder)
 
         monkeypatch.setattr(mu, 'update_moex_stock', fake_update)
 
@@ -280,8 +283,55 @@ class TestSaveReadUpdateStock:
         assert all(s is sessions[0] for s in sessions)
         assert mc_flags == [True, True]        # дефолт сохранен
 
-        mu.update_all_stocks(calculate_market_cap_flag=False)
+        mu.update_all_stocks(calculate_market_cap_flag=False, div_folder='DIVS')
         assert mc_flags[-2:] == [False, False]  # флаг доходит до каждого тикера
+        assert div_folders[-2:] == ['DIVS', 'DIVS']
+
+    def test_update_keeps_derived_columns_on_refetched_date(self, tmp_data_folder, monkeypatch):
+        """Перекачанная последняя дата не обнуляет adj_close/market_cap из файла."""
+        existing = make_stock_df(['2025-01-02', '2025-01-03'], [100, 101])
+        existing['adj_close'] = [90.0, 91.0]
+        existing['market_cap'] = [1e6, 1.01e6]
+        path = write_stock_parquet(tmp_data_folder, 'TEST', existing)
+        new = make_stock_df(['2025-01-03', '2025-01-04'], [101, 102])
+        monkeypatch.setattr(mu, 'get_moex_stock',
+                            lambda ticker, start, session=None, frequency=24: new)
+
+        mu.update_moex_stock('TEST', calculate_market_cap_flag=False)
+
+        df = pd.read_parquet(path)
+        assert list(df.columns) == list(existing.columns)
+        assert df.loc['2025-01-03', 'adj_close'] == 91.0
+        assert df.loc['2025-01-03', 'market_cap'] == 1.01e6
+        assert pd.isna(df.loc['2025-01-04', 'adj_close'])  # новая дата — до пересчета
+
+    def test_update_without_changes_does_not_rewrite(self, tmp_data_folder, monkeypatch):
+        existing = make_stock_df(['2025-01-02', '2025-01-03'], [100, 101])
+        path = write_stock_parquet(tmp_data_folder, 'TEST', existing)
+        before = os.path.getmtime(path)
+        monkeypatch.setattr(mu, 'get_moex_stock',
+                            lambda ticker, start, session=None, frequency=24: existing.iloc[-1:])
+        monkeypatch.setattr(mu, '_atomic_to_parquet',
+                            lambda *a, **k: (_ for _ in ()).throw(AssertionError('лишняя запись')))
+
+        mu.update_moex_stock('TEST', calculate_market_cap_flag=False)
+        assert os.path.getmtime(path) == before
+
+    def test_update_with_div_folder_computes_adj_close(self, tmp_data_folder, tmp_path, monkeypatch):
+        existing = make_stock_df(['2025-01-02', '2025-01-03'], [100, 100])
+        path = write_stock_parquet(tmp_data_folder, 'TEST', existing)
+        new = make_stock_df(['2025-01-03', '2025-01-06'], [100, 90])
+        monkeypatch.setattr(mu, 'get_moex_stock',
+                            lambda ticker, start, session=None, frequency=24: new)
+        divs = tmp_path / 'divs'
+        divs.mkdir()
+        pd.DataFrame({'closing_date': ['2025-01-06'], 'dividend_value': [10.0]}).to_csv(
+            divs / 'TEST.csv', index=False)
+
+        mu.update_moex_stock('TEST', calculate_market_cap_flag=False, div_folder=str(divs))
+
+        df = pd.read_parquet(path)
+        assert df['adj_close'].tolist() == pytest.approx([90.0, 90.0, 90.0])
 
     def test_update_all_stocks_rebuild_redownloads(self, tmp_data_folder, monkeypatch):
         for ticker in ('AAA', 'BBB'):
@@ -1191,6 +1241,57 @@ class TestBondsMarket:
         # скачанный кусок примыкает к истории: между ним и emin нет пропущенных будней
         assert not [d for d in pd.date_range(head[0] + pd.Timedelta(days=1), emin - pd.Timedelta(days=1))
                     if d.weekday() < 5]
+
+    def test_legacy_file_migrates_to_years(self, bonds_folder):
+        legacy = os.path.join(bonds_folder, 'market_TQCB.parquet')
+        pd.DataFrame({'date': pd.to_datetime(['2024-12-30', '2025-01-03', '2025-01-03']),
+                      'SECID': ['B1', 'B1', 'B2'], 'CLOSE': [100.0, 101.0, 99.0],
+                      'segment': ['TQCB'] * 3}).to_parquet(legacy)
+
+        df = mu.read_bonds_market('TQCB')
+
+        assert not os.path.exists(legacy)
+        assert sorted(os.listdir(os.path.join(bonds_folder, 'market_TQCB'))) == \
+            ['2024.parquet', '2025.parquet']
+        assert len(df) == 3 and set(df['SECID']) == {'B1', 'B2'}
+
+    def test_update_rewrites_only_touched_year(self, bonds_folder, monkeypatch):
+        today = pd.Timestamp.today().normalize()
+        old_year = today.year - 1
+        folder = os.path.join(bonds_folder, 'market_TQOB')
+        os.makedirs(folder)
+        old_path = os.path.join(folder, f'{old_year}.parquet')
+        pd.DataFrame({'date': [pd.Timestamp(f'{old_year}-06-03')], 'SECID': ['B1'],
+                      'CLOSE': [100.0], 'segment': ['TQOB']}).to_parquet(old_path)
+        cur_path = os.path.join(folder, f'{today.year}.parquet')
+        last = today - pd.Timedelta(days=7)
+        pd.DataFrame({'date': [last], 'SECID': ['B1'], 'CLOSE': [100.0],
+                      'segment': ['TQOB']}).to_parquet(cur_path)
+        before = os.path.getmtime(old_path)
+
+        def fake_fetch(segment, date, session):
+            return pd.DataFrame({'TRADEDATE': [pd.Timestamp(date).strftime('%Y-%m-%d')],
+                                 'SECID': ['B1'], 'CLOSE': [101.0]})
+
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', fake_fetch)
+        if last.year != today.year:  # первые дни января: хвост задел бы прошлый год
+            pytest.skip('граница года')
+        n = mu.update_bonds_market('TQOB', start=f'{old_year}-06-03')
+
+        assert n > 0
+        assert os.path.getmtime(old_path) == before  # прошлый год не перезаписан
+        assert len(pd.read_parquet(cur_path)) == 1 + n
+
+    def test_read_period_filters_years_and_dates(self, bonds_folder):
+        folder = os.path.join(bonds_folder, 'market_TQOB')
+        os.makedirs(folder)
+        for y in (2023, 2024, 2025):
+            pd.DataFrame({'date': pd.to_datetime([f'{y}-03-01', f'{y}-09-01']),
+                          'SECID': ['B1', 'B1'], 'segment': ['TQOB', 'TQOB']}).to_parquet(
+                os.path.join(folder, f'{y}.parquet'))
+        df = mu.read_bonds_market('TQOB', start='2024-06-01', end='2025-06-01')
+        assert list(df['date'].dt.strftime('%Y-%m-%d')) == ['2024-09-01', '2025-03-01']
+        assert len(mu.read_bonds_market()) == 6  # без аргументов — вся история всех досок
 
     def test_fetch_board_date_paginates(self, monkeypatch):
         cols = ['TRADEDATE', 'SECID', 'CLOSE', 'BOARDID']
