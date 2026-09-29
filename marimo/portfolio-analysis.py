@@ -26,52 +26,43 @@ def _():
     import sys
     from pathlib import Path
 
-    # moex_utils лежит в корне проекта (родительская папка от marimo/)
+    # stocks.py лежит в корне проекта (родительская папка от marimo/)
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import moex_utils as moex
-    import pandas as pd
+    import stocks
+    import polars as pl
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
     from datetime import datetime, timedelta
     import marimo as mo
     try:
-        from pypfopt import expected_returns, risk_models, EfficientFrontier
+        # Ожидаемые доходности и ковариацию считаем в numpy (как mean_historical_return,
+        # sample_cov и CovarianceShrinkage.ledoit_wolf в PyPortfolioOpt) — в оптимизатор
+        # передаются numpy-массивы
+        from pypfopt import EfficientFrontier
+        from pypfopt.risk_models import fix_nonpositive_semidefinite
         pypfopt_available = True
     except ImportError:
-        expected_returns, risk_models, EfficientFrontier = None, None, None
+        EfficientFrontier, fix_nonpositive_semidefinite = None, None
         pypfopt_available = False
     return (
         EfficientFrontier,
-        expected_returns,
+        fix_nonpositive_semidefinite,
         mo,
-        moex,
         np,
-        pd,
+        pl,
         plt,
         pypfopt_available,
-        risk_models,
+        stocks,
     )
 
 
 @app.cell(hide_code=True)
-def _(mo, moex):
-    # Папка с данными (поддиректории по тикерам, в каждой <ticker>.parquet)
-    data_folder_input = mo.ui.text(
-        value=moex.DATA_FOLDER,
-        label="Папка с данными:",
-    )
-    data_folder_input
-    return (data_folder_input,)
-
-
-@app.cell(hide_code=True)
-def _(data_folder_input, moex):
-    # Загрузка всех данных; цены приводим к пост-сплитовой базе (metadata/splits.csv)
-    data_folder = data_folder_input.value or None
-    combined_stocks = moex.adjust_for_splits(moex.combine_moex_stocks(data_folder=data_folder))
-    latest_date = combined_stocks.index.max()
-    earliest_date = combined_stocks.index.min()
+def _(stocks):
+    # Загрузка всех данных из хранилища; цены приводим к пост-сплитовой базе (metadata/splits.csv)
+    combined_stocks = stocks.read_stocks(split_adjusted=True)
+    latest_date = combined_stocks['date'].max()
+    earliest_date = combined_stocks['date'].min()
 
     # Вычисляем максимальный доступный период в годах
     max_years = (latest_date - earliest_date).days / 365.25
@@ -79,7 +70,7 @@ def _(data_folder_input, moex):
     print(f"✅ Данные загружены")
     print(f"📅 Период данных: {earliest_date.strftime('%Y-%m-%d')} - {latest_date.strftime('%Y-%m-%d')}")
     print(f"📊 Максимальный период анализа: {max_years:.1f} лет")
-    print(f"📈 Всего тикеров: {combined_stocks['ticker'].nunique()}")
+    print(f"📈 Всего тикеров: {combined_stocks['ticker'].n_unique()}")
     return combined_stocks, latest_date, max_years
 
 
@@ -146,14 +137,13 @@ def _(max_years, mo):
 
 
 @app.cell(hide_code=True)
-def _(combined_stocks, latest_date, pd, years_slider):
+def _(combined_stocks, latest_date, pl, years_slider):
     # Фильтрация данных по выбранному периоду
     years = years_slider.value
-    start_date = latest_date - pd.DateOffset(years=years)
+    start_date = pl.select(pl.lit(latest_date).dt.offset_by(f"-{years}y")).item()
 
     # Фильтруем данные за выбранный период
-    df_filtered = combined_stocks[combined_stocks.index >= start_date].copy()
-    df_filtered = df_filtered.sort_values(by='ticker').sort_index()
+    df_filtered = combined_stocks.filter(pl.col('date') >= start_date).sort('date', 'ticker')
 
     print(f"📅 Выбранный период: {start_date.strftime('%Y-%m-%d')} - {latest_date.strftime('%Y-%m-%d')} ({years} лет)")
     print(f"📊 Записей в отфильтрованных данных: {len(df_filtered)}")
@@ -161,15 +151,16 @@ def _(combined_stocks, latest_date, pd, years_slider):
 
 
 @app.cell(hide_code=True)
-def _(df_filtered, exclude_tickers_input, latest_date, start_date):
+def _(df_filtered, exclude_tickers_input, latest_date, pl, start_date):
     # Фильтрация тикеров с полной историей за период
     # Считаем историю полной, если первая дата - не позже 30 дней от начала периода,
     # а последняя - не раньше 30 дней до конца периода
     valid_tickers = []
 
-    for ticker, group in df_filtered.groupby('ticker'):
-        min_date = group.index.min()
-        max_date = group.index.max()
+    _spans = df_filtered.group_by('ticker').agg(
+        pl.col('date').min().alias('min_date'), pl.col('date').max().alias('max_date')
+    ).sort('ticker')
+    for ticker, min_date, max_date in _spans.iter_rows():
 
         # Проверка полноты истории
         days_from_start = (min_date - start_date).days
@@ -184,58 +175,68 @@ def _(df_filtered, exclude_tickers_input, latest_date, start_date):
     valid_tickers = [t for t in valid_tickers if t.upper() not in excluded]
     if excluded:
         print(f"🚫 Исключено тикеров: {len(excluded)} ({', '.join(sorted(excluded))})")
-    print(f"✅ Тикеров с полной историей: {len(valid_tickers)} из {df_filtered['ticker'].nunique()}")
+    print(f"✅ Тикеров с полной историей: {len(valid_tickers)} из {df_filtered['ticker'].n_unique()}")
     return (valid_tickers,)
 
 
 @app.cell(hide_code=True)
-def _(df_filtered, np, pd, risk_free_rate_slider, valid_tickers):
+def _(df_filtered, np, pl, risk_free_rate_slider, valid_tickers):
     # Расчет CAGR, волатильности и Sharpe Ratio для каждого тикера
     risk_free_rate = risk_free_rate_slider.value / 100.0  # Конвертируем проценты в десятичную дробь
     results = []
 
-    for ticker_name in valid_tickers:
-        ticker_data = df_filtered[df_filtered['ticker'] == ticker_name].sort_index()
+    # Используем adj_close если есть, иначе close; пропуски (null/NaN) отбрасываем
+    _price_col = 'adj_close' if 'adj_close' in df_filtered.columns else 'close'
+    _by_ticker = {
+        _t: _g for (_t,), _g in df_filtered.filter(pl.col('ticker').is_in(valid_tickers))
+        .select('date', 'ticker', pl.col(_price_col).fill_nan(None).alias('price'))
+        .drop_nulls('price')
+        .sort('ticker', 'date')
+        .group_by('ticker', maintain_order=True)
+    }
 
-        # Используем adj_close если есть, иначе close
-        if 'adj_close' in ticker_data.columns:
-            price_series = ticker_data['adj_close'].dropna()
-        else:
-            price_series = ticker_data['close'].dropna()
+    for ticker_name in valid_tickers:
+        ticker_data = _by_ticker.get(ticker_name)
+        if ticker_data is None:
+            continue
+        price_series = ticker_data['price'].to_numpy()
+        price_dates = np.array(ticker_data['date'].to_list(), dtype=object)
 
         if len(price_series) < 2:
             continue
 
         # Проверка на валидность цен (должны быть положительными)
-        price_series = price_series[price_series > 0]
+        _pos = price_series > 0
+        price_series, price_dates = price_series[_pos], price_dates[_pos]
         if len(price_series) < 2:
             continue
 
         # Проверка на выбросы/аномалии в данных
         # Убираем значения, которые отличаются от медианы более чем в 100 раз
         # Это помогает отфильтровать ошибки в данных (например, неправильно рассчитанный adj_close)
-        median_price = price_series.median()
+        median_price = np.median(price_series)
         if median_price > 0:
             # Фильтруем значения в разумном диапазоне (от 0.01 до 1000 раз от медианы)
-            price_series = price_series[
-                (price_series >= median_price * 0.01) & 
+            _in_range = (
+                (price_series >= median_price * 0.01) &
                 (price_series <= median_price * 1000)
-            ]
+            )
+            price_series, price_dates = price_series[_in_range], price_dates[_in_range]
 
         if len(price_series) < 2:
             continue
 
         # Расчет лог-доходностей с проверкой на валидность
-        price_ratio = price_series / price_series.shift(1)
+        price_ratio = price_series[1:] / price_series[:-1]
         price_ratio = price_ratio[price_ratio > 0]  # Убираем нулевые и отрицательные значения
-        log_returns = np.log(price_ratio).dropna()
+        log_returns = np.log(price_ratio)
 
         if len(log_returns) == 0:
             continue
 
         # Расчет дат для информации
-        start_date_ticker = price_series.index.min()
-        end_date_ticker = price_series.index.max()
+        start_date_ticker = price_dates.min()
+        end_date_ticker = price_dates.max()
 
         # Расчет периода в годах через торговые дни (более точный для финансовых расчетов)
         # 252 - стандартное количество торговых дней в году
@@ -252,7 +253,7 @@ def _(df_filtered, np, pd, risk_free_rate_slider, valid_tickers):
         cagr = np.exp(total_log_return / years_ticker) - 1
 
         # Годовая волатильность
-        daily_volatility = log_returns.std()
+        daily_volatility = np.std(log_returns, ddof=1) if len(log_returns) > 1 else np.nan
         annual_volatility = daily_volatility * np.sqrt(252)
 
         # Коэффициент Шарпа (Sharpe Ratio)
@@ -272,14 +273,17 @@ def _(df_filtered, np, pd, risk_free_rate_slider, valid_tickers):
             'years': years_ticker
         })
 
-    results_df = pd.DataFrame(results)
+    results_df = pl.DataFrame(results, schema={
+        'ticker': pl.String, 'cagr': pl.Float64, 'volatility': pl.Float64, 'sharpe': pl.Float64,
+        'start_date': pl.Date, 'end_date': pl.Date, 'years': pl.Float64,
+    })
 
     if len(results_df) > 0:
         print(f"✅ Рассчитано метрик для {len(results_df)} тикеров")
         print(f"📈 Средняя CAGR: {results_df['cagr'].mean():.2%}")
         print(f"📊 Средняя волатильность: {results_df['volatility'].mean():.2%}")
-        sharpe_mean = results_df['sharpe'].dropna().mean()
-        if not pd.isna(sharpe_mean):
+        sharpe_mean = results_df['sharpe'].drop_nulls().mean()
+        if sharpe_mean is not None:
             print(f"📉 Средний Sharpe Ratio: {sharpe_mean:.2f}")
     else:
         print("⚠️ Нет данных для расчета")
@@ -287,18 +291,25 @@ def _(df_filtered, np, pd, risk_free_rate_slider, valid_tickers):
 
 
 @app.cell(hide_code=True)
-def _(combined_stocks, df_filtered, portfolio_period_dropdown, valid_tickers):
-    # Матрица цен для PyPortfolioOpt: строки — даты, столбцы — тикеры
+def _(combined_stocks, df_filtered, pl, portfolio_period_dropdown, valid_tickers):
+    # Матрица цен для PyPortfolioOpt: строки — даты (колонка date), столбцы — тикеры
     # Период: весь датасет (по умолчанию) или как период анализа
     price_col = 'adj_close' if 'adj_close' in df_filtered.columns else 'close'
     use_full = portfolio_period_dropdown.value == "full"
-    if use_full:
-        _df = combined_stocks[combined_stocks['ticker'].isin(valid_tickers)].copy()
+    _src = combined_stocks if use_full else df_filtered
+    _df = (
+        _src.filter(pl.col('ticker').is_in(valid_tickers))
+        .with_columns(pl.col(price_col).fill_nan(None))
+        .drop_nulls(price_col)
+    )
+    if _df.is_empty():
+        prices_wide = pl.DataFrame(schema={'date': pl.Date})
     else:
-        _df = df_filtered[df_filtered['ticker'].isin(valid_tickers)].copy()
-    prices_wide = _df.pivot_table(index=_df.index, columns='ticker', values=price_col)
-    prices_wide = prices_wide[[t for t in valid_tickers if t in prices_wide.columns]].dropna(how='any')
-    return (prices_wide,)
+        prices_wide = _df.pivot(on='ticker', index='date', values=price_col, aggregate_function='mean').sort('date')
+    # Тикеры портфеля — в порядке valid_tickers; оставляем только даты с полным набором цен
+    pf_tickers = [t for t in valid_tickers if t in prices_wide.columns]
+    prices_wide = prices_wide.select('date', *pf_tickers).drop_nulls()
+    return pf_tickers, prices_wide
 
 
 @app.cell(hide_code=True)
@@ -323,23 +334,30 @@ def _(mo):
 def _(
     EfficientFrontier,
     cov_method_dropdown,
-    expected_returns,
+    fix_nonpositive_semidefinite,
     max_weight_slider,
     np,
+    pf_tickers,
     prices_wide,
     pypfopt_available,
-    risk_models,
 ):
     # Расчёт эффективной границы и оптимального (max Sharpe) портфеля
     ef_curve_vol, ef_curve_ret, weights_max_sharpe, perf_max_sharpe, mu_series, S_df = [], [], {}, None, None, None
     max_weight = max_weight_slider.value / 100.0  # 1.0 = без ограничения
     weight_bounds = (0, max_weight)
-    if pypfopt_available and len(prices_wide.columns) >= 2 and len(prices_wide) >= 2:
-        mu_series = expected_returns.mean_historical_return(prices_wide)
+    if pypfopt_available and len(pf_tickers) >= 2 and len(prices_wide) >= 2:
+        # Простые дневные доходности (как pct_change в PyPortfolioOpt)
+        _P = prices_wide.select(pf_tickers).to_numpy()
+        _R = _P[1:] / _P[:-1] - 1
+        # mean_historical_return: геометрическая средняя, 252 торговых дня в году
+        mu_series = np.prod(1 + _R, axis=0) ** (252 / _R.shape[0]) - 1
         if cov_method_dropdown.value == "lw":
-            S_df = risk_models.CovarianceShrinkage(prices_wide).ledoit_wolf()
+            # CovarianceShrinkage.ledoit_wolf (цель constant_variance) = sklearn ledoit_wolf
+            from sklearn.covariance import ledoit_wolf
+            S_df = fix_nonpositive_semidefinite(ledoit_wolf(_R)[0] * 252, fix_method="spectral")
         else:
-            S_df = risk_models.sample_cov(prices_wide)
+            # sample_cov: выборочная ковариация доходностей * 252
+            S_df = fix_nonpositive_semidefinite(np.cov(_R, rowvar=False) * 252, fix_method="spectral")
         # Точки границы: для каждой целевой доходности — минимальный риск.
         # Крайние точки диапазона отбрасываем: задачи на mu.min()/mu.max()
         # вырожденные, решатель на них дает "Solution may be inaccurate"
@@ -355,12 +373,13 @@ def _(
                 pass
         ef_max_sharpe = EfficientFrontier(mu_series, S_df, weight_bounds=weight_bounds)
         weights_max_sharpe = ef_max_sharpe.max_sharpe()
-        weights_max_sharpe = {k: v for k, v in weights_max_sharpe.items() if v > 1e-6}
+        # Ключи весов — номера столбцов; переводим в тикеры
+        weights_max_sharpe = {pf_tickers[k]: v for k, v in weights_max_sharpe.items() if v > 1e-6}
         perf_max_sharpe = ef_max_sharpe.portfolio_performance()
     else:
         if not pypfopt_available:
             print("⚠️ PyPortfolioOpt не установлен: pip install PyPortfolioOpt")
-        elif len(prices_wide.columns) < 2 or len(prices_wide) < 2:
+        elif len(pf_tickers) < 2 or len(prices_wide) < 2:
             print("⚠️ Недостаточно данных для оптимизации (нужно ≥2 тикеров и наблюдений)")
     return (
         S_df,
@@ -398,6 +417,7 @@ def _(
     mu_series,
     np,
     perf_max_sharpe,
+    pf_tickers,
     plt,
     weights_max_sharpe,
 ):
@@ -411,9 +431,9 @@ def _(
         ax2.plot([v * 100 for v in ef_curve_vol], [r * 100 for r in ef_curve_ret], 'b-', lw=2, label='Эффективная граница')
         # Активы: волатильность = sqrt(diag(S)), доходность = mu
         vol_assets = np.sqrt(np.diag(S_df)) * 100
-        ret_assets = mu_series.values * 100
+        ret_assets = mu_series * 100
         ax2.scatter(vol_assets, ret_assets, s=60, alpha=0.7, c='gray', edgecolors='black', label='Отдельные активы')
-        for idx, t in enumerate(mu_series.index):
+        for idx, t in enumerate(pf_tickers):
             ax2.annotate(t, (vol_assets[idx], ret_assets[idx]), xytext=(4, 4), textcoords='offset points', fontsize=8)
         if perf_max_sharpe is not None and weights_max_sharpe:
             r_star, v_star, _ = perf_max_sharpe
@@ -430,15 +450,15 @@ def _(
 
 
 @app.cell(hide_code=True)
-def _(np, plt, prices_wide, weights_max_sharpe):
+def _(np, pf_tickers, plt, prices_wide, weights_max_sharpe):
     # График весов в эффективном портфеле (max Sharpe): сверху вниз от макс к мин, все тикеры датасета
-    if weights_max_sharpe is not None and prices_wide is not None and len(prices_wide.columns) > 0:
+    if weights_max_sharpe is not None and prices_wide is not None and len(pf_tickers) > 0:
         try:
             plt.close(3)
         except Exception:
             pass
         # Все тикеры датасета, веса (0 если не вошли в портфель)
-        all_tickers = list(prices_wide.columns)
+        all_tickers = list(pf_tickers)
         all_weights = [weights_max_sharpe.get(t, 0.0) for t in all_tickers]
         # Сортировка от макс к мин
         pairs = sorted(zip(all_tickers, all_weights), key=lambda x: x[1], reverse=True)
@@ -459,24 +479,25 @@ def _(np, plt, prices_wide, weights_max_sharpe):
 
 
 @app.cell(hide_code=True)
-def _(plt, prices_wide):
+def _(np, pf_tickers, plt, prices_wide):
     # Корреляционная матрица доходностей (для понимания диверсификации)
-    if len(prices_wide.columns) >= 2 and len(prices_wide) >= 2:
-        rets = prices_wide.pct_change().dropna()
-        corr = rets.corr()
+    if len(pf_tickers) >= 2 and len(prices_wide) >= 2:
+        _P = prices_wide.select(pf_tickers).to_numpy()
+        rets = _P[1:] / _P[:-1] - 1
+        corr = np.corrcoef(rets, rowvar=False)
         try:
             plt.close(4)
         except Exception:
             pass
         fig4, ax4 = plt.subplots(num=4, figsize=(10, 8))
         im = ax4.imshow(corr, cmap='RdBu_r', vmin=-1, vmax=1, aspect='auto')
-        ax4.set_xticks(range(len(corr.columns)))
-        ax4.set_yticks(range(len(corr.columns)))
-        ax4.set_xticklabels(corr.columns, rotation=45, ha='right')
-        ax4.set_yticklabels(corr.columns)
+        ax4.set_xticks(range(len(pf_tickers)))
+        ax4.set_yticks(range(len(pf_tickers)))
+        ax4.set_xticklabels(pf_tickers, rotation=45, ha='right')
+        ax4.set_yticklabels(pf_tickers)
         for ri in range(len(corr)):
             for cj in range(len(corr)):
-                ax4.text(cj, ri, f'{corr.iloc[ri, cj]:.2f}', ha='center', va='center', fontsize=7)
+                ax4.text(cj, ri, f'{corr[ri, cj]:.2f}', ha='center', va='center', fontsize=7)
         plt.colorbar(im, ax=ax4, label='Корреляция')
         ax4.set_title('Корреляция дневных доходностей активов')
         plt.tight_layout()
@@ -516,27 +537,23 @@ def _(mo):
 @app.cell
 def _(
     EfficientFrontier,
-    cov_method_dropdown,
-    expected_returns,
+    S_df,
     max_weight_slider,
+    mu_series,
+    pf_tickers,
     prices_wide,
     pypfopt_available,
-    risk_models,
 ):
     # Портфель минимальной волатильности (для сравнения с max Sharpe)
     weights_min_vol, perf_min_vol = {}, None
     max_weight_mv = max_weight_slider.value / 100.0
     weight_bounds_mv = (0, max_weight_mv)
-    if pypfopt_available and len(prices_wide.columns) >= 2 and len(prices_wide) >= 2:
-        mu_mv = expected_returns.mean_historical_return(prices_wide)
-        # Та же оценка ковариации, что и для max Sharpe, — иначе сравнение некорректно
-        if cov_method_dropdown.value == "lw":
-            S_mv = risk_models.CovarianceShrinkage(prices_wide).ledoit_wolf()
-        else:
-            S_mv = risk_models.sample_cov(prices_wide)
+    if pypfopt_available and len(pf_tickers) >= 2 and len(prices_wide) >= 2:
+        # Те же доходности и та же оценка ковариации, что и для max Sharpe, — иначе сравнение некорректно
+        mu_mv, S_mv = mu_series, S_df
         ef_minv = EfficientFrontier(mu_mv, S_mv, weight_bounds=weight_bounds_mv)
         weights_min_vol = ef_minv.min_volatility()
-        weights_min_vol = {k: v for k, v in weights_min_vol.items() if v > 1e-6}
+        weights_min_vol = {pf_tickers[k]: v for k, v in weights_min_vol.items() if v > 1e-6}
         perf_min_vol = ef_minv.portfolio_performance()
     return perf_min_vol, weights_min_vol
 
@@ -617,11 +634,11 @@ def _(mo, results_df, risk_free_rate_slider):
         - **Медианная CAGR**: {results_df['cagr'].median():.2%}
         - **Средняя волатильность**: {results_df['volatility'].mean():.2%}
         - **Медианная волатильность**: {results_df['volatility'].median():.2%}
-        - **Средний Sharpe Ratio**: {results_df['sharpe'].dropna().mean():.2f} (безрисковая ставка: {risk_free_rate_slider.value}%)
-        - **Медианный Sharpe Ratio**: {results_df['sharpe'].dropna().median():.2f}
-        - **Максимальная CAGR**: {results_df['cagr'].max():.2%} ({results_df.loc[results_df['cagr'].idxmax(), 'ticker']})
-        - **Минимальная волатильность**: {results_df['volatility'].min():.2%} ({results_df.loc[results_df['volatility'].idxmin(), 'ticker']})
-        - **Максимальный Sharpe Ratio**: {results_df['sharpe'].dropna().max():.2f} ({results_df.loc[results_df['sharpe'].dropna().idxmax(), 'ticker']})
+        - **Средний Sharpe Ratio**: {results_df['sharpe'].drop_nulls().mean():.2f} (безрисковая ставка: {risk_free_rate_slider.value}%)
+        - **Медианный Sharpe Ratio**: {results_df['sharpe'].drop_nulls().median():.2f}
+        - **Максимальная CAGR**: {results_df['cagr'].max():.2%} ({results_df['ticker'][results_df['cagr'].arg_max()]})
+        - **Минимальная волатильность**: {results_df['volatility'].min():.2%} ({results_df['ticker'][results_df['volatility'].arg_min()]})
+        - **Максимальный Sharpe Ratio**: {results_df['sharpe'].drop_nulls().max():.2f} ({results_df['ticker'][results_df['sharpe'].arg_max()]})
         """)
     else:
         stats_text = mo.md("⚠️ Нет данных для отображения")
@@ -631,7 +648,7 @@ def _(mo, results_df, risk_free_rate_slider):
 
 
 @app.cell(hide_code=True)
-def _(pd, plt, results_df, years):
+def _(pl, plt, results_df, years):
     # График доходность-волатильность
     if len(results_df) > 0:
         try:
@@ -643,11 +660,13 @@ def _(pd, plt, results_df, years):
 
         # Scatter plot с цветом по Sharpe Ratio
         # Используем Sharpe Ratio для цвета, если доступен, иначе используем CAGR/Volatility
-        color_data = results_df['sharpe'].fillna(results_df['cagr'] / results_df['volatility'])
+        color_data = results_df.select(
+            pl.col('sharpe').fill_null(pl.col('cagr') / pl.col('volatility'))
+        ).to_series().to_numpy()
 
         scatter = ax1.scatter(
-            results_df['volatility'] * 100,  # Волатильность в процентах
-            results_df['cagr'] * 100,  # CAGR в процентах
+            (results_df['volatility'] * 100).to_numpy(),  # Волатильность в процентах
+            (results_df['cagr'] * 100).to_numpy(),  # CAGR в процентах
             s=100,
             alpha=0.6,
             c=color_data,  # Цвет по Sharpe Ratio
@@ -658,14 +677,16 @@ def _(pd, plt, results_df, years):
 
         # Подписи тикеров (топ по Sharpe Ratio и топ/низ по доходности)
         top_n = 5
-        top_sharpe = results_df.nlargest(3, 'sharpe')
-        top_tickers = results_df.nlargest(top_n, 'cagr')
-        bottom_tickers = results_df.nsmallest(3, 'cagr')
+        top_sharpe = results_df.drop_nulls('sharpe').sort('sharpe', descending=True, maintain_order=True).head(3)
+        top_tickers = results_df.sort('cagr', descending=True, maintain_order=True).head(top_n)
+        bottom_tickers = results_df.sort('cagr', maintain_order=True).head(3)
 
         # Объединяем для подписей (убираем дубликаты)
-        labels_df = pd.concat([top_sharpe, top_tickers, bottom_tickers]).drop_duplicates(subset=['ticker'])
+        labels_df = pl.concat([top_sharpe, top_tickers, bottom_tickers]).unique(
+            subset=['ticker'], keep='first', maintain_order=True
+        )
 
-        for _, ticker_row in labels_df.iterrows():
+        for ticker_row in labels_df.iter_rows(named=True):
             ax1.annotate(
                 ticker_row['ticker'],
                 xy=(ticker_row['volatility'] * 100, ticker_row['cagr'] * 100),
@@ -698,24 +719,29 @@ def _(pd, plt, results_df, years):
 
 
 @app.cell
-def _(mo, pd, results_df):
+def _(mo, pl, results_df):
     # Таблица с результатами (топ тикеров)
     if len(results_df) > 0:
         # Сортируем по Sharpe Ratio (топ по качеству доходности)
-        top_results = results_df.nlargest(20, 'sharpe')[['ticker', 'cagr', 'volatility', 'sharpe']].copy()
+        top_results = (
+            results_df.drop_nulls('sharpe')
+            .sort('sharpe', descending=True, maintain_order=True)
+            .head(20)
+            .select('ticker', 'cagr', 'volatility', 'sharpe')
+        )
 
         # Markdown-таблица без ведущих пробелов (иначе не рендерится)
         table_rows = [
             "| Тикер | CAGR | Волатильность | Sharpe Ratio |",
             "|:------|-----:|-------------:|-------------:|",
         ]
-        for _, result_row in top_results.iterrows():
-            sharpe_str = f"{result_row['sharpe']:.2f}" if pd.notna(result_row['sharpe']) else "N/A"
+        for result_row in top_results.iter_rows(named=True):
+            sharpe_str = f"{result_row['sharpe']:.2f}" if result_row['sharpe'] is not None else "N/A"
             table_rows.append(f"| {result_row['ticker']} | {result_row['cagr']:.2%} | {result_row['volatility']:.2%} | {sharpe_str} |")
 
         table_text = mo.md("## 📋 Топ-20 тикеров по Sharpe Ratio\n\n" + "\n".join(table_rows))
     else:
-        top_results = pd.DataFrame()
+        top_results = pl.DataFrame()
         table_text = mo.md("⚠️ Нет данных для отображения")
 
     table_text

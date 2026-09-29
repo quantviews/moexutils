@@ -442,3 +442,38 @@ class TestStorage:
         assert stocks.update_indexes(['IMOEX']) == 2
         assert stocks.update_indexes(['IMOEX']) == 0
         assert stocks.read_index('IMOEX')['close'].to_list() == [2800.0, 2810.0]
+
+
+class TestRenameChainAdjClose:
+    def test_old_name_history_gets_successor_split_and_dividends(self, store, monkeypatch):
+        (store.parent / 'renames.csv').write_text('old,new,date\nOLD,NEW,2025-06-04\n', encoding='utf-8')
+        (store.parent / 'splits.csv').write_text('ticker,date,ratio,kind\nNEW,2025-06-06,10,price\n', encoding='utf-8')
+        (store / 'NEW.csv').write_text('closing_date,dividend_value\n2025-06-05,10\n', encoding='utf-8')
+        rows = pl.concat([
+            sdf(['2025-06-02', '2025-06-03'], [1000, 1000], 'OLD'),
+            sdf(['2025-06-04', '2025-06-05', '2025-06-06', '2025-06-09'], [1000, 900, 90, 90], 'NEW')])
+        full, _ = stocks._recompute(rows, str(store), compute_derived=True)
+        merged = stocks.apply_renames(full).sort('date')
+        # единая база NEW после дробления 1:10: дивиденд 10 при цене 1000 (фактор 0.99)
+        # применен ко всем датам до экс-даты 05.06, включая историю OLD
+        adj = dict(zip(merged['date'].to_list(), merged['adj_close'].to_list()))
+        assert adj[d('2025-06-02')] == pytest.approx(99.0)      # OLD: /10 за сплит NEW и ×0.99 за дивиденд NEW
+        assert adj[d('2025-06-03')] == pytest.approx(99.0)
+        assert adj[d('2025-06-04')] == pytest.approx(99.0)
+        assert adj[d('2025-06-05')] == pytest.approx(90.0)
+        assert adj[d('2025-06-09')] == pytest.approx(90.0)
+
+    def test_two_payouts_on_one_date_kept_old_name_duplicate_ignored(self, store):
+        (store.parent / 'renames.csv').write_text('old,new,date\nOLD,NEW,2025-06-04\n', encoding='utf-8')
+        (store.parent / 'splits.csv').write_text('ticker,date,ratio,kind\n', encoding='utf-8')
+        # у NEW две выплаты с одной датой реестра (6 + 4 = 10); у OLD та же дата — дубль
+        (store / 'NEW.csv').write_text('closing_date,dividend_value\n2025-06-05,6\n2025-06-05,4\n', encoding='utf-8')
+        (store / 'OLD.csv').write_text('closing_date,dividend_value\n2025-06-05,10\n', encoding='utf-8')
+        rows = pl.concat([
+            sdf(['2025-06-02', '2025-06-03'], [1000, 1000], 'OLD'),
+            sdf(['2025-06-04', '2025-06-05', '2025-06-09'], [1000, 990, 990], 'NEW')])
+        full, _ = stocks._recompute(rows, str(store), compute_derived=True)
+        adj = dict(zip(full['date'].to_list(), full['adj_close'].to_list()))
+        assert adj[d('2025-06-02')] == pytest.approx(1000 * 0.994 * 0.996)  # обе выплаты, без дубля OLD
+        assert adj[d('2025-06-04')] == pytest.approx(1000 * 0.994 * 0.996)
+        assert adj[d('2025-06-09')] == pytest.approx(990.0)

@@ -546,9 +546,45 @@ def _changed_rows(old: pl.DataFrame, new: pl.DataFrame, key: list[str], rel_tol:
     return joined.filter(diff | pl.col('__was').is_null()).select(new.columns)
 
 
+def _final_ticker(ticker: str, renames: pl.DataFrame) -> str:
+    """Итоговый тикер цепочки переименований (A→B→C: для A и B — C)."""
+    step = dict(zip(renames['old'].to_list(), renames['new'].to_list()))
+    seen = set()
+    while ticker in step and ticker not in seen:
+        seen.add(ticker)
+        ticker = step[ticker]
+    return ticker
+
+
+def _chain_adj_close(group: pl.DataFrame, final: str, div_folder: Optional[str],
+                     splits: pl.DataFrame, renames: pl.DataFrame) -> tuple[pl.DataFrame, list]:
+    """
+    adj_close по склеенной истории цепочки переименований (TCSG→T): поправки
+    на сплиты и дивиденды итогового тикера распространяются на историю старых
+    имен. Returns: (date, ticker=исходный тикер, adj_close), отброшенные дивиденды.
+    """
+    merged = apply_renames(group.select(RAW_COLS), renames).sort('date')
+    names = merged['source_ticker'].unique().to_list()
+    # дата закрытия реестра может быть в файлах двух имен; берем ее из первого
+    # (итоговый тикер приоритетен), сохраняя несколько выплат на одну дату
+    divs = pl.concat([load_dividends(t, div_folder).with_columns(src=pl.lit(i))
+                      for i, t in enumerate(dict.fromkeys([final, *names]))])
+    divs = (divs.filter(pl.col('src') == pl.col('src').min().over('closing_date'))
+            .drop('src').sort('closing_date', maintain_order=True))
+    out, skipped = adj_close(merged.drop('source_ticker'), divs, splits)
+    return (out.select('date', 'adj_close')
+            .with_columns(merged['source_ticker'].alias('ticker'))), skipped
+
+
 def _recompute(frame: pl.DataFrame, div_folder: Optional[str], compute_derived: bool) -> tuple[pl.DataFrame, dict]:
-    """adj_close и капитализация по каждому тикеру frame; Returns: (данные, {тикер: отброшенные дивиденды})."""
-    shares, splits = load_shares(), load_splits()
+    """
+    adj_close и капитализация по каждому тикеру frame; Returns: (данные,
+    {тикер: отброшенные дивиденды}). Для тикеров цепочки переименований adj_close
+    считается по склеенной истории (в базе итогового тикера): иначе история
+    старого имени не учитывала бы сплиты и дивиденды после переименования и на
+    стыке был бы разрыв (TCSG→T и дробление T 1:10 в 2026 году).
+    """
+    shares, splits, renames = load_shares(), load_splits(), load_renames()
     parts, skipped = [], {}
     for ticker_df in frame.partition_by('ticker', maintain_order=True):
         if compute_derived:
@@ -556,7 +592,25 @@ def _recompute(frame: pl.DataFrame, div_folder: Optional[str], compute_derived: 
             if sk:
                 skipped[ticker_df['ticker'][0]] = sk
         parts.append(ticker_df.select(STOCK_COLS))
-    return (pl.concat(parts, how='vertical_relaxed') if parts else frame), skipped
+    out = pl.concat(parts, how='vertical_relaxed') if parts else frame
+    if not compute_derived or out.is_empty() or renames.is_empty():
+        return out, skipped
+
+    finals = {t: _final_ticker(t, renames) for t in out['ticker'].unique().to_list()}
+    for final in set(finals.values()):
+        members = [t for t, f in finals.items() if f == final]
+        if len(members) < 2:
+            continue
+        group = out.filter(pl.col('ticker').is_in(members))
+        chain, sk = _chain_adj_close(group, final, div_folder, splits, renames)
+        skipped.pop(final, None)
+        if sk:
+            skipped[final] = sk
+        # строки старого имени после даты переименования в склейку не входят —
+        # у них остается adj_close, посчитанный по самому тикеру
+        out = (out.join(chain.rename({'adj_close': '__chain'}), on=['date', 'ticker'], how='left')
+               .with_columns(pl.coalesce('__chain', 'adj_close').alias('adj_close')).drop('__chain'))
+    return out.select(STOCK_COLS), skipped
 
 
 def update_stocks(tickers: Optional[Iterable[str]] = None, include_delisted: bool = False,

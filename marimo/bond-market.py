@@ -480,10 +480,7 @@ def _(go, gspread_hist, mo, np, pl, plotly_available, snap_now):
 def _(dt, go, mo, moex, pl, plotly_available):
     # RGBITR (гособлигации, полная доходность) против IMOEX за год
     def _index(_ticker):
-        # кэш индексов пока в Parquet (moex_utils, pandas) — сразу в polars
-        _df = pl.from_pandas(moex.read_moex_index(_ticker).reset_index())
-        return (_df.select(pl.col('date').cast(pl.Date), pl.col('close').cast(pl.Float64))
-                .sort('date'))
+        return moex.read_index(_ticker).select('date', 'close').sort('date')
 
     try:
         _rgb = _index('RGBITR')
@@ -493,7 +490,7 @@ def _(dt, go, mo, moex, pl, plotly_available):
 
     if not plotly_available or not _rgb_ok:
         rgbitr_block = mo.md(
-            "*Кэш RGBITR не найден — обновите индексы: `python update_data.py`*"
+            "*RGBITR нет в хранилище — обновите индексы: `python update_data.py`*"
         ) if plotly_available else mo.md("")
     else:
         _last = _rgb['date'].max()

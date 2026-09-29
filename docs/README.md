@@ -14,7 +14,7 @@
 
 | Файл | Назначение |
 |------|------------|
-| `moex_utils.py` | Фасад прежнего интерфейса: реэкспорт функций модулей, обертки облигаций и фьючерсов, математика облигаций, временные pandas-обертки для ноутбуков |
+| `moex_utils.py` | Фасад прежнего интерфейса: реэкспорт функций модулей, обертки облигаций и фьючерсов, математика облигаций |
 | `stocks.py` | Акции и индексы в хранилище: загрузка из ISS, сплиты, переименования, снятые с торгов, adj_close, капитализация, ключевая и безрисковая ставки |
 | `quality.py` | Проверка качества данных |
 | `lake.py` | Хранилище DuckLake: каталог PostgreSQL `moex_lake`, файлы Parquet в `<MOEX_DATA_ROOT>/lake`; запросы → polars, запись по ключу, обслуживание |
@@ -26,7 +26,7 @@
 | `update_data.bat` | Запуск на Windows: выбор интерпретатора (`MOEX_PYTHON` → conda `py312` → `python`), проверка `polars` и `duckdb` |
 | `scheduled_update.cmd` | Обертка для задачи планировщика `MOEX data nightly` (вт–сб 00:30), лог в `logs/update.log` |
 | `tests/` | Офлайн pytest-тесты (ISS замокан), гоняются в CI |
-| `requirements.txt` | Зависимости ядра и тестов (`numpy<2` — для совместимости со сборками pandas под NumPy 1.x) |
+| `requirements.txt` | Зависимости ядра и тестов (`numpy<2` — совместимость со сборками пакетов окружения под NumPy 1.x) |
 | `requirements-notebooks.txt` | Дополнительно для marimo-ноутбуков (marimo, statsmodels, arch, PyPortfolioOpt и др.) |
 
 ## Установка и запуск
@@ -44,5 +44,5 @@ pytest -q                        # тесты
 
 - **requests** — ISS MOEX; **lxml** — таблица ключевой ставки с cbr.ru; **openpyxl** — Excel с числом акций
 - **polars**, **duckdb** (с расширениями ducklake, postgres) — данные и хранилище
-- **pandas**, **pyarrow** — временные обертки для ноутбуков до их перевода на polars
+- **pyarrow** — обмен данными DuckDB ↔ polars
 - **plotly** — графики в ноутбуках

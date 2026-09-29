@@ -14,7 +14,7 @@
 
 Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы пока не выгружаются.
 
-**Хранение.** Все рыночные данные — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL. Модель таблиц — [docs/data-model.md](docs/data-model.md), все поля биржи по рынкам — [docs/iss-columns.md](docs/iss-columns.md). marimo-ноутбуки пока работают через pandas-обертки `moex_utils` — их перевод на polars следующий.
+**Хранение.** Все рыночные данные — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL. Модель таблиц — [docs/data-model.md](docs/data-model.md), все поля биржи по рынкам — [docs/iss-columns.md](docs/iss-columns.md). Весь код и marimo-ноутбуки — на polars, pandas в проекте не используется; прежние Jupyter-ноутбуки на pandas — в архиве [legacy/](legacy/README.md).
 
 ## Установка
 
@@ -88,7 +88,7 @@ marimo edit marimo/bond-market.py
 
 ```
 moexutils/
-├── moex_utils.py        # фасад прежнего интерфейса (+ временные pandas-обертки для ноутбуков)
+├── moex_utils.py        # фасад: реэкспорт функций модулей, облигации и фьючерсы, математика облигаций
 ├── stocks.py            # акции и индексы: загрузка, сплиты, переименования, adj_close, капитализация, ставки
 ├── quality.py           # проверка качества данных
 ├── lake.py              # хранилище DuckLake (каталог Postgres, результаты — polars)
@@ -97,7 +97,8 @@ moexutils/
 ├── update_data.py       # пайплайн обновления (CLI)
 ├── update_data.bat      # запуск на Windows
 ├── scheduled_update.cmd # обертка для планировщика задач
-├── marimo/  nb/  scripts/
+├── marimo/  scripts/
+├── legacy/             # архив: Jupyter-ноутбуки и скрипты на pandas (не запускаются)
 ├── tests/               # офлайн pytest-тесты
 ├── docs/                # документация
 ├── metadata/            # реестры: сплиты, переименования, снятые с торгов, ставка ЦБ

@@ -12,16 +12,16 @@ app = marimo.App(width="medium", app_title="Обзор фондового рын
 
 @app.cell(hide_code=True)
 def _():
-    # moex_utils лежит в корне проекта (родительская папка от marimo/)
+    # stocks лежит в корне проекта (родительская папка от marimo/)
     import sys as _sys
     import os as _os
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-    import moex_utils as moex
-    import pandas as pd
+    import stocks
+    import polars as pl
     import numpy as np
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
-    from datetime import datetime, timedelta
+    from datetime import date, datetime, timedelta
     import marimo as mo
     import io
     import base64
@@ -33,7 +33,7 @@ def _():
         px, go = None, None
         plotly_available = False
 
-    return base64, go, io, mo, moex, np, pd, plotly_available, plt, px
+    return base64, date, go, io, mo, np, pl, plotly_available, plt, px, stocks, timedelta
 
 
 @app.cell(hide_code=True)
@@ -81,27 +81,27 @@ def _(mo):
 
 
 @app.cell
-def _(moex):
+def _(stocks):
     # Загружаем данные; цены приводим к пост-сплитовой базе (metadata/splits.csv),
     # иначе дробления акций (T 1:10 в 2026 и др.) выглядят как обвал цены
-    combined_df = moex.adjust_for_splits(moex.combine_moex_stocks())
+    combined_df = stocks.read_stocks(split_adjusted=True)
     return (combined_df,)
 
 
 @app.cell(hide_code=True)
-def _(moex, pd):
+def _(pl, stocks):
     # Справочник тикер→сектор (используется картой рынка, секторным разрезом и структурой)
     import os as _oss
-    _sec_path = _oss.path.join(moex.BASE_DIR, 'metadata', 'sectors.csv')
+    _sec_path = _oss.path.join(stocks.BASE_DIR, 'metadata', 'sectors.csv')
     if _oss.path.exists(_sec_path):
-        sectors_map = pd.read_csv(_sec_path)
+        sectors_map = pl.read_csv(_sec_path)
     else:
-        sectors_map = pd.DataFrame(columns=['ticker', 'sector'])
+        sectors_map = pl.DataFrame(schema={'ticker': pl.String, 'sector': pl.String})
     return (sectors_map,)
 
 
 @app.cell(hide_code=True)
-def _(combined_df, pd, period_dropdown):
+def _(combined_df, date, period_dropdown, pl):
     # Метки периодов для заголовков
     PERIOD_LABELS = {
         "1d": "1 день",
@@ -117,84 +117,71 @@ def _(combined_df, pd, period_dropdown):
     # Функция для расчета performance
     def calculate_performance(df, period_code):
         """Рассчитывает performance за период, отсчитанный от последней даты в данных"""
-        _all_dates = df.index.unique().sort_values()
+        _all_dates = df['date'].unique().sort()
         end_date = _all_dates.max()
 
         if period_code == "1d":
             # последние два торговых дня
             start_date = _all_dates[-2] if len(_all_dates) >= 2 else end_date
         elif period_code == "ytd":
-            start_date = pd.Timestamp(end_date.year, 1, 1)
+            start_date = date(end_date.year, 1, 1)
         else:
+            # Календарные сдвиги (конец месяца обрезается, как у DateOffset)
             _offsets = {
-                "1w": pd.DateOffset(weeks=1),
-                "2w": pd.DateOffset(weeks=2),
-                "1m": pd.DateOffset(months=1),
-                "3m": pd.DateOffset(months=3),
-                "6m": pd.DateOffset(months=6),
-                "1y": pd.DateOffset(years=1),
+                "1w": "-1w",
+                "2w": "-2w",
+                "1m": "-1mo",
+                "3m": "-3mo",
+                "6m": "-6mo",
+                "1y": "-1y",
             }
-            start_date = end_date - _offsets.get(period_code, pd.DateOffset(weeks=1))
+            start_date = pl.select(
+                pl.lit(end_date).dt.offset_by(_offsets.get(period_code, "-1w"))).item()
 
-        performances = []
+        # Первая и последняя котировка каждой бумаги в периоде
+        _close = pl.col('close').fill_nan(None)
+        _mcap = pl.col('market_cap').fill_nan(None)
+        performances = (
+            df.filter(pl.col('date').is_between(start_date, end_date))
+            .sort('ticker', 'date')
+            .group_by('ticker', maintain_order=True)
+            .agg(
+                _n=pl.len(),
+                first_price=_close.first(),
+                last_price=_close.last(),
+                first_market_cap=_mcap.first(),
+                last_market_cap=_mcap.last(),
+                start_date=pl.col('date').first(),
+                end_date=pl.col('date').last(),
+            )
+            # Нужно минимум 2 дня и валидные цены
+            .filter(
+                (pl.col('_n') >= 2)
+                & pl.col('first_price').is_not_null()
+                & pl.col('last_price').is_not_null()
+                & (pl.col('first_price') > 0)
+            )
+        )
 
-        for ticker in df['ticker'].unique():
-            stock_data = df[df['ticker'] == ticker].copy()
+        # Performance по цене и по market cap (если есть данные)
+        _mc_ok = (pl.col('first_market_cap').is_not_null()
+                  & pl.col('last_market_cap').is_not_null()
+                  & (pl.col('first_market_cap') > 0))
+        performances = performances.select(
+            'ticker',
+            price_performance=(pl.col('last_price') - pl.col('first_price')) / pl.col('first_price') * 100,
+            first_price='first_price',
+            last_price='last_price',
+            market_cap_performance=pl.when(_mc_ok).then(
+                (pl.col('last_market_cap') - pl.col('first_market_cap')) / pl.col('first_market_cap') * 100),
+            market_cap_change=pl.when(_mc_ok).then(pl.col('last_market_cap') - pl.col('first_market_cap')),
+            first_market_cap='first_market_cap',
+            last_market_cap='last_market_cap',
+            start_date='start_date',
+            end_date='end_date',
+        )
 
-            # Фильтруем по периоду
-            mask = (stock_data.index >= start_date) & (stock_data.index <= end_date)
-            period_data = stock_data[mask].sort_index()
-
-            if len(period_data) < 2:
-                continue
-
-            # Получаем первую и последнюю даты с данными
-            first_day = period_data.index.min()
-            last_day = period_data.index.max()
-
-            try:
-                # Performance по цене
-                if 'close' in period_data.columns:
-                    first_price = period_data.loc[first_day, 'close']
-                    last_price = period_data.loc[last_day, 'close']
-
-                    if pd.isna(first_price) or pd.isna(last_price) or first_price <= 0:
-                        continue
-
-                    price_performance = ((last_price - first_price) / first_price) * 100
-                else:
-                    continue
-
-                # Performance по market cap (если есть данные)
-                market_cap_performance = None
-                market_cap_change = None
-                first_market_cap = None
-                last_market_cap = None
-
-                if 'market_cap' in period_data.columns:
-                    first_market_cap = period_data.loc[first_day, 'market_cap']
-                    last_market_cap = period_data.loc[last_day, 'market_cap']
-
-                    if not pd.isna(first_market_cap) and not pd.isna(last_market_cap) and first_market_cap > 0:
-                        market_cap_performance = ((last_market_cap - first_market_cap) / first_market_cap) * 100
-                        market_cap_change = last_market_cap - first_market_cap
-
-                performances.append({
-                    'ticker': ticker,
-                    'price_performance': price_performance,
-                    'first_price': first_price,
-                    'last_price': last_price,
-                    'market_cap_performance': market_cap_performance,
-                    'market_cap_change': market_cap_change,
-                    'first_market_cap': first_market_cap,
-                    'last_market_cap': last_market_cap,
-                    'start_date': first_day,
-                    'end_date': last_day,
-                })
-            except (KeyError, IndexError) as e:
-                continue
-
-        return pd.DataFrame(performances), start_date, end_date
+        return performances, start_date, end_date
 
     perf_df, period_start, period_end = calculate_performance(combined_df, period_dropdown.value)
     period_label = PERIOD_LABELS.get(period_dropdown.value, str(period_dropdown.value))
@@ -202,91 +189,114 @@ def _(combined_df, pd, period_dropdown):
 
 
 @app.cell(hide_code=True)
-def _(combined_df, moex, np, pd):
+def _(combined_df, np, pl, stocks):
     # Годовые метрики риска по бумагам: волатильность (аннуализированная),
     # бета к IMOEX, max drawdown и расстояние от 52-недельного максимума
-    _last_date_r = combined_df.index.max()
-    _start_1y = _last_date_r - pd.DateOffset(years=1)
-    _wide_r = combined_df.pivot_table(index=combined_df.index, columns='ticker',
-                                      values='close', aggfunc='last').sort_index()
-    _wide_1y = _wide_r[_wide_r.index >= _start_1y]
-    _rets = _wide_1y.pct_change()
-    _counts = _rets.count()
+    _last_date_r = combined_df['date'].max()
+    _start_1y = pl.select(pl.lit(_last_date_r).dt.offset_by('-1y')).item()
+    _wide_r = combined_df.pivot(on='ticker', index='date', values='close',
+                                aggregate_function='last', sort_columns=True).sort('date')
+    _tk = [_c for _c in _wide_r.columns if _c != 'date']
+    _wide_1y = _wide_r.filter(pl.col('date') >= _start_1y)
+    # Доходности по сетке всех торговых дат: пропуски заполняются предыдущей ценой
+    # (дни без торгов дают нулевую доходность, как было в прежней версии)
+    _ff = _wide_1y.select('date', pl.col(_tk).forward_fill())
+    _rets = _ff.select('date', pl.col(_tk) / pl.col(_tk).shift(1) - 1)
 
-    _vol_1y = _rets.std() * np.sqrt(252) * 100
-    _vol_1y[_counts < 60] = np.nan  # меньше ~3 месяцев наблюдений — оценка ненадежна
+    _rets_long = _rets.unpivot(index='date', variable_name='ticker', value_name='ret')
+    _px_long = _wide_1y.unpivot(index='date', variable_name='ticker', value_name='close')
 
-    _cummax = _wide_1y.cummax()
-    _mdd_1y = ((_wide_1y / _cummax) - 1).min() * 100
-    _off_high = (_wide_1y.ffill().iloc[-1] / _wide_1y.max() - 1) * 100
+    _stats = _rets_long.group_by('ticker', maintain_order=True).agg(
+        _count=pl.col('ret').count(),
+        vol_1y=pl.col('ret').std() * np.sqrt(252) * 100,
+    ).with_columns(
+        # меньше ~3 месяцев наблюдений — оценка ненадежна
+        vol_1y=pl.when(pl.col('_count') >= 60).then(pl.col('vol_1y'))
+    )
 
-    _beta = pd.Series(np.nan, index=_rets.columns)
+    _dd = _px_long.group_by('ticker', maintain_order=True).agg(
+        mdd_1y=((pl.col('close') / pl.col('close').cum_max()) - 1).min() * 100,
+        off_high=(pl.col('close').drop_nulls().last() / pl.col('close').max() - 1) * 100,
+    )
+
+    _beta = pl.DataFrame({'ticker': _tk, 'beta': [None] * len(_tk)},
+                         schema={'ticker': pl.String, 'beta': pl.Float64})
     try:
-        _imx_r = moex.read_moex_index('IMOEX')
-        _imx_r.index = pd.to_datetime(_imx_r.index)
-        _imx_ret_s = _imx_r['close'].pct_change()
-        _imx_ret_s = _imx_ret_s[_imx_ret_s.index >= _start_1y]
-        _aligned = _rets.join(_imx_ret_s.rename('_IMOEX_'), how='inner')
+        _imx_r = stocks.read_index('IMOEX').sort('date')
+        _imx_ret_s = _imx_r.select('date', _IMOEX_=pl.col('close') / pl.col('close').shift(1) - 1)
+        _imx_ret_s = _imx_ret_s.filter(pl.col('date') >= _start_1y)
+        _aligned = _rets.join(_imx_ret_s, on='date', how='inner')
         _ivar = float(_aligned['_IMOEX_'].var())
         if _ivar > 0:
-            _beta = _aligned.drop(columns='_IMOEX_').apply(
-                lambda _s: _s.cov(_aligned['_IMOEX_'])) / _ivar
-            _beta[_counts < 60] = np.nan
+            # Ковариация по парам, где есть обе доходности (как Series.cov)
+            _al = _aligned.select('date', '_IMOEX_').join(
+                _rets_long, on='date', how='inner')
+            _m = pl.col('ret').is_not_null() & pl.col('_IMOEX_').is_not_null()
+            _a = pl.col('ret').filter(_m)
+            _b = pl.col('_IMOEX_').filter(_m)
+            _beta = _al.group_by('ticker').agg(
+                beta=((_a - _a.mean()) * (_b - _b.mean())).sum() / (_m.sum() - 1) / _ivar
+            ).join(_stats.select('ticker', '_count'), on='ticker', how='left').select(
+                'ticker', beta=pl.when(pl.col('_count') >= 60).then(pl.col('beta'))
+            )
     except Exception:
         pass
 
-    risk_df = pd.DataFrame({
-        'vol_1y': _vol_1y,
-        'beta': _beta,
-        'mdd_1y': _mdd_1y,
-        'off_high': _off_high,
-    })
-    risk_df.index.name = 'ticker'
-    risk_df = risk_df.reset_index()
+    risk_df = (
+        pl.DataFrame({'ticker': _tk})
+        .join(_stats.select('ticker', 'vol_1y'), on='ticker', how='left', maintain_order='left')
+        .join(_beta, on='ticker', how='left', maintain_order='left')
+        .join(_dd, on='ticker', how='left', maintain_order='left')
+        .select('ticker', 'vol_1y', 'beta', 'mdd_1y', 'off_high')
+    )
     return (risk_df,)
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, imoex_ret, pd, period_end, period_start, risk_df):
+def _(filtered_df, imoex_ret, pl, period_end, period_start, risk_df):
     # Обогащение риск-метриками: σ-движение (аномальность хода за период)
     # и альфа к IMOEX (изменение бумаги минус бета × изменение индекса)
-    enriched_df = filtered_df.merge(risk_df, on='ticker', how='left')
+    enriched_df = filtered_df.join(risk_df, on='ticker', how='left', maintain_order='left')
 
     _years = max((period_end - period_start).days, 1) / 365.25
-    _denom = (enriched_df['vol_1y'] * (_years ** 0.5)).replace(0, pd.NA)
-    enriched_df['sigma_move'] = enriched_df['price_performance'] / _denom
+    _denom = pl.col('vol_1y') * (_years ** 0.5)
+    enriched_df = enriched_df.with_columns(
+        sigma_move=pl.when(_denom != 0).then(pl.col('price_performance') / _denom)
+    )
 
     if imoex_ret is not None:
-        enriched_df['alpha'] = enriched_df['price_performance'] - enriched_df['beta'] * imoex_ret
+        enriched_df = enriched_df.with_columns(
+            alpha=pl.col('price_performance') - pl.col('beta') * imoex_ret)
     else:
-        enriched_df['alpha'] = pd.NA
+        enriched_df = enriched_df.with_columns(alpha=pl.lit(None, dtype=pl.Float64))
     return (enriched_df,)
 
 
 @app.cell(hide_code=True)
-def _(min_market_cap, perf_df, sort_by):
+def _(min_market_cap, perf_df, pl, sort_by):
     # Фильтруем и сортируем данные
-    filtered_df = perf_df.copy()
+    filtered_df = perf_df.clone()
 
     # Фильтр по минимальному market cap (конвертируем из миллиардов в рубли)
     if 'last_market_cap' in filtered_df.columns:
         min_cap_rub = min_market_cap.value * 1e9
-        filtered_df = filtered_df[
-            (filtered_df['last_market_cap'].isna()) | 
-            (filtered_df['last_market_cap'] >= min_cap_rub)
-        ]
+        filtered_df = filtered_df.filter(
+            pl.col('last_market_cap').is_null() |
+            (pl.col('last_market_cap') >= min_cap_rub)
+        )
 
     # Сортировка
     if sort_by.value in filtered_df.columns:
         ascending = sort_by.value != "ticker"
-        filtered_df = filtered_df.sort_values(sort_by.value, ascending=ascending)
+        filtered_df = filtered_df.sort(sort_by.value, descending=not ascending,
+                                       nulls_last=True, maintain_order=True)
     elif sort_by.value == "ticker":
-        filtered_df = filtered_df.sort_values('ticker', ascending=True)
+        filtered_df = filtered_df.sort('ticker')
     return (filtered_df,)
 
 
 @app.cell(hide_code=True)
-def _(enriched_df, mo, pd, show_market_cap):
+def _(enriched_df, mo, pl, show_market_cap):
     # Таблица с результатами
     display_cols = ['ticker', 'price_performance', 'sigma_move', 'alpha',
                     'vol_1y', 'beta', 'mdd_1y', 'off_high',
@@ -300,33 +310,36 @@ def _(enriched_df, mo, pd, show_market_cap):
     if show_market_cap.value and 'market_cap_performance' in enriched_df.columns:
         display_cols.extend(['market_cap_performance', 'market_cap_change', 'last_market_cap'])
 
-    display_df = enriched_df[display_cols].copy()
+    display_df = enriched_df.select(display_cols)
 
     # Округление риск-метрик
     for _rc, _nd in (('sigma_move', 1), ('alpha', 1), ('vol_1y', 0),
                      ('beta', 2), ('mdd_1y', 1), ('off_high', 1)):
         if _rc in display_df.columns:
-            display_df[_rc] = pd.to_numeric(display_df[_rc], errors='coerce').round(_nd)
+            display_df = display_df.with_columns(pl.col(_rc).cast(pl.Float64).round(_nd))
 
     # Форматирование
+    _fmt = []
     if 'price_performance' in display_df.columns:
-        display_df['price_performance'] = display_df['price_performance'].round(2)
+        _fmt.append(pl.col('price_performance').round(2))
     if 'market_cap_performance' in display_df.columns:
-        display_df['market_cap_performance'] = display_df['market_cap_performance'].round(2)
+        _fmt.append(pl.col('market_cap_performance').round(2))
     if 'market_cap_change' in display_df.columns:
-        display_df['market_cap_change'] = (display_df['market_cap_change'] / 1e9).round(2)  # в миллиардах
+        _fmt.append((pl.col('market_cap_change') / 1e9).round(2))  # в миллиардах
     if 'last_market_cap' in display_df.columns:
-        display_df['last_market_cap'] = (display_df['last_market_cap'] / 1e9).round(2)  # в миллиардах
+        _fmt.append((pl.col('last_market_cap') / 1e9).round(2))  # в миллиардах
     if 'first_price' in display_df.columns:
-        display_df['first_price'] = display_df['first_price'].round(2)
+        _fmt.append(pl.col('first_price').round(2))
     if 'last_price' in display_df.columns:
-        display_df['last_price'] = display_df['last_price'].round(2)
+        _fmt.append(pl.col('last_price').round(2))
 
     # Форматирование дат
     if 'start_date' in display_df.columns:
-        display_df['start_date'] = pd.to_datetime(display_df['start_date']).dt.strftime('%d.%m.%Y')
+        _fmt.append(pl.col('start_date').dt.strftime('%d.%m.%Y'))
     if 'end_date' in display_df.columns:
-        display_df['end_date'] = pd.to_datetime(display_df['end_date']).dt.strftime('%d.%m.%Y')
+        _fmt.append(pl.col('end_date').dt.strftime('%d.%m.%Y'))
+    if _fmt:
+        display_df = display_df.with_columns(_fmt)
 
     # Переименование для читаемости
     column_mapping = {
@@ -346,32 +359,35 @@ def _(enriched_df, mo, pd, show_market_cap):
         'market_cap_change': 'Δ mcap (млрд)',
         'last_market_cap': 'Mcap (млрд)',
     }
-    display_df = display_df.rename(columns=column_mapping)
+    display_df = display_df.rename({_k: _v for _k, _v in column_mapping.items()
+                                    if _k in display_df.columns})
 
     table = mo.ui.table(display_df, pagination=True, page_size=20)
     return (table,)
 
 
 @app.cell(hide_code=True)
-def _(base64, filtered_df, io, mo, pd, period_label, plt):
+def _(base64, filtered_df, io, mo, pl, period_label, plt):
     # Лидеры и аутсайдеры: топ-15 в обе стороны (полный список — в таблице)
     if len(filtered_df) > 0:
         _n_show = 15
-        _mv = pd.concat([
-            filtered_df.nlargest(_n_show, 'price_performance'),
-            filtered_df.nsmallest(_n_show, 'price_performance'),
-        ]).drop_duplicates(subset='ticker').sort_values('price_performance')
+        _mv = pl.concat([
+            filtered_df.sort('price_performance', descending=True, maintain_order=True).head(_n_show),
+            filtered_df.sort('price_performance', maintain_order=True).head(_n_show),
+        ]).unique(subset='ticker', keep='first', maintain_order=True).sort(
+            'price_performance', maintain_order=True)
 
+        _perf1 = _mv['price_performance'].to_list()
         _fig1, _ax1 = plt.subplots(figsize=(9.5, max(6.0, 0.32 * len(_mv))))
-        _colors1 = ['green' if _x >= 0 else 'red' for _x in _mv['price_performance']]
-        _bars1 = _ax1.barh(_mv['ticker'], _mv['price_performance'], color=_colors1, alpha=0.75)
+        _colors1 = ['green' if _x >= 0 else 'red' for _x in _perf1]
+        _bars1 = _ax1.barh(_mv['ticker'].to_list(), _perf1, color=_colors1, alpha=0.75)
         _ax1.set_xlabel('Изменение цены (%)')
         _ax1.set_title(f'Лидеры и аутсайдеры (топ-{_n_show} в обе стороны) — {period_label}')
         _ax1.axvline(x=0, color='black', linewidth=0.8)
         _ax1.grid(axis='x', linestyle='--', alpha=0.5)
         _ax1.margins(x=0.12)
 
-        for _bar, _val in zip(_bars1, _mv['price_performance']):
+        for _bar, _val in zip(_bars1, _perf1):
             _w = _bar.get_width()
             _ax1.text(_w, _bar.get_y() + _bar.get_height() / 2, f' {_val:+.1f}% ',
                       ha='left' if _w >= 0 else 'right', va='center', fontsize=8)
@@ -389,17 +405,22 @@ def _(base64, filtered_df, io, mo, pd, period_label, plt):
 
 
 @app.cell(hide_code=True)
-def _(base64, filtered_df, io, mo, period_label, plt, show_market_cap):
+def _(base64, filtered_df, io, mo, period_label, pl, plt, show_market_cap):
     # Крупнейшие изменения капитализации: топ-10 по модулю
     if show_market_cap.value and 'market_cap_change' in filtered_df.columns and len(filtered_df) > 0:
-        mc_change_data = filtered_df[filtered_df['market_cap_change'].notna()].copy()
+        mc_change_data = filtered_df.filter(pl.col('market_cap_change').is_not_null())
         if len(mc_change_data) > 0:
-            _top_idx = mc_change_data['market_cap_change'].abs().nlargest(10).index
-            mc_change_data = mc_change_data.loc[_top_idx].sort_values('market_cap_change')
+            mc_change_data = (
+                mc_change_data
+                .sort(pl.col('market_cap_change').abs(), descending=True, maintain_order=True)
+                .head(10)
+                .sort('market_cap_change', maintain_order=True)
+            )
             _fig2, _ax2 = plt.subplots(figsize=(9.5, 4.5))
 
-            _colors3 = ['green' if x >= 0 else 'red' for x in mc_change_data['market_cap_change']]
-            _bars3 = _ax2.barh(mc_change_data['ticker'], mc_change_data['market_cap_change'] / 1e9, color=_colors3, alpha=0.7)
+            _mcb = (mc_change_data['market_cap_change'] / 1e9).to_list()
+            _colors3 = ['green' if x >= 0 else 'red' for x in mc_change_data['market_cap_change'].to_list()]
+            _bars3 = _ax2.barh(mc_change_data['ticker'].to_list(), _mcb, color=_colors3, alpha=0.7)
             _ax2.set_xlabel('Изменение market cap (млрд руб)')
             _ax2.set_title(f'Крупнейшие изменения market cap (топ-10) — {period_label}')
             _ax2.margins(x=0.12)
@@ -407,7 +428,7 @@ def _(base64, filtered_df, io, mo, period_label, plt, show_market_cap):
             _ax2.grid(axis='x', linestyle='--', alpha=0.7)
 
             # Добавляем значения
-            for _bar3, _val3 in zip(_bars3, mc_change_data['market_cap_change'] / 1e9):
+            for _bar3, _val3 in zip(_bars3, _mcb):
                 _width3 = _bar3.get_width()
                 _ax2.text(_width3, _bar3.get_y() + _bar3.get_height()/2,
                        f'{_val3:.1f}',
@@ -434,6 +455,7 @@ def _(
     anchor_date,
     breadth_block,
     chart,
+    date,
     heatmap_block,
     index_block,
     marimekko_block,
@@ -441,7 +463,6 @@ def _(
     market_summary,
     min_market_cap,
     mo,
-    pd,
     period_dropdown,
     period_end,
     period_label,
@@ -465,7 +486,7 @@ def _(
         _period_line = f"**Период:** {period_start_str} - {period_end_str}"
 
     # Если последняя дата в данных — сегодня, цены могут быть внутридневными
-    if period_end.normalize() == pd.Timestamp.now().normalize():
+    if period_end == date.today():
         _period_line += " · ⏳ *последняя дата — сегодня: цены на момент обновления данных, сессия может быть не закрыта*"
 
     mo.vstack([
@@ -505,7 +526,7 @@ def _(filtered_df, imoex_ret, mo, period_end, period_label):
     _down = int((filtered_df['price_performance'] < 0).sum()) if _n else 0
 
     # Взвешенная по капитализации динамика: суммарная капитализация конец/начало
-    _mc = filtered_df.dropna(subset=['first_market_cap', 'last_market_cap']) if _n else filtered_df
+    _mc = filtered_df.drop_nulls(subset=['first_market_cap', 'last_market_cap']) if _n else filtered_df
     if _n and len(_mc) > 0 and _mc['first_market_cap'].sum() > 0:
         _market_ret = (_mc['last_market_cap'].sum() / _mc['first_market_cap'].sum() - 1) * 100
         _mkt_str = _sgn(_market_ret)
@@ -519,12 +540,12 @@ def _(filtered_df, imoex_ret, mo, period_end, period_label):
 
     if _n:
         _med = filtered_df['price_performance'].median()
-        _top = filtered_df.nlargest(5, 'price_performance')
-        _bot = filtered_df.nsmallest(5, 'price_performance')
-        _top_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.price_performance, '%', 1)}"
-                             for _r in _top.itertuples())
-        _bot_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.price_performance, '%', 1)}"
-                             for _r in _bot.itertuples())
+        _top = filtered_df.sort('price_performance', descending=True, maintain_order=True).head(5)
+        _bot = filtered_df.sort('price_performance', maintain_order=True).head(5)
+        _top_str = ", ".join(f"**{_r['ticker']}** {_sgn(_r['price_performance'], '%', 1)}"
+                             for _r in _top.iter_rows(named=True))
+        _bot_str = ", ".join(f"**{_r['ticker']}** {_sgn(_r['price_performance'], '%', 1)}"
+                             for _r in _bot.iter_rows(named=True))
         _imx_line = f"; IMOEX: {_sgn(imoex_ret)}" if imoex_ret is not None else ""
         market_summary = mo.md(f"""
     ### Итоги — {period_label}
@@ -540,34 +561,36 @@ def _(filtered_df, imoex_ret, mo, period_end, period_label):
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, go, mo, period_label, plotly_available):
+def _(filtered_df, go, mo, period_label, pl, plotly_available):
     # Вертикальный Marimekko (интерактивный): толщина бара = доля в капитализации,
     # длина = performance, лучшие сверху. Тонкие бары читаются через hover.
-    _mk = filtered_df.dropna(subset=['last_market_cap', 'price_performance']).copy()
+    _mk = filtered_df.drop_nulls(subset=['last_market_cap', 'price_performance'])
     if len(_mk) == 0:
         marimekko_block = mo.md("")
     elif not plotly_available:
         marimekko_block = mo.md("*Для Marimekko нужен plotly: `pip install plotly`*")
     else:
-        _mk = _mk.sort_values('price_performance', ascending=False)
-        _mk['share'] = _mk['last_market_cap'] / _mk['last_market_cap'].sum() * 100
-        _cums = _mk['share'].cumsum()
-        _mk['y_center'] = -( _cums - _mk['share'] / 2)
+        _mk = _mk.sort('price_performance', descending=True, maintain_order=True)
+        _mk = _mk.with_columns(share=pl.col('last_market_cap') / pl.col('last_market_cap').sum() * 100)
+        _mk = _mk.with_columns(y_center=-(pl.col('share').cum_sum() - pl.col('share') / 2))
 
+        _tickers_m = _mk['ticker'].to_list()
+        _perf_m = _mk['price_performance'].to_list()
+        _share_m = _mk['share'].to_list()
         _figm = go.Figure(go.Bar(
-            x=_mk['price_performance'],
-            y=_mk['y_center'],
-            width=(_mk['share'] * 0.94).clip(lower=0.12),
+            x=_perf_m,
+            y=_mk['y_center'].to_list(),
+            width=(_mk['share'] * 0.94).clip(lower_bound=0.12).to_list(),
             orientation='h',
-            marker_color=['green' if _v >= 0 else 'red' for _v in _mk['price_performance']],
+            marker_color=['green' if _v >= 0 else 'red' for _v in _perf_m],
             marker_line=dict(color='white', width=0.5),
             text=[f'{_t} {_v:+.1f}%' if _s >= 0.8 else ''
-                  for _t, _v, _s in zip(_mk['ticker'], _mk['price_performance'], _mk['share'])],
+                  for _t, _v, _s in zip(_tickers_m, _perf_m, _share_m)],
             textposition='outside',
             textfont_size=11,
             customdata=[
                 (_t, f'{_s:.2f}%', f'{_v:+.2f}%')
-                for _t, _s, _v in zip(_mk['ticker'], _mk['share'], _mk['price_performance'])
+                for _t, _s, _v in zip(_tickers_m, _share_m, _perf_m)
             ],
             hovertemplate='<b>%{customdata[0]}</b><br>Изменение: %{customdata[2]}'
                           '<br>Доля в капитализации: %{customdata[1]}<extra></extra>',
@@ -590,64 +613,66 @@ def _(filtered_df, go, mo, period_label, plotly_available):
 
 
 @app.cell(hide_code=True)
-def _(go, mo, moex, pd, period_end, period_label, period_start, plotly_available):
+def _(date, go, mo, pl, period_end, period_label, period_start, plotly_available, stocks):
     # IMOEX (интерактивный) с линиями EWMAC — пара EWMA 16/64 дня (по Р. Карверу):
-    # быстрая выше медленной = восходящий тренд. Кэш: indexes/IMOEX.parquet.
+    # быстрая выше медленной = восходящий тренд. Данные: хранилище, таблица indexes.
     imoex_ret = None
     try:
-        _idx_df = moex.read_moex_index('IMOEX')
-        _idx_df.index = pd.to_datetime(_idx_df.index)
-        _close = _idx_df['close'].astype(float).sort_index()
+        _idx_df = stocks.read_index('IMOEX')
+        if _idx_df.is_empty():
+            raise FileNotFoundError("IMOEX нет в хранилище")
+        _idx_df = _idx_df.select('date', pl.col('close').cast(pl.Float64)).sort('date')
 
         # Доходность за выбранный период — для сводки "Итоги"
-        _win = _close[(_close.index >= period_start) & (_close.index <= period_end)]
+        _win = _idx_df.filter(pl.col('date').is_between(period_start, period_end))
         if len(_win) >= 2:
-            imoex_ret = (float(_win.iloc[-1]) / float(_win.iloc[0]) - 1) * 100
+            imoex_ret = (float(_win['close'][-1]) / float(_win['close'][0]) - 1) * 100
 
         if not plotly_available:
             index_block = mo.md("*Для графика IMOEX нужен plotly: `pip install plotly`*")
-        elif len(_close) < 70:
-            index_block = mo.md("*IMOEX: недостаточно истории в кэше — обновите: `python update_data.py`*")
+        elif len(_idx_df) < 70:
+            index_block = mo.md("*IMOEX: недостаточно истории в хранилище — обновите: `python update_data.py`*")
         else:
             # EWMA считаем по всей истории (без прогревочного смещения),
             # показываем динамику с 2022 года
-            _ew16 = _close.ewm(span=16, adjust=False).mean()
-            _ew64 = _close.ewm(span=64, adjust=False).mean()
-            _show_from = min(pd.Timestamp('2022-01-01'), pd.Timestamp(period_start))
-            _c = _close[_close.index >= _show_from]
-            _e16 = _ew16[_ew16.index >= _show_from]
-            _e64 = _ew64[_ew64.index >= _show_from]
-            _last_close = float(_c.iloc[-1])
+            _idx_df = _idx_df.with_columns(
+                ew16=pl.col('close').ewm_mean(span=16, adjust=False),
+                ew64=pl.col('close').ewm_mean(span=64, adjust=False),
+            )
+            _show_from = min(date(2022, 1, 1), period_start)
+            _c = _idx_df.filter(pl.col('date') >= _show_from)
+            _dates_c = _c['date'].to_list()
+            _last_close = float(_c['close'][-1])
 
             _figi = go.Figure()
-            _figi.add_scatter(x=_c.index, y=_c.values, name='IMOEX',
+            _figi.add_scatter(x=_dates_c, y=_c['close'].to_list(), name='IMOEX',
                               line=dict(color='#1f77b4', width=1.8),
                               hovertemplate='%{y:.0f}<extra>IMOEX</extra>')
-            _figi.add_scatter(x=_e16.index, y=_e16.values, name='EWMA 16',
+            _figi.add_scatter(x=_dates_c, y=_c['ew16'].to_list(), name='EWMA 16',
                               line=dict(color='#2ca02c', width=1.1),
                               hovertemplate='%{y:.0f}<extra>EWMA 16</extra>')
-            _figi.add_scatter(x=_e64.index, y=_e64.values, name='EWMA 64',
+            _figi.add_scatter(x=_dates_c, y=_c['ew64'].to_list(), name='EWMA 64',
                               line=dict(color='#d62728', width=1.1, dash='dot'),
                               hovertemplate='%{y:.0f}<extra>EWMA 64</extra>')
             # Подсветка выбранного периода анализа
             _figi.add_vrect(x0=period_start, x1=period_end,
                             fillcolor='gray', opacity=0.08, line_width=0)
             # Последнее значение
-            _figi.add_scatter(x=[_c.index[-1]], y=[_last_close], mode='markers',
+            _figi.add_scatter(x=[_dates_c[-1]], y=[_last_close], mode='markers',
                               marker=dict(color='#1f77b4', size=7),
                               showlegend=False, hoverinfo='skip')
-            _figi.add_annotation(x=_c.index[-1], y=_last_close,
+            _figi.add_annotation(x=_dates_c[-1], y=_last_close,
                                  text=f'<b>{_last_close:,.0f}</b>'.replace(',', ' '),
                                  showarrow=False, xanchor='left', xshift=8,
                                  font=dict(color='#1f77b4', size=13))
 
             if imoex_ret is not None:
-                _ret_str = (f'{imoex_ret:+.2f}% (от закрытия {_win.index[0].strftime("%d.%m")}: '
-                            f'{float(_win.iloc[0]):,.0f})')
+                _ret_str = (f'{imoex_ret:+.2f}% (от закрытия {_win["date"][0].strftime("%d.%m")}: '
+                            f'{float(_win["close"][0]):,.0f})')
             else:
                 _ret_str = 'н/д'
             _trend = ('восходящий (EWMA16 > EWMA64)'
-                      if float(_ew16.iloc[-1]) > float(_ew64.iloc[-1])
+                      if float(_idx_df['ew16'][-1]) > float(_idx_df['ew64'][-1])
                       else 'нисходящий (EWMA16 < EWMA64)')
             _figi.update_layout(
                 height=360,
@@ -659,25 +684,27 @@ def _(go, mo, moex, pd, period_end, period_label, period_start, plotly_available
             )
             index_block = _figi
     except FileNotFoundError:
-        index_block = mo.md("*Локальный кэш IMOEX не найден — выполните `python update_data.py` (шаг 1b)*")
+        index_block = mo.md("*IMOEX нет в хранилище — выполните `python update_data.py` (шаг 1b)*")
     except Exception as _e_idx:
-        index_block = mo.md(f"*IMOEX: ошибка чтения кэша — {_e_idx}*")
+        index_block = mo.md(f"*IMOEX: ошибка чтения хранилища — {_e_idx}*")
     return imoex_ret, index_block
 
 
 @app.cell(hide_code=True)
-def _(combined_df, mo, pd):
+def _(combined_df, mo, np, pl):
     # Ширина рынка: 52-недельные экстремумы + доля бумаг выше MA50/MA200.
     # Классика: >50% бумаг выше MA200 — здоровый рынок, дивергенция с индексом — ранний сигнал.
-    _last_date = combined_df.index.max()
-    _ydf = combined_df[combined_df.index >= _last_date - pd.DateOffset(years=1)]
-    _g = _ydf.groupby('ticker')['close']
-    _hi = _g.max()
-    _lo = _g.min()
-    _lastp = _ydf.sort_index().groupby('ticker')['close'].last()
+    _last_date = combined_df['date'].max()
+    _ydf = combined_df.filter(
+        pl.col('date') >= pl.select(pl.lit(_last_date).dt.offset_by('-1y')).item())
+    _ext = _ydf.sort('ticker', 'date').group_by('ticker', maintain_order=True).agg(
+        _hi=pl.col('close').max(),
+        _lo=pl.col('close').min(),
+        _lastp=pl.col('close').drop_nulls().last(),
+    )
 
-    _near_hi = sorted(_lastp[_lastp >= _hi * 0.98].index)
-    _near_lo = sorted(_lastp[_lastp <= _lo * 1.02].index)
+    _near_hi = sorted(_ext.filter(pl.col('_lastp') >= pl.col('_hi') * 0.98)['ticker'].to_list())
+    _near_lo = sorted(_ext.filter(pl.col('_lastp') <= pl.col('_lo') * 1.02)['ticker'].to_list())
 
     def _fmt_tickers(_lst, _limit=12):
         if not _lst:
@@ -686,20 +713,24 @@ def _(combined_df, mo, pd):
         return _s + (f" и еще {len(_lst) - _limit}" if len(_lst) > _limit else "")
 
     # Доля бумаг выше скользящих средних (по всей истории, показываем последний год)
-    _wide = combined_df.pivot_table(index=combined_df.index, columns='ticker',
-                                    values='close', aggfunc='last').sort_index()
-    _ma50 = _wide.rolling(50, min_periods=50).mean()
-    _ma200 = _wide.rolling(200, min_periods=200).mean()
+    _wide = combined_df.pivot(on='ticker', index='date', values='close',
+                              aggregate_function='last', sort_columns=True).sort('date')
+    _tk = [_c for _c in _wide.columns if _c != 'date']
+    _prices = _wide.select(_tk).to_numpy().astype(float)
+    _ma50 = _wide.select(pl.col(_tk).rolling_mean(50, min_samples=50)).to_numpy().astype(float)
+    _ma200 = _wide.select(pl.col(_tk).rolling_mean(200, min_samples=200)).to_numpy().astype(float)
 
-    def _pct_above(_prices, _ma):
-        _valid = _ma.notna() & _prices.notna()
+    def _pct_above(_p, _ma):
+        _valid = ~np.isnan(_ma) & ~np.isnan(_p)
         _cnt = _valid.sum(axis=1)
-        return ((_prices > _ma) & _valid).sum(axis=1) / _cnt.replace(0, pd.NA) * 100
+        with np.errstate(invalid='ignore', divide='ignore'):
+            _above = ((_p > _ma) & _valid).sum(axis=1) / np.where(_cnt > 0, _cnt, np.nan) * 100
+        return _above[~np.isnan(_above)]
 
-    _above50_series = _pct_above(_wide, _ma50).dropna()
-    _above200_series = _pct_above(_wide, _ma200).dropna()
-    _above50 = float(_above50_series.iloc[-1]) if len(_above50_series) else float('nan')
-    _above200 = float(_above200_series.iloc[-1]) if len(_above200_series) else float('nan')
+    _above50_series = _pct_above(_prices, _ma50)
+    _above200_series = _pct_above(_prices, _ma200)
+    _above50 = float(_above50_series[-1]) if len(_above50_series) else float('nan')
+    _above200 = float(_above200_series[-1]) if len(_above200_series) else float('nan')
 
     breadth_block = mo.md(
         f"**Ширина рынка:** выше MA50: **{_above50:.0f}%** | выше MA200: **{_above200:.0f}%** | "
@@ -710,36 +741,37 @@ def _(combined_df, mo, pd):
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, go, mo, pd, period_label, plotly_available, sectors_map):
+def _(filtered_df, go, mo, period_label, pl, plotly_available, sectors_map):
     # Секторный разрез: динамика секторов, взвешенная по капитализации
     if len(filtered_df) == 0 or len(sectors_map) == 0:
         sector_block = mo.md("")
     elif not plotly_available:
         sector_block = mo.md("*Для секторного графика нужен plotly: `pip install plotly`*")
     else:
-        _sdf = filtered_df.merge(sectors_map, on='ticker', how='left')
-        _sdf['sector'] = _sdf['sector'].fillna('Прочее')
+        _sdf = filtered_df.join(sectors_map, on='ticker', how='left', maintain_order='left')
+        _sdf = _sdf.with_columns(pl.col('sector').fill_null('Прочее'))
 
         _rows = []
-        for _sec, _grp in _sdf.groupby('sector'):
-            _gmc = _grp.dropna(subset=['first_market_cap', 'last_market_cap'])
+        for (_sec,), _grp in sorted(_sdf.partition_by('sector', as_dict=True, maintain_order=True).items()):
+            _gmc = _grp.drop_nulls(subset=['first_market_cap', 'last_market_cap'])
             if len(_gmc) > 0 and _gmc['first_market_cap'].sum() > 0:
                 _ret = (_gmc['last_market_cap'].sum() / _gmc['first_market_cap'].sum() - 1) * 100
             else:
                 _ret = float(_grp['price_performance'].median())
             _rows.append({'sector': f"{_sec} ({len(_grp)})", 'ret': _ret,
-                          'tickers': ", ".join(sorted(_grp['ticker'])[:15])})
-        _sec_df = pd.DataFrame(_rows).sort_values('ret')
+                          'tickers': ", ".join(sorted(_grp['ticker'].to_list())[:15])})
+        _sec_df = pl.DataFrame(_rows).sort('ret', maintain_order=True)
 
+        _ret_s = _sec_df['ret'].to_list()
         _figs = go.Figure(go.Bar(
-            x=_sec_df['ret'],
-            y=_sec_df['sector'],
+            x=_ret_s,
+            y=_sec_df['sector'].to_list(),
             orientation='h',
-            marker_color=['green' if _x >= 0 else 'red' for _x in _sec_df['ret']],
-            text=[f'{_v:+.1f}%' for _v in _sec_df['ret']],
+            marker_color=['green' if _x >= 0 else 'red' for _x in _ret_s],
+            text=[f'{_v:+.1f}%' for _v in _ret_s],
             textposition='outside',
             customdata=[
-                (_tk, f'{_v:+.2f}%') for _tk, _v in zip(_sec_df['tickers'], _sec_df['ret'])
+                (_tk, f'{_v:+.2f}%') for _tk, _v in zip(_sec_df['tickers'].to_list(), _ret_s)
             ],
             hovertemplate='<b>%{y}</b>: %{customdata[1]}<br>%{customdata[0]}<extra></extra>',
         ))
@@ -754,25 +786,28 @@ def _(filtered_df, go, mo, pd, period_label, plotly_available, sectors_map):
 
 
 @app.cell(hide_code=True)
-def _(filtered_df, mo, np, period_label, plotly_available, px, sectors_map):
+def _(filtered_df, mo, np, period_label, pl, plotly_available, px, sectors_map):
     # Карта рынка (finviz-style treemap): сектора → бумаги,
     # площадь = капитализация, цвет = изменение цены. Hover — точные цифры.
-    _hm = filtered_df.dropna(subset=['price_performance', 'last_market_cap']).copy()
+    _hm = filtered_df.drop_nulls(subset=['price_performance', 'last_market_cap'])
     if len(_hm) == 0:
         heatmap_block = mo.md("")
     elif not plotly_available:
         heatmap_block = mo.md("*Для карты рынка нужен plotly: `pip install plotly`*")
     else:
-        _hm = _hm.merge(sectors_map, on='ticker', how='left')
-        _hm['sector'] = _hm['sector'].fillna('Прочее')
+        _hm = _hm.join(sectors_map, on='ticker', how='left', maintain_order='left')
+        _hm = _hm.with_columns(pl.col('sector').fill_null('Прочее'))
         # Форматируем подписи заранее: форматы в шаблонах plotly с флагом "+"
         # применяются ненадежно, и на плитки попадают числа с 13 знаками
-        _hm['perf_str'] = _hm['price_performance'].map(lambda _v: f'{_v:+.1f}%')
-        _hm['mc_str'] = (_hm['last_market_cap'] / 1e9).map(
-            lambda _v: f'{_v:,.0f}'.replace(',', ' '))
+        _hm = _hm.with_columns(
+            perf_str=pl.Series([f'{_v:+.1f}%' for _v in _hm['price_performance'].to_list()],
+                               dtype=pl.String),
+            mc_str=pl.Series([f'{_v:,.0f}'.replace(',', ' ')
+                              for _v in (_hm['last_market_cap'] / 1e9).to_list()], dtype=pl.String),
+        )
 
         # Шкала цвета по 95-му перцентилю, чтобы один выброс не обесцвечивал карту
-        _vmax = max(float(np.percentile(np.abs(_hm['price_performance']), 95)), 1e-9)
+        _vmax = max(float(np.percentile(np.abs(_hm['price_performance'].to_numpy()), 95)), 1e-9)
 
         _figt = px.treemap(
             _hm,
@@ -802,30 +837,34 @@ def _(filtered_df, mo, np, period_label, plotly_available, px, sectors_map):
 
 
 @app.cell(hide_code=True)
-def _(combined_df, enriched_df, filtered_df, mo, pd, period_end, period_start):
+def _(combined_df, enriched_df, filtered_df, mo, pl, period_end, period_start, timedelta):
     # Необычная активность: среднедневной оборот за период против 90 дней до него
-    _per = combined_df[(combined_df.index >= period_start) & (combined_df.index <= period_end)]
-    _base = combined_df[
-        (combined_df.index >= period_start - pd.DateOffset(days=90)) & (combined_df.index < period_start)
-    ]
+    _per = combined_df.filter(pl.col('date').is_between(period_start, period_end))
+    _base = combined_df.filter(
+        (pl.col('date') >= period_start - timedelta(days=90)) & (pl.col('date') < period_start)
+    )
 
-    _va = pd.DataFrame({
-        'per': _per.groupby('ticker')['value_rub'].mean(),
-        'base': _base.groupby('ticker')['value_rub'].mean(),
-    }).dropna()
-    _va = _va[_va['base'] > 1e7]  # отсекаем неликвид: база < 10 млн руб/день
-    _va['ratio'] = _va['per'] / _va['base']
-    _va = _va.sort_values('ratio', ascending=False).head(10)
+    _va = (
+        _per.group_by('ticker').agg(per=pl.col('value_rub').mean())
+        .join(_base.group_by('ticker').agg(base=pl.col('value_rub').mean()), on='ticker', how='inner')
+        .sort('ticker')
+        .drop_nulls()
+    )
+    _va = _va.filter(pl.col('base') > 1e7)  # отсекаем неликвид: база < 10 млн руб/день
+    _va = _va.with_columns(ratio=pl.col('per') / pl.col('base'))
+    _va = _va.sort('ratio', descending=True, maintain_order=True).head(10)
 
     _parts = []
     if len(_va) > 0:
         _perf_map = (
-            filtered_df.set_index('ticker')['price_performance'] if len(filtered_df) else pd.Series(dtype=float)
+            dict(zip(filtered_df['ticker'].to_list(), filtered_df['price_performance'].to_list()))
+            if len(filtered_df) else {}
         )
         _lines = []
-        for _tv, _rv in _va.iterrows():
+        for _rv in _va.iter_rows(named=True):
+            _tv = _rv['ticker']
             _pperf = _perf_map.get(_tv)
-            _pstr = f"{_pperf:+.1f}%" if pd.notna(_pperf) else "—"
+            _pstr = f"{_pperf:+.1f}%" if _pperf is not None else "—"
             _lines.append(
                 f"| {_tv} | {_rv['per'] / 1e6:,.0f} | {_rv['base'] / 1e6:,.0f} | ×{_rv['ratio']:.1f} | {_pstr} |".replace(",", " ")
             )
@@ -838,14 +877,14 @@ def _(combined_df, enriched_df, filtered_df, mo, pd, period_end, period_start):
 
     # Необычные движения цены: ход за период в единицах годовой волатильности бумаги.
     # |σ| ≥ 2 — статистически редкое движение, даже если процент скромный
-    _sm = enriched_df.dropna(subset=['sigma_move']) if len(enriched_df) else enriched_df
+    _sm = enriched_df.drop_nulls(subset=['sigma_move']) if len(enriched_df) else enriched_df
     if len(_sm) > 0:
-        _sm = _sm[_sm['sigma_move'].abs() >= 2]
-        _sm = _sm.sort_values('sigma_move', key=lambda s: s.abs(), ascending=False).head(10)
+        _sm = _sm.filter(pl.col('sigma_move').abs() >= 2)
+        _sm = _sm.sort(pl.col('sigma_move').abs(), descending=True, maintain_order=True).head(10)
         if len(_sm) > 0:
             _lines2 = [
-                f"| {_r.ticker} | {_r.price_performance:+.1f}% | {_r.sigma_move:+.1f}σ | {_r.vol_1y:.0f}% |"
-                for _r in _sm.itertuples()
+                f"| {_r['ticker']} | {_r['price_performance']:+.1f}% | {_r['sigma_move']:+.1f}σ | {_r['vol_1y']:.0f}% |"
+                for _r in _sm.iter_rows(named=True)
             ]
             _parts.append(mo.md(
                 "### Необычные движения цены (|σ| ≥ 2)\n\n"
@@ -872,37 +911,36 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, return_mode, sectors_map):
+def _(anchor_date, combined_df, go, mo, pl, plotly_available, return_mode, sectors_map, stocks, timedelta):
     # Структура рынка: что изменилось с опорной даты.
     # Отвечает на вопросы: индекс на том же уровне — а рынок тот же?
     # Кто вытащил/утопил капитализацию, как перекроились веса секторов,
     # выросла ли концентрация.
-    _anchor = pd.Timestamp(anchor_date.value)
-    _last_date = combined_df.index.max()
+    _anchor = anchor_date.value
+    _last_date = combined_df['date'].max()
 
     # Метрика: цена (сплит-скорр. close) или полная доходность (adj_close)
     _pc = return_mode.value if return_mode.value in combined_df.columns else 'close'
     _mode_label = 'полная доходность (дивиденды + сплиты)' if _pc == 'adj_close' else 'цена'
 
     # Срез "тогда": последняя котировка каждой бумаги в окне 45 дней до опорной даты
-    _win_then = combined_df[(combined_df.index <= _anchor) &
-                            (combined_df.index >= _anchor - pd.DateOffset(days=45))]
-    _then = _win_then.sort_index().groupby('ticker').tail(1)
-    _then = _then.reset_index()[['ticker', _pc, 'market_cap']].rename(
-        columns={_pc: 'close_then', 'market_cap': 'mc_then'})
+    _win_then = combined_df.filter((pl.col('date') <= _anchor) &
+                                   (pl.col('date') >= _anchor - timedelta(days=45)))
+    _then = (_win_then.sort('date', 'ticker').group_by('ticker', maintain_order=True).last()
+             .select('ticker', close_then=pl.col(_pc), mc_then=pl.col('market_cap')))
 
     # Срез "сейчас": только бумаги, торговавшиеся в последние 30 дней (без делистингов)
-    _now = combined_df.sort_index().groupby('ticker').tail(1)
-    _now = _now[_now.index >= _last_date - pd.DateOffset(days=30)]
-    _now = _now.reset_index()[['ticker', _pc, 'market_cap']].rename(
-        columns={_pc: 'close_now', 'market_cap': 'mc_now'})
+    _now = combined_df.sort('date', 'ticker').group_by('ticker', maintain_order=True).last()
+    _now = _now.filter(pl.col('date') >= _last_date - timedelta(days=30))
+    _now = _now.select('ticker', close_now=pl.col(_pc), mc_now=pl.col('market_cap'))
 
-    _st = _then.merge(_now, on='ticker', how='inner').dropna(subset=['close_then', 'close_now'])
+    _st = (_then.join(_now, on='ticker', how='inner', maintain_order='left')
+           .drop_nulls(subset=['close_then', 'close_now']))
 
     if len(_st) < 5:
         structure_block = mo.md("*Недостаточно данных на выбранную опорную дату*")
     else:
-        _st['px_chg'] = (_st['close_now'] / _st['close_then'] - 1) * 100
+        _st = _st.with_columns(px_chg=(pl.col('close_now') / pl.col('close_then') - 1) * 100)
 
         def _sgn(_v, _suffix='%', _nd=1):
             """Число со знаком, раскрашенное классами pos/neg из styles.css"""
@@ -913,12 +951,11 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, return_mode,
         # --- IMOEX тогда и сейчас
         _imx_line2 = ""
         try:
-            _idx = moex.read_moex_index('IMOEX')
-            _idx.index = pd.to_datetime(_idx.index)
-            _idx_then = _idx[_idx.index <= _anchor]
+            _idx = stocks.read_index('IMOEX').sort('date')
+            _idx_then = _idx.filter(pl.col('date') <= _anchor)
             if len(_idx_then):
-                _iv_then = float(_idx_then['close'].iloc[-1])
-                _iv_now = float(_idx['close'].iloc[-1])
+                _iv_then = float(_idx_then['close'][-1])
+                _iv_now = float(_idx['close'][-1])
                 _imx_note = " *(ценовой индекс, без дивидендов)*" if _pc == 'adj_close' else ""
                 _imx_line2 = (f"- **IMOEX:** {_iv_then:,.0f} → {_iv_now:,.0f} ".replace(",", " ")
                               + f"({_sgn((_iv_now / _iv_then - 1) * 100)}){_imx_note}\n")
@@ -931,26 +968,30 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, return_mode,
         _med_chg = float(_st['px_chg'].median())
 
         # --- капитализация и концентрация (по бумагам с mc в обеих точках)
-        _mc = _st.dropna(subset=['mc_then', 'mc_now'])
+        _mc = _st.drop_nulls(subset=['mc_then', 'mc_now'])
         _conc_line = ""
         _total_line = ""
         if len(_mc) >= 5 and _mc['mc_then'].sum() > 0:
             _tot_then = _mc['mc_then'].sum()
             _tot_now = _mc['mc_now'].sum()
-            _top5_then = _mc.nlargest(5, 'mc_then')['mc_then'].sum() / _tot_then * 100
-            _top5_now = _mc.nlargest(5, 'mc_now')['mc_now'].sum() / _tot_now * 100
-            _t5_then_names = ", ".join(_mc.nlargest(5, 'mc_then')['ticker'])
-            _t5_now_names = ", ".join(_mc.nlargest(5, 'mc_now')['ticker'])
+            _big_then = _mc.sort('mc_then', descending=True, maintain_order=True).head(5)
+            _big_now = _mc.sort('mc_now', descending=True, maintain_order=True).head(5)
+            _top5_then = _big_then['mc_then'].sum() / _tot_then * 100
+            _top5_now = _big_now['mc_now'].sum() / _tot_now * 100
+            _t5_then_names = ", ".join(_big_then['ticker'].to_list())
+            _t5_now_names = ", ".join(_big_now['ticker'].to_list())
             _total_line = (f"- **Капитализация (сопоставимые бумаги):** "
                            f"{_tot_then / 1e12:.1f} → {_tot_now / 1e12:.1f} трлн руб "
                            f"({_sgn((_tot_now / _tot_then - 1) * 100)})\n")
             _conc_line = (f"- **Концентрация (доля топ-5):** {_top5_then:.0f}% → {_top5_now:.0f}%\n"
                           f"  - тогда: {_t5_then_names}\n  - сейчас: {_t5_now_names}\n")
 
-        _tops = _st.nlargest(5, 'px_chg')
-        _bots = _st.nsmallest(5, 'px_chg')
-        _tops_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.px_chg, '%', 0)}" for _r in _tops.itertuples())
-        _bots_str = ", ".join(f"**{_r.ticker}** {_sgn(_r.px_chg, '%', 0)}" for _r in _bots.itertuples())
+        _tops = _st.sort('px_chg', descending=True, maintain_order=True).head(5)
+        _bots = _st.sort('px_chg', maintain_order=True).head(5)
+        _tops_str = ", ".join(f"**{_r['ticker']}** {_sgn(_r['px_chg'], '%', 0)}"
+                              for _r in _tops.iter_rows(named=True))
+        _bots_str = ", ".join(f"**{_r['ticker']}** {_sgn(_r['px_chg'], '%', 0)}"
+                              for _r in _bots.iter_rows(named=True))
 
         _md_struct = mo.md(
             f"### С {_anchor.strftime('%d.%m.%Y')} — {_mode_label} (сопоставимых бумаг: {len(_st)})\n\n"
@@ -964,17 +1005,19 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, return_mode,
 
         if plotly_available and len(_mc) >= 5 and _mc['mc_then'].sum() > 0:
             # --- вклад бумаг в изменение суммарной капитализации (п.п.)
-            _mc = _mc.copy()
-            _mc['contrib'] = (_mc['mc_now'] - _mc['mc_then']) / _mc['mc_then'].sum() * 100
-            _cb = _mc.reindex(_mc['contrib'].abs().nlargest(12).index).sort_values('contrib')
+            _mc = _mc.with_columns(
+                contrib=(pl.col('mc_now') - pl.col('mc_then')) / pl.col('mc_then').sum() * 100)
+            _cb = (_mc.sort(pl.col('contrib').abs(), descending=True, maintain_order=True).head(12)
+                   .sort('contrib', maintain_order=True))
+            _contrib = _cb['contrib'].to_list()
             _figc = go.Figure(go.Bar(
-                x=_cb['contrib'], y=_cb['ticker'], orientation='h',
-                marker_color=['green' if _v >= 0 else 'red' for _v in _cb['contrib']],
-                text=[f'{_v:+.1f} п.п.' for _v in _cb['contrib']],
+                x=_contrib, y=_cb['ticker'].to_list(), orientation='h',
+                marker_color=['green' if _v >= 0 else 'red' for _v in _contrib],
+                text=[f'{_v:+.1f} п.п.' for _v in _contrib],
                 textposition='outside',
                 customdata=[
                     (f'{_c:+.2f}', f'{_p:+.1f}%')
-                    for _c, _p in zip(_cb['contrib'], _cb['px_chg'])
+                    for _c, _p in zip(_contrib, _cb['px_chg'].to_list())
                 ],
                 hovertemplate='<b>%{y}</b>: %{customdata[0]} п.п. к капитализации рынка'
                               '<br>Цена: %{customdata[1]}<extra></extra>',
@@ -989,15 +1032,18 @@ def _(anchor_date, combined_df, go, mo, moex, pd, plotly_available, return_mode,
 
             # --- веса секторов: тогда vs сейчас
             if len(sectors_map):
-                _ms = _mc.merge(sectors_map, on='ticker', how='left')
-                _ms['sector'] = _ms['sector'].fillna('Прочее')
-                _w = _ms.groupby('sector').agg(mc_then=('mc_then', 'sum'), mc_now=('mc_now', 'sum'))
-                _w = (_w / _w.sum() * 100).sort_values('mc_now')
+                _ms = _mc.join(sectors_map, on='ticker', how='left', maintain_order='left')
+                _ms = _ms.with_columns(pl.col('sector').fill_null('Прочее'))
+                _w = (_ms.group_by('sector').agg(pl.col('mc_then').sum(), pl.col('mc_now').sum())
+                      .sort('sector'))
+                _w = (_w.with_columns(pl.col('mc_then', 'mc_now') / pl.col('mc_then', 'mc_now').sum() * 100)
+                      .sort('mc_now', maintain_order=True))
+                _sectors_w = _w['sector'].to_list()
                 _figw = go.Figure()
-                _figw.add_bar(x=_w['mc_then'], y=_w.index, orientation='h', name='Тогда',
+                _figw.add_bar(x=_w['mc_then'].to_list(), y=_sectors_w, orientation='h', name='Тогда',
                               marker_color='#9ecae1',
                               hovertemplate='%{y}: %{x:.1f}%<extra>тогда</extra>')
-                _figw.add_bar(x=_w['mc_now'], y=_w.index, orientation='h', name='Сейчас',
+                _figw.add_bar(x=_w['mc_now'].to_list(), y=_sectors_w, orientation='h', name='Сейчас',
                               marker_color='#1f77b4',
                               hovertemplate='%{y}: %{x:.1f}%<extra>сейчас</extra>')
                 _figw.update_layout(

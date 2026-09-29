@@ -35,7 +35,7 @@
 3. ~~**Акции и индексы**~~ — сделано: `stocks.py` (загрузка из ISS без apimoex, сплиты, переименования, снятые с торгов, `adj_close`, капитализация, ставки — на polars), запись в `lake.stocks`/`lake.indexes` только изменившихся строк. Сверка: пересчет по 311 тыс. строк совпал с pandas-версией без расхождений, загрузка из ISS — построчно с хранимыми данными. Попутно исправлен порядок «склейка переименований → сплиты» при чтении.
 4. ~~**Проверка качества данных**~~ — сделано: `quality.py`, на реальных данных отчет совпал с прежним построчно.
    Документация: [модель данных](docs/data-model.md) и генерируемый [справочник всех колонок ISS](docs/iss-columns.md) по рынкам.
-5. **Ноутбуки на polars** (stocks-performance, ticker-analysis, portfolio-analysis, momentum-strategy, arima-analysis), затем удаление pandas-оберток `moex_utils`, pandas из зависимостей и замороженных Parquet-файлов `data/`, `indexes/` (и старых `bonds/`, `futures/`) в `F:\moex-data`. Судьба старых Jupyter-ноутбуков `nb/` (используют удаленные pandas-функции) — решить отдельно.
+5. ~~**Ноутбуки на polars**~~ — сделано: все шесть marimo-ноутбуков на polars, результаты сверены с pandas-версиями (бэктест momentum — до 1e-12, расхождения от накопления ошибки в rolling std pandas); pandas-обертки `moex_utils` и pandas из зависимостей удалены; Jupyter-ноутбуки `nb/` и старые скрипты перенесены в архив `legacy/`. Попутно: `adj_close` старых имен в цепочках переименований (TCSG→T, YNDX→YDEX, HHRU→HEAD, EONR→UPRO, MRKH→RSTI) пересчитан в базе итогового тикера — стыки непрерывны. Осталось удалить вручную прежние Parquet-папки `data/`, `indexes/`, `bonds/`, `futures/` в `F:\moex-data`.
 
 Затем — пункты «все акции рынка», «объем выпуска из ISS», «валютный и денежный рынок» (история рынков `shares`, `index`, `currency`, RUONIA) на новой основе.
 
@@ -68,7 +68,7 @@
 1. **Разбить `moex_utils.py` (~2700 строк) на пакет** `moexutils/`: `http`, `store`, `stocks`, `indexes`, `corporate_actions`, `bonds`, `futures`, `rates`, `quality`. `moex_utils.py` остается фасадом с реэкспортом — ноутбуки и тесты не меняются. Отдельным коммитом без изменения поведения.
 2. **`pyproject.toml`** вместо двух requirements, линтер `ruff` в CI; обновить actions в CI (`checkout@v5`, `setup-python@v6` — Node.js 20 устарел).
 3. **Дымовой прогон ноутбуков** — `scripts/smoke_notebooks.py` (`marimo export` каждого ноутбука; ненулевой код = упавшая ячейка).
-4. Предупреждения pandas (`FutureWarning` при concat) и openpyxl в тестах — убрать до перехода на pandas 3.
+4. Предупреждения openpyxl в тестах — убрать.
 
 ## Не делаем
 Redis, REST API, отдельный веб-дашборд — marimo-ноутбуки закрывают потребность. ML-модели и международные данные — отдельные проекты.

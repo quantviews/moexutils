@@ -11,7 +11,7 @@ moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
 ├── update_data.bat          # запуск на Windows (выбор интерпретатора)
 ├── scheduled_update.cmd     # обертка для планировщика задач (лог в logs/)
 ├── marimo/                  # marimo-ноутбуки (аналитика и преподавание)
-├── nb/                      # Jupyter-ноутбуки (исследования, примеры)
+├── legacy/                  # архив: Jupyter-ноутбуки и скрипты на pandas (не запускаются)
 ├── scripts/                 # аналитические скрипты
 ├── tests/                   # офлайн pytest-тесты
 ├── docs/                    # документация
@@ -29,11 +29,7 @@ moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
 moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не в git, не в облаке)
 ├── lake/                    # файлы данных хранилища DuckLake (каталог — PostgreSQL moex_lake)
 │   └── main/<таблица>/...   # stocks, indexes, bonds, bonds_securities, futures, empty_dates
-├── data/                    # прежние Parquet-файлы акций — заморожены (ноутбуки перебирают по ним тикеры)
-│   ├── SBER/SBER.parquet
-│   └── ...
-├── indexes/                 # прежний кэш индексов — заморожен
-├── bonds/, futures/         # прежнее файловое хранение — заменено хранилищем, не обновляется
+├── data/, indexes/, bonds/, futures/  # прежние Parquet-файлы — не используются, подлежат удалению
 dividends/                   # соседний проект: F:\Yandex.Disk\FINANCE\dividends
 ├── data/<TICKER>.csv        # приведены к текущей акции — их читает moexutils
 ├── data/raw/<TICKER>.csv    # сырые значения с сайта

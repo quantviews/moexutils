@@ -1,13 +1,12 @@
 """
-Тесты фасада moex_utils: математика облигаций, HTTP-сессия, корень данных и
-pandas-обертки для ноутбуков (read_moex_stock, combine_moex_stocks, ...).
+Тесты фасада moex_utils: математика облигаций, HTTP-сессия, корень данных,
+реэкспорт функций stocks, отсутствие pandas.
 Логика акций, индексов и качества — в test_stocks.py / test_quality.py,
 облигаций и фьючерсов — в test_history.py, хранилища — в test_lake.py.
 """
 import datetime as dt
 import os
 
-import pandas as pd
 import polars as pl
 import pytest
 
@@ -102,7 +101,6 @@ class TestDataRoot:
         try:
             m = importlib.reload(mu)
             assert m.DATA_ROOT == str(tmp_path)
-            assert m.DATA_FOLDER == os.path.join(str(tmp_path), 'data')
             assert importlib.reload(lake).LAKE_DATA_PATH == os.path.join(str(tmp_path), 'lake')
             assert m.SPLITS_FILE.startswith(m.BASE_DIR)                 # реестры остаются в проекте
         finally:
@@ -111,45 +109,16 @@ class TestDataRoot:
             importlib.reload(mu)
 
 
-class TestPandasWrappers:
-    @pytest.fixture
-    def env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv('MOEX_LAKE_CATALOG', 'ducklake:' + str(tmp_path / 'c.ducklake').replace(chr(92), '/'))
-        monkeypatch.setattr(lake, 'LAKE_DATA_PATH', str(tmp_path / 'lake'))
-        for name in ('SPLITS_FILE', 'EXTERNAL_SPLITS_FILE', 'RENAMES_FILE', 'DELISTED_FILE'):
-            monkeypatch.setattr(stocks, name, str(tmp_path / f'{name}.csv'))
-        (tmp_path / 'RENAMES_FILE.csv').write_text('old,new,date\nOLD,NEW,2025-01-03\n', encoding='utf-8')
-        (tmp_path / 'SPLITS_FILE.csv').write_text('ticker,date,ratio,kind\nNEW,2025-01-03,10,price\n',
-                                                  encoding='utf-8')
-        days = [dt.date(2025, 1, 2), dt.date(2025, 1, 3)]
-        rows = pl.DataFrame({'date': days, 'ticker': ['OLD', 'NEW'], 'open': [1000.0, 100.0],
-                             'low': [1000.0, 100.0], 'high': [1000.0, 100.0], 'close': [1000.0, 100.0],
-                             'waprice': [1000.0, 100.0], 'volume': [1.0, 10.0], 'value_rub': [1e3, 1e3],
-                             'adj_close': [100.0, 100.0], 'shares': [None, None], 'market_cap': [None, None]},
-                            schema_overrides={'shares': pl.Float64, 'market_cap': pl.Float64})
-        lake.write('stocks', rows)
-        lake.write('indexes', pl.DataFrame({'date': days, 'ticker': ['IMOEX'] * 2, 'BOARDID': ['SNDX'] * 2,
-                                            'close': [2800.0, 2810.0], 'value_rub': [1.0, 1.0], 'volume': [1.0, 1.0]}))
-        return tmp_path
+class TestFacade:
+    def test_reexports_polars_functions(self):
+        for name in ('read_stocks', 'read_index', 'adjust_for_splits', 'load_renames',
+                     'apply_renames', 'load_key_rate', 'risk_free_monthly'):
+            assert getattr(mu, name) is getattr(stocks, name)
 
-    def test_combine_and_splits_like_notebooks(self, env):
-        df = mu.combine_moex_stocks()
-        assert isinstance(df, pd.DataFrame) and isinstance(df.index, pd.DatetimeIndex)
-        assert set(df['ticker']) == {'NEW'} and set(df['source_ticker']) == {'OLD', 'NEW'}
-        adj = mu.adjust_for_splits(df)
-        assert adj['close'].tolist() == pytest.approx([100.0, 100.0])
-        raw = mu.combine_moex_stocks(merge_renames=False)
-        assert set(raw['ticker']) == {'OLD', 'NEW'}
-        assert set(mu.apply_renames(raw)['ticker']) == {'NEW'}
-
-    def test_read_stock_and_index(self, env):
-        s = mu.read_moex_stock('new')
-        assert s.index.name == 'date' and s['close'].tolist() == [100.0]
-        i = mu.read_moex_index('IMOEX')
-        assert i['close'].tolist() == [2800.0, 2810.0] and str(i.index.dtype) == 'datetime64[ns]'
-
-    def test_risk_free_monthly_series(self, tmp_path):
-        path = tmp_path / 'kr.csv'
-        path.write_text('date,rate\n2025-02-15,12.0\n', encoding='utf-8')
-        rf = mu.risk_free_monthly(pd.to_datetime(['2025-01-31', '2025-03-31']), str(path))
-        assert isinstance(rf, pd.Series) and rf.tolist() == pytest.approx([0.01, 0.01])
+    def test_no_pandas_in_project_modules(self):
+        import subprocess, sys
+        code = ('import sys, moex_utils, update_data; '
+                'print("pandas" in sys.modules)')
+        out = subprocess.run([sys.executable, '-c', code], cwd=mu.BASE_DIR,
+                             capture_output=True, text=True, check=True).stdout
+        assert out.strip() == 'False'

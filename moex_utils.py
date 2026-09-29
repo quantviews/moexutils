@@ -9,12 +9,7 @@ moexutils — данные Московской биржи: акции, инде
 - lake.py     — хранилище DuckLake (каталог PostgreSQL, результаты — polars);
 - iss.py      — доступ к MOEX ISS.
 
-Функции облигаций, фьючерсов, обновления и проверки возвращают polars.
-Функции чтения акций и индексов (read_moex_stock, combine_moex_stocks,
-read_moex_index, adjust_for_splits, apply_renames, load_renames,
-risk_free_monthly) пока возвращают pandas — их используют marimo-ноутбуки;
-после перевода ноутбуков на polars обертки будут удалены. Новый код —
-через stocks.read_stocks / stocks.read_index (polars).
+Все функции возвращают polars DataFrame; pandas в проекте не используется.
 """
 from __future__ import annotations
 
@@ -23,7 +18,6 @@ import os
 import sys
 from typing import Optional
 
-import pandas as pd
 import polars as pl
 import requests
 
@@ -32,14 +26,10 @@ import iss
 import quality
 import stocks
 
-# Пути привязаны к папке модуля, чтобы импорт из nb/ и scripts/ работал при любом cwd
+# Пути привязаны к папке модуля, чтобы импорт из marimo/ и scripts/ работал при любом cwd
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Корень рыночных данных; реестры metadata/ остаются в проекте и в git
 DATA_ROOT = os.environ.get("MOEX_DATA_ROOT") or BASE_DIR
-# Прежние папки Parquet-файлов акций и индексов: заморожены на момент перехода
-# на хранилище (ноутбуки перебирают по ним тикеры); данные — в lake.stocks/indexes
-DATA_FOLDER = os.path.join(DATA_ROOT, "data")
-INDEXES_FOLDER = os.path.join(DATA_ROOT, "indexes")
 METADATA_FILE = stocks.METADATA_FILE
 SPLITS_FILE = stocks.SPLITS_FILE
 RENAMES_FILE = stocks.RENAMES_FILE
@@ -72,84 +62,13 @@ update_key_rate = stocks.update_key_rate
 load_delisted = stocks.load_delisted
 load_splits = stocks.load_splits
 list_tickers = stocks.list_tickers
-
-
-# ---------------------------------------------------------------- pandas-обертки для ноутбуков
-#
-# Временные: marimo-ноутбуки пока работают с pandas. Данные читаются из
-# хранилища (polars) и отдаются в прежнем виде — индекс date (DatetimeIndex).
-
-def _to_pandas(df: pl.DataFrame) -> pd.DataFrame:
-    pdf = df.to_pandas()
-    if 'date' in pdf.columns:
-        pdf['date'] = pd.to_datetime(pdf['date']).astype('datetime64[ns]')
-        pdf = pdf.set_index('date')
-    return pdf
-
-
-def _from_pandas(df: pd.DataFrame) -> pl.DataFrame:
-    frame = df.reset_index() if df.index.name == 'date' else df.copy()
-    out = pl.from_pandas(frame)
-    return out.with_columns(pl.col('date').cast(pl.Date)) if 'date' in out.columns else out
-
-
-def read_moex_stock(ticker: str, start=None, end=None, session=None) -> pd.DataFrame:
-    """Дневные данные тикера (pandas, индекс date); нет в хранилище — загружается с MOEX."""
-    ticker = ticker.upper()
-    df = stocks.read_stocks(ticker, start=start, end=end, merge_renames=False)
-    if df.is_empty():
-        stocks.add_stock(ticker, session=session)
-        df = stocks.read_stocks(ticker, start=start, end=end, merge_renames=False)
-    return _to_pandas(df)
-
-
-def combine_moex_stocks(data_folder: Optional[str] = None, merge_renames: bool = True) -> pd.DataFrame:
-    """Все акции одним DataFrame (pandas, индекс date); merge_renames — склейка переименований."""
-    return _to_pandas(stocks.read_stocks(merge_renames=merge_renames))
-
-
-def adjust_for_splits(df: pd.DataFrame, splits_file: Optional[str] = None) -> pd.DataFrame:
-    """Цены в пост-сплитовой базе (pandas-обертка над stocks.adjust_for_splits)."""
-    if df.empty or 'ticker' not in df.columns:
-        return df
-    out = stocks.adjust_for_splits(_from_pandas(df), stocks.load_splits(splits_file))
-    return _to_pandas(out)
-
-
-def load_renames(renames_file: Optional[str] = None) -> pd.DataFrame:
-    """Реестр переименований (pandas)."""
-    out = stocks.load_renames(renames_file).to_pandas()
-    out['date'] = pd.to_datetime(out['date'])
-    return out
-
-
-def apply_renames(df: pd.DataFrame, renames_file: Optional[str] = None) -> pd.DataFrame:
-    """Склейка историй переименованных тикеров (pandas-обертка над stocks.apply_renames)."""
-    if df.empty or 'ticker' not in df.columns:
-        return df
-    return _to_pandas(stocks.apply_renames(_from_pandas(df), stocks.load_renames(renames_file)))
-
-
-def read_moex_index(ticker: str = 'IMOEX') -> pd.DataFrame:
-    """История индекса (pandas, индекс date): close, value_rub (оборот), volume."""
-    df = stocks.read_index(ticker)
-    if df.is_empty():
-        raise FileNotFoundError(f"Индекса {ticker} нет в хранилище: stocks.update_indexes(['{ticker}'])")
-    return _to_pandas(df)
-
-
-def load_key_rate(key_rate_file: Optional[str] = None) -> pd.DataFrame:
-    """История ключевой ставки ЦБ (pandas)."""
-    out = stocks.load_key_rate(key_rate_file).to_pandas()
-    out['date'] = pd.to_datetime(out['date'])
-    return out
-
-
-def risk_free_monthly(dates, key_rate_file: Optional[str] = None) -> pd.Series:
-    """Месячная безрисковая ставка (в долях) на даты — pandas Series с индексом дат."""
-    idx = pd.DatetimeIndex(dates)
-    rf = stocks.risk_free_monthly(idx.date, key_rate_file)
-    return pd.Series(rf['rf'].to_numpy(), index=idx)
+read_stocks = stocks.read_stocks
+read_index = stocks.read_index
+adjust_for_splits = stocks.adjust_for_splits
+load_renames = stocks.load_renames
+apply_renames = stocks.apply_renames
+load_key_rate = stocks.load_key_rate
+risk_free_monthly = stocks.risk_free_monthly
 
 
 # ---------------------------------------------------------------- проверка качества

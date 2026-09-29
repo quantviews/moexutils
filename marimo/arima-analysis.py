@@ -8,7 +8,7 @@ marimo notebook: ARIMA-анализ тикера MOEX
 4. Ноутбук: загрузка данных → выбор порядка ARIMA → диагностика → walk-forward прогноз
 
 Функционал:
-- Загрузка данных по тикеру из локальных parquet (moex_utils)
+- Загрузка данных по тикеру из хранилища (stocks, polars)
 - ACF/PACF коррелограммы для идентификации порядка
 - Grid-search по (p,d,q) с AIC/BIC
 - Диагностика остатков (Ljung-Box, ARCH-тест, ACF/PACF residuals)
@@ -23,16 +23,15 @@ app = marimo.App(width="medium", css_file="styles.css")
 
 @app.cell(hide_code=True)
 def _():
-    import pandas as pd
+    import polars as pl
     import numpy as np
     import matplotlib.pyplot as plt
-    import os
     import sys
     import math
     import warnings
     import itertools
     from pathlib import Path
-    from datetime import datetime
+    from datetime import datetime, timedelta
 
     import marimo as mo
 
@@ -61,12 +60,12 @@ def _():
         mean_squared_error,
         mo,
         np,
-        os,
-        pd,
+        pl,
         plot_acf,
         plot_pacf,
         plt,
         sys,
+        timedelta,
     )
 
 
@@ -89,25 +88,18 @@ def _(mo):
 
 @app.cell
 def _(Path, sys):
-    # moex_utils лежит в корне проекта (родительская папка от marimo/)
+    # stocks.py лежит в корне проекта (родительская папка от marimo/)
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    import moex_utils as moex  # pyright: ignore[reportMissingImports]
-    return (moex,)
+    import stocks  # pyright: ignore[reportMissingImports]
+    return (stocks,)
 
 
 @app.cell(hide_code=True)
-def _(mo, moex, os):
-    # Тикеры из data/ проекта, без старых имен переименованных бумаг (TCSG, YNDX...)
-    _ren = moex.load_renames()
-    _olds = set(_ren['old']) if len(_ren) else set()
-    if os.path.isdir(moex.DATA_FOLDER):
-        _available = sorted(
-            _d for _d in os.listdir(moex.DATA_FOLDER)
-            if os.path.isdir(os.path.join(moex.DATA_FOLDER, _d))
-            and os.path.exists(os.path.join(moex.DATA_FOLDER, _d, f"{_d}.parquet"))
-            and _d not in _olds
-        )
-    else:
+def _(mo, stocks):
+    # Тикеры из хранилища, без старых имен переименованных бумаг (TCSG, YNDX...)
+    _olds = set(stocks.load_renames()['old'].to_list())
+    _available = sorted(_d for _d in stocks.list_tickers(include_delisted=True) if _d not in _olds)
+    if not _available:
         _available = ["SBER"]
 
     ticker_dropdown = mo.ui.dropdown(
@@ -127,54 +119,56 @@ def _(mo, moex, os):
 
 
 @app.cell(hide_code=True)
-def _(mo, moex, np, pd, sample_choice, ticker_dropdown):
+def _(mo, pl, sample_choice, stocks, ticker_dropdown):
     # Загрузка: склейка переименований + сплит-коррекция;
     # анализируем ряд полной доходности (adj_close = дивиденды + сплиты)
     _t = ticker_dropdown.value
     try:
-        _frames = [moex.read_moex_stock(_t)]
-        _ren2 = moex.load_renames()
-        if len(_ren2):
-            for _old2 in _ren2.loc[_ren2['new'] == _t, 'old']:
-                try:
-                    _frames.append(moex.read_moex_stock(str(_old2)))
-                except Exception:
-                    pass
-        _raw = pd.concat(_frames)
-        if not isinstance(_raw.index, pd.DatetimeIndex):
-            _raw.index = pd.to_datetime(_raw.index)
-        _raw = moex.apply_renames(_raw)
-        _raw = _raw[_raw['ticker'] == _t]
-        _raw = moex.adjust_for_splits(_raw).sort_index()
-        _raw = _raw[~_raw.index.duplicated(keep='last')]
+        # read_stocks подтягивает историю старых тикеров (TCSG → T), склеивает
+        # ее и приводит цены к пост-сплитовой базе
+        _raw = stocks.read_stocks(_t, split_adjusted=True)
+        _raw = _raw.filter(pl.col("ticker") == _t).sort("date", maintain_order=True)
+        _raw = _raw.unique(subset="date", keep="last", maintain_order=True)
+        if _raw.is_empty():
+            raise ValueError(f"нет данных по тикеру {_t}")
 
         _price_col = "adj_close" if "adj_close" in _raw.columns else "close"
-        close_series = _raw[_price_col].dropna().astype(float)
+        # close_df: date, close — цена полной доходности без пропусков
+        close_df = (
+            _raw.select("date", pl.col(_price_col).cast(pl.Float64).alias("close"))
+            .filter(pl.col("close").is_not_null() & pl.col("close").is_not_nan())
+        )
 
         if sample_choice.value:
-            close_series = close_series[
-                close_series.index >= close_series.index.max()
-                - pd.DateOffset(years=sample_choice.value)]
+            _cutoff = close_df.select(
+                pl.col("date").max().dt.offset_by(f"-{sample_choice.value}y")).item()
+            close_df = close_df.filter(pl.col("date") >= _cutoff)
 
-        log_returns = np.log(close_series / close_series.shift(1)).dropna()
+        # returns_df: date, log_return
+        returns_df = (
+            close_df.select(
+                "date", (pl.col("close") / pl.col("close").shift(1)).log().alias("log_return"))
+            .filter(pl.col("log_return").is_not_null() & pl.col("log_return").is_not_nan())
+        )
 
         _stitch = ""
-        if 'source_ticker' in _raw.columns and _raw['source_ticker'].nunique() > 1:
-            _stitch = f"- История склеена из: **{' → '.join(_raw['source_ticker'].unique())}**\n"
+        if "source_ticker" in _raw.columns and _raw["source_ticker"].n_unique() > 1:
+            _stitch = ("- История склеена из: "
+                       f"**{' → '.join(_raw['source_ticker'].unique(maintain_order=True).to_list())}**\n")
         status_block = mo.md(
             f"### Данные загружены: **{_t}**\n"
-            f"- Период: **{close_series.index.min().strftime('%Y-%m-%d')}** — "
-            f"**{close_series.index.max().strftime('%Y-%m-%d')}**, "
-            f"наблюдений: **{len(close_series)}**\n"
+            f"- Период: **{close_df['date'].min().strftime('%Y-%m-%d')}** — "
+            f"**{close_df['date'].max().strftime('%Y-%m-%d')}**, "
+            f"наблюдений: **{close_df.height}**\n"
             f"- Столбец цены: `{_price_col}` (дивиденды + сплиты учтены)\n"
             + _stitch
         )
     except Exception as e:
-        close_series = pd.Series(dtype=float)
-        log_returns = pd.Series(dtype=float)
+        close_df = pl.DataFrame(schema={"date": pl.Date, "close": pl.Float64})
+        returns_df = pl.DataFrame(schema={"date": pl.Date, "log_return": pl.Float64})
         status_block = mo.md(f"**Ошибка загрузки:** {e}")
     status_block
-    return close_series, log_returns
+    return close_df, returns_df
 
 
 @app.cell
@@ -194,16 +188,16 @@ def _(mo):
 
 
 @app.cell
-def _(close_series, log_returns, plt, ticker_dropdown):
-    if len(close_series) > 1:
+def _(close_df, plt, returns_df, ticker_dropdown):
+    if close_df.height > 1:
         fig_price, (ax_p, ax_r) = plt.subplots(2, 1, figsize=(14, 7), sharex=False)
 
-        ax_p.plot(close_series.index, close_series.values, linewidth=1.2, color="steelblue")
+        ax_p.plot(close_df["date"].to_list(), close_df["close"].to_numpy(), linewidth=1.2, color="steelblue")
         ax_p.set_title(f"{ticker_dropdown.value} — Цена", fontsize=13, fontweight="bold")
         ax_p.set_ylabel("Цена")
         ax_p.grid(True, alpha=0.3)
 
-        ax_r.plot(log_returns.index, log_returns.values, linewidth=0.8, color="coral")
+        ax_r.plot(returns_df["date"].to_list(), returns_df["log_return"].to_numpy(), linewidth=0.8, color="coral")
         ax_r.set_title("Лог-доходности", fontsize=13, fontweight="bold")
         ax_r.set_ylabel("log return")
         ax_r.grid(True, alpha=0.3)
@@ -231,13 +225,14 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(adfuller, kpss, log_returns, mo, pd):
+def _(adfuller, kpss, mo, pl, returns_df):
     _out = mo.md("")
-    if len(log_returns) > 30:
-        _adf = adfuller(log_returns, autolag="AIC")
-        _kpss_res = kpss(log_returns, regression="c", nlags="auto")
+    if returns_df.height > 30:
+        _y = returns_df["log_return"].to_numpy()
+        _adf = adfuller(_y, autolag="AIC")
+        _kpss_res = kpss(_y, regression="c", nlags="auto")
 
-        _stab = pd.DataFrame({
+        _stab = pl.DataFrame({
             "Тест": ["ADF (H0: ряд нестационарен)", "KPSS (H0: ряд стационарен)"],
             "Статистика": [f"{_adf[0]:.4f}", f"{_kpss_res[0]:.4f}"],
             "p-value": [f"{_adf[1]:.6f}", f"{_kpss_res[1]:.6f}"],
@@ -274,14 +269,14 @@ def _(mo):
 
 
 @app.cell
-def _(log_returns, plot_acf, plot_pacf, plt):
-    if len(log_returns) > 30:
+def _(plot_acf, plot_pacf, plt, returns_df):
+    if returns_df.height > 30:
         fig_acf, axes_acf = plt.subplots(1, 2, figsize=(14, 4))
 
-        plot_acf(log_returns.values, lags=30, ax=axes_acf[0], alpha=0.05)
+        plot_acf(returns_df["log_return"].to_numpy(), lags=30, ax=axes_acf[0], alpha=0.05)
         axes_acf[0].set_title("ACF лог-доходностей")
 
-        plot_pacf(log_returns.values, lags=30, ax=axes_acf[1], alpha=0.05)
+        plot_pacf(returns_df["log_return"].to_numpy(), lags=30, ax=axes_acf[1], alpha=0.05)
         axes_acf[1].set_title("PACF лог-доходностей")
 
         plt.tight_layout()
@@ -329,13 +324,13 @@ def _(
     ARIMA,
     criterion_select,
     itertools,
-    log_returns,
     max_d_slider,
     max_p_slider,
     max_q_slider,
     mo,
     np,
-    pd,
+    pl,
+    returns_df,
 ):
     _results = []
     _best_ic = np.inf
@@ -343,7 +338,8 @@ def _(
 
     _criterion = criterion_select.value.lower()  # "aic" or "bic"
 
-    if len(log_returns) > 60:
+    _y = returns_df["log_return"].to_numpy()
+    if len(_y) > 60:
         for _p, _d, _q in itertools.product(
             range(max_p_slider.value + 1),
             range(max_d_slider.value + 1),
@@ -352,11 +348,12 @@ def _(
             if _p == 0 and _q == 0:
                 continue
             try:
-                _model = ARIMA(log_returns, order=(_p, _d, _q))
+                _model = ARIMA(_y, order=(_p, _d, _q))
                 _fit = _model.fit()
                 _ic = getattr(_fit, _criterion)
                 _results.append({
-                    "order": (_p, _d, _q),
+                    "p": _p, "d": _d, "q": _q,
+                    "order_str": str((_p, _d, _q)),
                     "AIC": round(_fit.aic, 2),
                     "BIC": round(_fit.bic, 2),
                     "Log-Lik": round(_fit.llf, 2),
@@ -367,10 +364,13 @@ def _(
             except Exception:
                 pass
 
-    grid_df = pd.DataFrame(_results)
-    if len(grid_df) > 0:
-        grid_df["order_str"] = grid_df["order"].astype(str)
-        grid_df = grid_df.sort_values(_criterion.upper()).reset_index(drop=True)
+    # grid_df: p, d, q, order_str, AIC, BIC, Log-Lik — по возрастанию критерия
+    grid_df = pl.DataFrame(_results, schema={
+        "p": pl.Int64, "d": pl.Int64, "q": pl.Int64, "order_str": pl.Utf8,
+        "AIC": pl.Float64, "BIC": pl.Float64, "Log-Lik": pl.Float64,
+    })
+    if grid_df.height > 0:
+        grid_df = grid_df.sort(_criterion.upper(), maintain_order=True)
 
     best_order = _best_order if _best_order is not None else (1, 0, 1)
 
@@ -386,9 +386,9 @@ def _(
 
 @app.cell
 def _(grid_df, mo):
-    if len(grid_df) > 0:
+    if grid_df.height > 0:
         table_view = mo.ui.table(
-            grid_df[["order_str", "AIC", "BIC", "Log-Lik"]].head(20),
+            grid_df.select("order_str", "AIC", "BIC", "Log-Lik").head(20),
             label="Top-20 моделей",
         )
     else:
@@ -398,21 +398,21 @@ def _(grid_df, mo):
 
 
 @app.cell
-def _(criterion_select, grid_df, np, plt):
-    if len(grid_df) > 0:
+def _(criterion_select, grid_df, np, pl, plt):
+    if grid_df.height > 0:
         _crit = criterion_select.value.upper()
         # Берём только d=0 (или d с лучшим порядком) для 2D визуализации
-        _best_d = grid_df.iloc[0]["order"][1]
-        _sub = grid_df[grid_df["order"].apply(lambda o: o[1] == _best_d)].copy()
+        _best_d = grid_df["d"][0]
+        _sub = grid_df.filter(pl.col("d") == _best_d)
 
-        if len(_sub) > 1:
-            _ps = sorted(_sub["order"].apply(lambda o: o[0]).unique())
-            _qs = sorted(_sub["order"].apply(lambda o: o[2]).unique())
+        if _sub.height > 1:
+            _ps = sorted(_sub["p"].unique().to_list())
+            _qs = sorted(_sub["q"].unique().to_list())
             _heat = np.full((len(_ps), len(_qs)), np.nan)
 
-            for _, row in _sub.iterrows():
-                _pi = _ps.index(row["order"][0])
-                _qi = _qs.index(row["order"][2])
+            for row in _sub.iter_rows(named=True):
+                _pi = _ps.index(row["p"])
+                _qi = _qs.index(row["q"])
                 _heat[_pi, _qi] = row[_crit]
 
             fig_heat, ax_heat = plt.subplots(figsize=(8, 6))
@@ -455,8 +455,8 @@ def _(mo):
 
 
 @app.cell
-def _(ARIMA, best_order, log_returns, mo):
-    best_model_fit = ARIMA(log_returns, order=best_order).fit()
+def _(ARIMA, best_order, mo, returns_df):
+    best_model_fit = ARIMA(returns_df["log_return"].to_numpy(), order=best_order).fit()
     mo.md(f"""
     ### Результаты ARIMA{best_order}
     ```
@@ -486,17 +486,25 @@ def _(mo):
 
 
 @app.cell
-def _(acorr_ljungbox, best_model_fit, het_arch, mo, pd):
-    resid = best_model_fit.resid.dropna()
+def _(acorr_ljungbox, best_model_fit, het_arch, mo, np, pl, returns_df):
+    # resid_df: date, resid — остатки модели без NaN, с датами наблюдений
+    _res = np.asarray(best_model_fit.resid, dtype=float)
+    _ok = ~np.isnan(_res)
+    resid_df = pl.DataFrame({
+        "date": returns_df["date"].filter(pl.Series(_ok)),
+        "resid": _res[_ok],
+    })
+    _resid = resid_df["resid"].to_numpy()
 
-    # Ljung-Box тест
-    _lb = acorr_ljungbox(resid, lags=[10, 20], boxpierce=True, return_df=True)
+    # Ljung-Box тест (statsmodels отдает таблицу — берем колонки как numpy)
+    _lb_t = acorr_ljungbox(_resid, lags=[10, 20], boxpierce=True, return_df=True)
+    _lb = {_c: _lb_t[_c].to_numpy() for _c in ("lb_stat", "lb_pvalue", "bp_stat", "bp_pvalue")}
 
     # ARCH-тест (гетероскедастичность)
-    _arch = het_arch(resid, nlags=10)
+    _arch = het_arch(_resid, nlags=10)
     _arch_stat, _arch_p = _arch[0], _arch[1]
 
-    diagnostics_table = pd.DataFrame({
+    diagnostics_table = pl.DataFrame({
         "Тест": [
             "Ljung-Box (lag=10)",
             "Ljung-Box (lag=20)",
@@ -505,58 +513,59 @@ def _(acorr_ljungbox, best_model_fit, het_arch, mo, pd):
             "ARCH LM (10 lags)",
         ],
         "Статистика": [
-            f"{_lb['lb_stat'].iloc[0]:.4f}",
-            f"{_lb['lb_stat'].iloc[1]:.4f}",
-            f"{_lb['bp_stat'].iloc[0]:.4f}",
-            f"{_lb['bp_stat'].iloc[1]:.4f}",
+            f"{_lb['lb_stat'][0]:.4f}",
+            f"{_lb['lb_stat'][1]:.4f}",
+            f"{_lb['bp_stat'][0]:.4f}",
+            f"{_lb['bp_stat'][1]:.4f}",
             f"{_arch_stat:.4f}",
         ],
         "p-value": [
-            f"{_lb['lb_pvalue'].iloc[0]:.4f}",
-            f"{_lb['lb_pvalue'].iloc[1]:.4f}",
-            f"{_lb['bp_pvalue'].iloc[0]:.4f}",
-            f"{_lb['bp_pvalue'].iloc[1]:.4f}",
+            f"{_lb['lb_pvalue'][0]:.4f}",
+            f"{_lb['lb_pvalue'][1]:.4f}",
+            f"{_lb['bp_pvalue'][0]:.4f}",
+            f"{_lb['bp_pvalue'][1]:.4f}",
             f"{_arch_p:.4f}",
         ],
         "Вывод": [
-            "OK (белый шум)" if _lb['lb_pvalue'].iloc[0] > 0.05 else "Автокорреляция!",
-            "OK (белый шум)" if _lb['lb_pvalue'].iloc[1] > 0.05 else "Автокорреляция!",
-            "OK" if _lb['bp_pvalue'].iloc[0] > 0.05 else "Автокорреляция!",
-            "OK" if _lb['bp_pvalue'].iloc[1] > 0.05 else "Автокорреляция!",
+            "OK (белый шум)" if _lb['lb_pvalue'][0] > 0.05 else "Автокорреляция!",
+            "OK (белый шум)" if _lb['lb_pvalue'][1] > 0.05 else "Автокорреляция!",
+            "OK" if _lb['bp_pvalue'][0] > 0.05 else "Автокорреляция!",
+            "OK" if _lb['bp_pvalue'][1] > 0.05 else "Автокорреляция!",
             "OK (гомоскедаст.)" if _arch_p > 0.05 else "ARCH-эффект!",
         ],
     })
 
     mo.vstack([mo.md("**Диагностика остатков**"), mo.ui.table(diagnostics_table)])
-    return (resid,)
+    return (resid_df,)
 
 
 @app.cell
-def _(np, plot_acf, plot_pacf, plt, resid):
-    if len(resid) > 30:
+def _(np, plot_acf, plot_pacf, plt, resid_df):
+    if resid_df.height > 30:
+        _resid = resid_df["resid"].to_numpy()
         fig_diag, axes_diag = plt.subplots(2, 2, figsize=(14, 8))
 
         # Остатки
-        axes_diag[0, 0].plot(resid.index, resid.values, linewidth=0.7, color="gray")
+        axes_diag[0, 0].plot(resid_df["date"].to_list(), _resid, linewidth=0.7, color="gray")
         axes_diag[0, 0].axhline(0, color="red", linewidth=0.8, linestyle="--")
         axes_diag[0, 0].set_title("Остатки модели")
         axes_diag[0, 0].grid(True, alpha=0.3)
 
         # Гистограмма
-        axes_diag[0, 1].hist(resid.values, bins=50, alpha=0.7, color="steelblue", edgecolor="black", density=True)
-        _x = np.linspace(resid.min(), resid.max(), 200)
-        _mu, _sigma = resid.mean(), resid.std()
+        axes_diag[0, 1].hist(_resid, bins=50, alpha=0.7, color="steelblue", edgecolor="black", density=True)
+        _x = np.linspace(_resid.min(), _resid.max(), 200)
+        _mu, _sigma = _resid.mean(), _resid.std(ddof=1)
         axes_diag[0, 1].plot(_x, (1 / (_sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((_x - _mu) / _sigma) ** 2),
                              color="red", linewidth=1.5, label="N(μ,σ²)")
         axes_diag[0, 1].set_title("Распределение остатков")
         axes_diag[0, 1].legend()
 
         # ACF остатков
-        plot_acf(resid.values, lags=25, ax=axes_diag[1, 0], alpha=0.05)
+        plot_acf(_resid, lags=25, ax=axes_diag[1, 0], alpha=0.05)
         axes_diag[1, 0].set_title("ACF остатков")
 
         # PACF остатков
-        plot_pacf(resid.values, lags=25, ax=axes_diag[1, 1], alpha=0.05)
+        plot_pacf(_resid, lags=25, ax=axes_diag[1, 1], alpha=0.05)
         axes_diag[1, 1].set_title("PACF остатков")
 
         plt.tight_layout()
@@ -576,14 +585,14 @@ def _(mo):
 
 
 @app.cell
-def _(plot_acf, plt, resid):
-    if len(resid) > 30:
-        _sq = resid ** 2
+def _(plot_acf, plt, resid_df):
+    if resid_df.height > 30:
+        _sq = resid_df["resid"].to_numpy() ** 2
         fig_sq, ax_sq = plt.subplots(1, 2, figsize=(14, 4))
-        ax_sq[0].plot(_sq.index, _sq.values, linewidth=0.6, color="purple")
+        ax_sq[0].plot(resid_df["date"].to_list(), _sq, linewidth=0.6, color="purple")
         ax_sq[0].set_title("Квадраты остатков (r²)")
         ax_sq[0].grid(True, alpha=0.3)
-        plot_acf(_sq.values, lags=25, ax=ax_sq[1], alpha=0.05)
+        plot_acf(_sq, lags=25, ax=ax_sq[1], alpha=0.05)
         ax_sq[1].set_title("ACF квадратов остатков")
         plt.tight_layout()
         plt.show()
@@ -619,7 +628,7 @@ def _(mo):
 
 
 @app.cell
-def _(garch_p_slider, garch_q_slider, mo, resid):
+def _(garch_p_slider, garch_q_slider, mo, resid_df):
     try:
         from arch import arch_model as _arch_model
     except ImportError:
@@ -628,12 +637,12 @@ def _(garch_p_slider, garch_q_slider, mo, resid):
     if _arch_model is None:
         garch_fit = None
         garch_block = mo.md("**Пакет `arch` не установлен** — GARCH-блок пропущен: `pip install arch`")
-    elif len(resid) > 60:
+    elif resid_df.height > 60:
         _gp = garch_p_slider.value
         _gq = garch_q_slider.value
 
         # Оцениваем GARCH на остатках ARIMA (масштабируем ×100 для численной стабильности)
-        _am = _arch_model(resid * 100, mean="Zero", vol="Garch", p=_gp, q=_gq)
+        _am = _arch_model(resid_df["resid"].to_numpy() * 100, mean="Zero", vol="Garch", p=_gp, q=_gq)
         garch_fit = _am.fit(disp="off", show_warning=False)
 
         garch_block = mo.md(f"""
@@ -651,21 +660,24 @@ def _(garch_p_slider, garch_q_slider, mo, resid):
 
 
 @app.cell
-def _(acorr_ljungbox, garch_fit, het_arch, mo, pd):
+def _(acorr_ljungbox, garch_fit, het_arch, mo, np, pl):
     if garch_fit is not None:
-        _garch_resid = garch_fit.resid.dropna()
-        _std_resid = (_garch_resid / garch_fit.conditional_volatility).dropna()
+        _garch_resid = np.asarray(garch_fit.resid, dtype=float)
+        _std_resid = _garch_resid / np.asarray(garch_fit.conditional_volatility, dtype=float)
+        _std_resid = _std_resid[~np.isnan(_std_resid)]
 
         # Ljung-Box на стандартизованных остатках
-        _lb_g = acorr_ljungbox(_std_resid, lags=[10, 20], boxpierce=True, return_df=True)
+        _t1 = acorr_ljungbox(_std_resid, lags=[10, 20], boxpierce=True, return_df=True)
+        _lb_g = {_c: _t1[_c].to_numpy() for _c in ("lb_stat", "lb_pvalue")}
 
         # Ljung-Box на квадратах стандартизованных остатков (проверяем снял ли GARCH ARCH-эффект)
-        _lb_g2 = acorr_ljungbox(_std_resid ** 2, lags=[10, 20], boxpierce=False, return_df=True)
+        _t2 = acorr_ljungbox(_std_resid ** 2, lags=[10, 20], boxpierce=False, return_df=True)
+        _lb_g2 = {_c: _t2[_c].to_numpy() for _c in ("lb_stat", "lb_pvalue")}
 
         # ARCH-тест на стандартизованных остатках
         _arch_g = het_arch(_std_resid, nlags=10)
 
-        garch_diag_table = pd.DataFrame({
+        garch_diag_table = pl.DataFrame({
             "Тест": [
                 "Ljung-Box std resid (lag=10)",
                 "Ljung-Box std resid (lag=20)",
@@ -674,24 +686,24 @@ def _(acorr_ljungbox, garch_fit, het_arch, mo, pd):
                 "ARCH LM на std resid (10 lags)",
             ],
             "Статистика": [
-                f"{_lb_g['lb_stat'].iloc[0]:.4f}",
-                f"{_lb_g['lb_stat'].iloc[1]:.4f}",
-                f"{_lb_g2['lb_stat'].iloc[0]:.4f}",
-                f"{_lb_g2['lb_stat'].iloc[1]:.4f}",
+                f"{_lb_g['lb_stat'][0]:.4f}",
+                f"{_lb_g['lb_stat'][1]:.4f}",
+                f"{_lb_g2['lb_stat'][0]:.4f}",
+                f"{_lb_g2['lb_stat'][1]:.4f}",
                 f"{_arch_g[0]:.4f}",
             ],
             "p-value": [
-                f"{_lb_g['lb_pvalue'].iloc[0]:.4f}",
-                f"{_lb_g['lb_pvalue'].iloc[1]:.4f}",
-                f"{_lb_g2['lb_pvalue'].iloc[0]:.4f}",
-                f"{_lb_g2['lb_pvalue'].iloc[1]:.4f}",
+                f"{_lb_g['lb_pvalue'][0]:.4f}",
+                f"{_lb_g['lb_pvalue'][1]:.4f}",
+                f"{_lb_g2['lb_pvalue'][0]:.4f}",
+                f"{_lb_g2['lb_pvalue'][1]:.4f}",
                 f"{_arch_g[1]:.4f}",
             ],
             "Вывод": [
-                "OK" if _lb_g['lb_pvalue'].iloc[0] > 0.05 else "Автокорреляция!",
-                "OK" if _lb_g['lb_pvalue'].iloc[1] > 0.05 else "Автокорреляция!",
-                "OK (ARCH снят)" if _lb_g2['lb_pvalue'].iloc[0] > 0.05 else "ARCH остался!",
-                "OK (ARCH снят)" if _lb_g2['lb_pvalue'].iloc[1] > 0.05 else "ARCH остался!",
+                "OK" if _lb_g['lb_pvalue'][0] > 0.05 else "Автокорреляция!",
+                "OK" if _lb_g['lb_pvalue'][1] > 0.05 else "Автокорреляция!",
+                "OK (ARCH снят)" if _lb_g2['lb_pvalue'][0] > 0.05 else "ARCH остался!",
+                "OK (ARCH снят)" if _lb_g2['lb_pvalue'][1] > 0.05 else "ARCH остался!",
                 "OK (ARCH снят)" if _arch_g[1] > 0.05 else "ARCH остался!",
             ],
         })
@@ -704,34 +716,38 @@ def _(acorr_ljungbox, garch_fit, het_arch, mo, pd):
 
 
 @app.cell
-def _(garch_fit, np, plot_acf, plt):
+def _(garch_fit, np, pl, plot_acf, plt, resid_df):
     if garch_fit is not None:
-        _garch_resid = garch_fit.resid.dropna()
-        _std_resid = (_garch_resid / garch_fit.conditional_volatility).dropna()
-        _cond_vol = garch_fit.conditional_volatility # обратно в исходный масштаб
+        # GARCH оценивался на остатках resid_df — даты наблюдений оттуда
+        _dates = resid_df["date"]
+        _cond_vol = np.asarray(garch_fit.conditional_volatility, dtype=float) # обратно в исходный масштаб
+        _std_all = np.asarray(garch_fit.resid, dtype=float) / _cond_vol
+        _ok = ~np.isnan(_std_all)
+        _std_resid = _std_all[_ok]
+        _std_dates = _dates.filter(pl.Series(_ok)).to_list()
 
         fig_garch, axes_garch = plt.subplots(2, 2, figsize=(14, 8))
 
         # Условная волатильность
-        axes_garch[0, 0].plot(_cond_vol.index, _cond_vol.values, linewidth=0.8, color="darkred")
+        axes_garch[0, 0].plot(_dates.to_list(), _cond_vol, linewidth=0.8, color="darkred")
         axes_garch[0, 0].set_title("Условная волатильность σ_t (GARCH)")
         axes_garch[0, 0].grid(True, alpha=0.3)
 
         # Стандартизованные остатки
-        axes_garch[0, 1].plot(_std_resid.index, _std_resid.values, linewidth=0.5, color="gray")
+        axes_garch[0, 1].plot(_std_dates, _std_resid, linewidth=0.5, color="gray")
         axes_garch[0, 1].axhline(0, color="red", linewidth=0.7, linestyle="--")
         axes_garch[0, 1].set_title("Стандартизованные остатки (resid / σ_t)")
         axes_garch[0, 1].grid(True, alpha=0.3)
 
         # ACF стандартизованных остатков²
-        plot_acf((_std_resid ** 2).values, lags=25, ax=axes_garch[1, 0], alpha=0.05)
+        plot_acf(_std_resid ** 2, lags=25, ax=axes_garch[1, 0], alpha=0.05)
         axes_garch[1, 0].set_title("ACF стандартизованных остатков²")
 
         # Гистограмма стандартизованных остатков
-        axes_garch[1, 1].hist(_std_resid.values, bins=50, alpha=0.7, color="steelblue",
+        axes_garch[1, 1].hist(_std_resid, bins=50, alpha=0.7, color="steelblue",
                               edgecolor="black", density=True)
         _x = np.linspace(_std_resid.min(), _std_resid.max(), 200)
-        _mu, _sigma = _std_resid.mean(), _std_resid.std()
+        _mu, _sigma = _std_resid.mean(), _std_resid.std(ddof=1)
         axes_garch[1, 1].plot(
             _x, (1 / (_sigma * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((_x - _mu) / _sigma) ** 2),
             color="red", linewidth=1.5, label="N(μ,σ²)")
@@ -787,30 +803,31 @@ def _(mo):
 def _(
     SARIMAX,
     best_order,
-    log_returns,
     math,
     mean_absolute_error,
     mean_squared_error,
     mo,
     np,
-    pd,
+    pl,
     refit_slider,
+    returns_df,
     run_wf_button,
     train_pct_slider,
     use_auto_order,
 ):
     if not run_wf_button.value:
         wf_status = mo.md("Нажмите **«Запустить Walk-Forward»** для начала расчёта.")
-        wf_forecast_df = pd.DataFrame()
-    elif len(log_returns) < 100:
+        wf_forecast_df = pl.DataFrame()
+    elif returns_df.height < 100:
         wf_status = mo.md("**Недостаточно данных для walk-forward прогноза (нужно >100 наблюдений).**")
-        wf_forecast_df = pd.DataFrame()
+        wf_forecast_df = pl.DataFrame()
     else:
-        _train_size = int(len(log_returns) * train_pct_slider.value / 100)
+        _train_size = int(returns_df.height * train_pct_slider.value / 100)
         _refit_every = refit_slider.value
         _auto = use_auto_order.value
 
-        _r = log_returns.copy()
+        _r = returns_df["log_return"].to_numpy()
+        _r_dates = returns_df["date"].to_list()
 
         # Для скорости, используем SARIMAX с enforce_* = False
         _p_grid = list(range(0, 4))
@@ -846,7 +863,7 @@ def _(
         for _i in range(_train_size, len(_r) - 1):
             # Refit?
             if (_i - _last_refit) >= _refit_every or _model is None:
-                _y_train = _r.iloc[:_i].reset_index(drop=True)
+                _y_train = _r[:_i]
                 if _auto:
                     _model, _cur_order = _fit_best(_y_train, _cur_order)
                 else:
@@ -863,7 +880,7 @@ def _(
                 # Incremental update (filter)
                 try:
                     _model = SARIMAX(
-                        _r.iloc[:_i].reset_index(drop=True),
+                        _r[:_i],
                         order=_cur_order,
                         enforce_stationarity=False,
                         enforce_invertibility=False,
@@ -875,22 +892,25 @@ def _(
 
             # One-step-ahead forecast
             try:
-                _fc = float(_model.get_forecast(steps=1).predicted_mean.iloc[0])
+                _fc = float(_model.get_forecast(steps=1).predicted_mean[0])
             except Exception:
                 _fc = np.nan
 
-            _fcast_dates.append(_r.index[_i + 1])
+            _fcast_dates.append(_r_dates[_i + 1])
             _fcast_values.append(_fc)
-            _actual_values.append(_r.iloc[_i + 1])
+            _actual_values.append(float(_r[_i + 1]))
 
-        wf_forecast_df = pd.DataFrame({
-            "actual": _actual_values,
-            "forecast": _fcast_values,
-        }, index=_fcast_dates).dropna()
+        # wf_forecast_df: date, actual, forecast — без несостоявшихся прогнозов (NaN)
+        wf_forecast_df = pl.DataFrame(
+            {"date": _fcast_dates, "actual": _actual_values, "forecast": _fcast_values},
+            schema={"date": pl.Date, "actual": pl.Float64, "forecast": pl.Float64},
+        ).filter(~pl.col("actual").is_nan() & ~pl.col("forecast").is_nan())
 
-        if len(wf_forecast_df) > 0:
-            wf_rmse = math.sqrt(mean_squared_error(wf_forecast_df["actual"], wf_forecast_df["forecast"]))
-            wf_mae = mean_absolute_error(wf_forecast_df["actual"], wf_forecast_df["forecast"])
+        if wf_forecast_df.height > 0:
+            _act = wf_forecast_df["actual"].to_numpy()
+            _fct = wf_forecast_df["forecast"].to_numpy()
+            wf_rmse = math.sqrt(mean_squared_error(_act, _fct))
+            wf_mae = mean_absolute_error(_act, _fct)
         else:
             wf_rmse = np.nan
             wf_mae = np.nan
@@ -898,7 +918,7 @@ def _(
         wf_status = mo.md(f"""
     ### Walk-forward результаты
     - Обучающая выборка: **{_train_size}** наблюдений ({train_pct_slider.value}%)
-    - Тестовая выборка: **{len(wf_forecast_df)}** шагов
+    - Тестовая выборка: **{wf_forecast_df.height}** шагов
     - Порядок модели: **ARIMA{_cur_order}**
     - Refit каждые **{_refit_every}** шагов
     - **RMSE**: {wf_rmse:.6f}
@@ -909,14 +929,15 @@ def _(
 
 
 @app.cell
-def _(np, plt, ticker_dropdown, wf_forecast_df):
-    if len(wf_forecast_df) > 0:
+def _(plt, ticker_dropdown, wf_forecast_df):
+    if wf_forecast_df.height > 0:
         fig_wf, axes_wf = plt.subplots(3, 1, figsize=(14, 12))
+        _dates = wf_forecast_df["date"].to_list()
 
         # Actual vs Forecast
-        axes_wf[0].plot(wf_forecast_df.index, wf_forecast_df["actual"],
+        axes_wf[0].plot(_dates, wf_forecast_df["actual"].to_numpy(),
                         linewidth=0.8, label="Actual", color="steelblue")
-        axes_wf[0].plot(wf_forecast_df.index, wf_forecast_df["forecast"],
+        axes_wf[0].plot(_dates, wf_forecast_df["forecast"].to_numpy(),
                         linewidth=0.8, label="Forecast", color="coral", alpha=0.8)
         axes_wf[0].set_title(f"{ticker_dropdown.value} — Walk-Forward: Actual vs Forecast (лог-доходности)", fontweight="bold")
         axes_wf[0].legend()
@@ -924,7 +945,7 @@ def _(np, plt, ticker_dropdown, wf_forecast_df):
 
         # Forecast errors
         _errors = wf_forecast_df["actual"] - wf_forecast_df["forecast"]
-        axes_wf[1].plot(_errors.index, _errors.values, linewidth=0.7, color="gray")
+        axes_wf[1].plot(_dates, _errors.to_numpy(), linewidth=0.7, color="gray")
         axes_wf[1].axhline(0, color="red", linewidth=0.8, linestyle="--") 
         axes_wf[1].set_title("Ошибки прогноза (actual − forecast)")
         axes_wf[1].grid(True, alpha=0.3)
@@ -932,8 +953,8 @@ def _(np, plt, ticker_dropdown, wf_forecast_df):
         # Rolling RMSE (window=20)
         _window = min(20, len(_errors) // 3)
         if _window > 1:
-            _rolling_rmse = (_errors ** 2).rolling(_window).mean().apply(np.sqrt)
-            axes_wf[2].plot(_rolling_rmse.index, _rolling_rmse.values, linewidth=1.2, color="darkred")
+            _rolling_rmse = (_errors ** 2).rolling_mean(_window).sqrt()
+            axes_wf[2].plot(_dates, _rolling_rmse.to_numpy(), linewidth=1.2, color="darkred")
             axes_wf[2].set_title(f"Rolling RMSE (окно={_window})")
             axes_wf[2].grid(True, alpha=0.3)
         else:
@@ -956,24 +977,25 @@ def _(mo):
 
 
 @app.cell
-def _(mo, np, plt, ticker_dropdown, wf_forecast_df):
-    if len(wf_forecast_df) > 0:
-        _df = wf_forecast_df.copy()
-
-        # Стратегия: long, если прогноз > 0 (ожидаем рост)
-        _df["signal"] = (_df["forecast"] > 0).astype(int)
-
-        # Доходность стратегии: signal_{t} * actual_{t}
-        _df["strategy_return"] = _df["signal"] * _df["actual"]
-
-        # Кумулятивные доходности
-        _df["cum_actual"] = _df["actual"].cumsum()
-        _df["cum_strategy"] = _df["strategy_return"].cumsum()
+def _(mo, np, pl, plt, ticker_dropdown, wf_forecast_df):
+    if wf_forecast_df.height > 0:
+        _df = wf_forecast_df.with_columns(
+            # Стратегия: long, если прогноз > 0 (ожидаем рост)
+            (pl.col("forecast") > 0).cast(pl.Int64).alias("signal"),
+        ).with_columns(
+            # Доходность стратегии: signal_{t} * actual_{t}
+            (pl.col("signal") * pl.col("actual")).alias("strategy_return"),
+        ).with_columns(
+            # Кумулятивные доходности
+            pl.col("actual").cum_sum().alias("cum_actual"),
+            pl.col("strategy_return").cum_sum().alias("cum_strategy"),
+        )
+        _dates = _df["date"].to_list()
 
         fig_cum, ax_cum = plt.subplots(figsize=(14, 6))
-        ax_cum.plot(_df.index, (np.exp(_df["cum_actual"]) - 1) * 100,
+        ax_cum.plot(_dates, (np.exp(_df["cum_actual"].to_numpy()) - 1) * 100,
                     label="Buy & Hold", linewidth=1.5, color="steelblue")
-        ax_cum.plot(_df.index, (np.exp(_df["cum_strategy"]) - 1) * 100,
+        ax_cum.plot(_dates, (np.exp(_df["cum_strategy"].to_numpy()) - 1) * 100,
                     label="ARIMA Long/Cash", linewidth=1.5, color="coral")
         ax_cum.axhline(0, color="black", linewidth=0.5)
         ax_cum.set_title(f"{ticker_dropdown.value} — Buy&Hold vs ARIMA (out-of-sample)", fontweight="bold")
@@ -985,8 +1007,8 @@ def _(mo, np, plt, ticker_dropdown, wf_forecast_df):
         del fig_cum, ax_cum
 
         # Статистика стратегии
-        _total_bh = (np.exp(_df["cum_actual"].iloc[-1]) - 1) * 100
-        _total_strat = (np.exp(_df["cum_strategy"].iloc[-1]) - 1) * 100
+        _total_bh = (np.exp(_df["cum_actual"][-1]) - 1) * 100
+        _total_strat = (np.exp(_df["cum_strategy"][-1]) - 1) * 100
         _sharpe_bh = _df["actual"].mean() / _df["actual"].std() * np.sqrt(252) if _df["actual"].std() > 0 else 0
         _sharpe_st = _df["strategy_return"].mean() / _df["strategy_return"].std() * np.sqrt(252) if _df["strategy_return"].std() > 0 else 0
         _pct_long = _df["signal"].mean() * 100
@@ -1026,44 +1048,50 @@ def _(mo):
 def _(
     best_model_fit,
     best_order,
-    close_series,
+    close_df,
     forecast_horizon_slider,
     np,
-    pd,
+    pl,
     plt,
     ticker_dropdown,
+    timedelta,
 ):
     _h = forecast_horizon_slider.value
 
-    if len(close_series) > 30:
+    if close_df.height > 30:
         # Прогноз лог-доходностей
         _forecast_obj = best_model_fit.get_forecast(steps=_h)
-        _fc_mean = _forecast_obj.predicted_mean
-        _fc_ci = _forecast_obj.conf_int(alpha=0.05)
+        _fc_mean = np.asarray(_forecast_obj.predicted_mean, dtype=float)
+        _fc_ci = np.asarray(_forecast_obj.conf_int(alpha=0.05), dtype=float)
 
         # Конвертация лог-доходностей → уровни цен
-        _last_price = close_series.iloc[-1]
-        _cum_returns = np.cumsum(_fc_mean.values)
+        _last_price = close_df["close"][-1]
+        _cum_returns = np.cumsum(_fc_mean)
         _fc_prices = _last_price * np.exp(_cum_returns)
 
         # CI для цен
-        _cum_lower = np.cumsum(_fc_ci.iloc[:, 0].values)
-        _cum_upper = np.cumsum(_fc_ci.iloc[:, 1].values)
+        _cum_lower = np.cumsum(_fc_ci[:, 0])
+        _cum_upper = np.cumsum(_fc_ci[:, 1])
         _fc_lower = _last_price * np.exp(_cum_lower)
         _fc_upper = _last_price * np.exp(_cum_upper)
 
         # Даты прогноза (рабочие дни)
-        _last_date = close_series.index[-1]
-        _forecast_dates = pd.bdate_range(start=_last_date + pd.Timedelta(days=1), periods=_h)
+        _last_date = close_df["date"][-1]
+        _forecast_dates = []
+        _d = _last_date
+        while len(_forecast_dates) < _h:
+            _d = _d + timedelta(days=1)
+            if _d.weekday() < 5:
+                _forecast_dates.append(_d)
 
         # График
-        _n_history = min(60, len(close_series))
+        _n_history = min(60, close_df.height)
         fig_fwd, ax_fwd = plt.subplots(figsize=(14, 6))
-        ax_fwd.plot(close_series.index[-_n_history:], close_series.values[-_n_history:],
+        ax_fwd.plot(close_df["date"].to_list()[-_n_history:], close_df["close"].to_numpy()[-_n_history:],
                     linewidth=1.5, color="steelblue", label="Исторические данные")
         ax_fwd.plot(_forecast_dates, _fc_prices, linewidth=2, color="coral", label="Прогноз")
         ax_fwd.fill_between(_forecast_dates, _fc_lower, _fc_upper, alpha=0.2, color="coral", label="95% CI")
-        ax_fwd.axvline(close_series.index[-1], color="gray", linestyle="--", linewidth=0.8)
+        ax_fwd.axvline(_last_date, color="gray", linestyle="--", linewidth=0.8)
         ax_fwd.set_title(f"{ticker_dropdown.value} — Прогноз на {_h} дней ARIMA{best_order}", fontweight="bold")
         ax_fwd.set_ylabel("Цена")
         ax_fwd.legend(fontsize=11)
@@ -1073,22 +1101,22 @@ def _(
         del fig_fwd, ax_fwd
 
         # Таблица прогноза
-        forecast_table_df = pd.DataFrame({
-            "Дата": _forecast_dates.strftime("%Y-%m-%d"),
+        forecast_table_df = pl.DataFrame({
+            "Дата": [_fd.strftime("%Y-%m-%d") for _fd in _forecast_dates],
             "Прогноз цены": [f"{p:.2f}" for p in _fc_prices],
             "Нижняя граница (95%)": [f"{p:.2f}" for p in _fc_lower],
             "Верхняя граница (95%)": [f"{p:.2f}" for p in _fc_upper],
-            "Прогноз лог-доходности": [f"{r:.6f}" for r in _fc_mean.values],
+            "Прогноз лог-доходности": [f"{r:.6f}" for r in _fc_mean],
         })
     else:
-        forecast_table_df = pd.DataFrame()
+        forecast_table_df = pl.DataFrame()
     return (forecast_table_df,)
 
 
 @app.cell
 def _(forecast_table_df, mo):
     # Таблица прогноза по дням (раньше собиралась, но не отображалась)
-    if len(forecast_table_df) > 0:
+    if forecast_table_df.height > 0:
         forecast_table_view = mo.ui.table(forecast_table_df, label="Прогноз по дням")
     else:
         forecast_table_view = mo.md("")
