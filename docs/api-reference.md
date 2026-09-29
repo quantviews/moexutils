@@ -1,6 +1,15 @@
 # Справочник API
 
-Все функции — в модуле `moex_utils` (`import moex_utils as moex`). Скрипт обновления — `update_data.py` (раздел в конце).
+Модули проекта:
+
+| Модуль | Что в нем |
+|--------|-----------|
+| `moex_utils` | Прежний интерфейс: акции, индексы, корпоративные события, adj_close, капитализация, ставка ЦБ, проверка качества; облигации и фьючерсы — тонкие обертки над `history` |
+| `lake` | Хранилище DuckLake: подключение, SQL-запросы с результатом в polars, запись по ключу, обслуживание |
+| `history` | История рынков «все инструменты за дату» (облигации, фьючерсы) в хранилище, реестр карточек бумаг |
+| `iss` | Доступ к ISS: HTTP-сессия, разбор ответов в polars |
+
+**Миграция на polars и DuckLake идет по частям.** Облигации и фьючерсы уже в хранилище и отдаются как polars DataFrame; акции и индексы пока в Parquet-файлах и pandas (переводятся следующей частью). Скрипт обновления — `update_data.py` (раздел в конце).
 
 ## Константы и инфраструктура
 
@@ -11,8 +20,7 @@
 | `DATA_ROOT` | `MOEX_DATA_ROOT` или `<проект>` | Корень рыночных данных |
 | `DATA_FOLDER` | `<DATA_ROOT>/data` | Акции: `<TICKER>/<TICKER>.parquet` |
 | `INDEXES_FOLDER` | `<DATA_ROOT>/indexes` | Кэш индексов: `<TICKER>.parquet` |
-| `BONDS_FOLDER` | `<DATA_ROOT>/bonds` | Облигации: мониторинг рынка и досок, реестр выпусков, истории отдельных выпусков |
-| `FUTURES_FOLDER` | `<DATA_ROOT>/futures` | История всех фьючерсов FORTS: `history/<YYYY>.parquet` |
+| `lake.LAKE_DATA_PATH` | `<DATA_ROOT>/lake` | Файлы данных хранилища DuckLake (облигации, фьючерсы) |
 | `METADATA_FILE` | `<проект>/metadata/stock-index-base.xlsx` | Количество акций по датам (для капитализации) |
 | `SPLITS_FILE` | `<проект>/metadata/splits.csv` | Реестр сплитов: `ticker, date, ratio, kind` |
 | `EXTERNAL_SPLITS_FILE` | `<проект>/../dividends/metadata/splits.json` | Внешний реестр сплитов проекта dividends |
@@ -173,59 +181,80 @@ update_key_rate(key_rate_file=None, session=None) -> int
 
 ---
 
+## Хранилище DuckLake (`lake`)
+
+```python
+lake.query(sql, params=None) -> pl.DataFrame
+lake.write(table, df: pl.DataFrame, key=None) -> int
+lake.tables() -> list[str]
+lake.session(read_only=False)      # контекстный менеджер: подключение DuckDB с хранилищем `lake`
+lake.maintenance(retention_days=30) -> None
+```
+
+Каталог (метаданные, снимки, схема) — PostgreSQL на localhost: база `moex_lake`, роль `moex` (служба Windows `postgresql-x64-17`, автозапуск). Данные — Parquet со сжатием zstd в `<MOEX_DATA_ROOT>/lake`. Одновременная работа писателя и читателей проверена (20 транзакций записи при трех параллельных читателях — без ошибок).
+
+- **Пароль** берется из файла паролей PostgreSQL (`%APPDATA%\postgresql\pgpass.conf`, либо `PGPASSFILE`) и передается во временный безымянный секрет DuckDB: встроенная в DuckDB libpq не читает pgpass и переменные окружения, а пароль в строке подключения попал бы в текст ошибок.
+- **`query`** — SQL только на чтение, таблицы — `lake.<имя>`, результат — polars DataFrame.
+- **`write`** — одна транзакция: `MERGE` по ключу таблицы (строки с тем же ключом обновляются, новые — добавляются), новые колонки добавляются автоматически (у ISS набор полей со временем расширяется), дубли ключа отклоняются. Таблица создается при первой записи; `bonds` и `futures` разбиты по годам.
+- **`maintenance`** — слияние мелких файлов ежедневных дозаписей, удаление снимков старше 30 дней (окно для отката) и неиспользуемых файлов; шаг 5 `update_data.py`.
+- **Тесты и работа без Postgres:** переменная `MOEX_LAKE_CATALOG` задает другой каталог, например файловый `ducklake:C:/tmp/catalog.ducklake`.
+
+Таблицы и ключи: `bonds`, `futures` — `date, SECID, BOARDID`; `bonds_securities` — `SECID`; `empty_dates` — `dataset, date`; `stocks`, `indexes` — `date, ticker` (копия на 28.09.2026, рабочий источник акций и индексов пока — Parquet-файлы).
+
+Пример SQL поверх хранилища:
+
+```python
+import lake
+lake.query('''
+    SELECT date, median(ZSPREAD) AS zspread
+    FROM lake.bonds
+    WHERE BOARDID = 'TQCB' AND date >= DATE '2025-01-01'
+    GROUP BY date ORDER BY date''')
+```
+
+---
+
+## История рынков (`history`)
+
+```python
+history.update(dataset, start=None, max_days=3000, session=None, flush_every=50) -> int
+history.repair(dataset, session=None, calendar=None) -> int
+history.read(dataset, start=None, end=None, secids=None, boards=None, columns=None) -> pl.DataFrame
+history.dataset_dates(dataset) -> list[date]
+history.update_securities(dataset='bonds', max_new=500, session=None) -> int
+history.read_securities(dataset='bonds') -> pl.DataFrame
+```
+
+Наборы (`dataset`): `bonds` — все облигации MOEX с 1997 года, `futures` — все контракты FORTS с 2002 года. Один постраничный запрос ISS на торговую дату отдает все инструменты рынка со **всеми колонками**; строки пишутся в таблицу хранилища. Типы колонок берутся из метаданных ответа ISS: числовые — Float64, остальные — строки (так одна колонка имеет один тип во все годы).
+
+- **Хвост** — даты после последней сохраненной до сегодня (ночной прогон).
+- **Бэкфилл** — только при явно заданном `start` раньше истории: даты от истории назад (при обрыве скачанное примыкает к истории).
+- **Без дыр** — на сбое даты прогон останавливается, следующий запуск продолжит с нее.
+- **Прогресс** — запись порциями по `flush_every` дат (многочасовая выгрузка не теряет результат).
+- **`repair`** — докачка пропусков внутри истории по будням IMOEX; даты, за которые ISS подтвержденно пуст, запоминаются в `lake.empty_dates` и больше не запрашиваются.
+- **Параллельная работа** — ночное обновление и идущая выгрузка могут писать одновременно: запись идемпотентна (MERGE по ключу), конфликты транзакций разрешает каталог.
+
+`read` возвращает историю за период (`start`/`end` включительно) с фильтрами по бумагам и режимам торгов; `columns` ускоряет чтение полной истории.
+
+---
+
 ## Облигации
 
-### Весь рынок: сегмент `ALL` (основной источник полной истории)
-
 ```python
-update_bonds_market('ALL', start='1997-01-01', session=None, max_days=3000) -> int
-read_bonds_market('ALL', start=None, end=None) -> pd.DataFrame
-```
-
-Полная история **всех** облигаций MOEX с 1997 года: один постраничный запрос на дату к `/history/engines/stock/markets/bonds/securities` — все доски (старые EQOB/EQNB/EQOS до 2016–2020, TQOB и TQCB, валютные TQOD/TQOE/TQOY/TQUD, TQRD) и **все колонки ISS**: цены (`OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE`, `LEGALCLOSEPRICE`), доходности (`YIELDCLOSE`, `YIELDATWAP`, `YIELDTOOFFER`), `DURATION`, НКД `ACCINT`, `ZSPREAD`, инфляционные `BEICLOSE`/`IRICPICLOSE` для ОФЗ-ИН, купон (`COUPONPERCENT`, `COUPONVALUE`), номинал и валюта, оферты, call/put-даты, `BONDTYPE`/`BONDSUBTYPE`, обороты. Погашенные выпуски остаются в истории.
-
-Ключ строки — `date` + `SECID` + `BOARDID` (выпуск может торговаться на нескольких досках в один день; для анализа обычно фильтруют основные доски). Хранение — `bonds/market_ALL/<YYYY>.parquet`. Первичная выгрузка — около 95 тыс. запросов, 6–7 часов (см. `--bonds-market-init` ниже); дальше сегмент обновляется ночным шагом 1c.
-
-### Мониторинг отдельных досок
-
-```python
-update_bonds_market(segment='TQOB', start='2024-01-01', session=None, max_days=3000) -> int
-repair_bonds_market(segment='TQOB', session=None, calendar=None) -> int
-read_bonds_market(segment=None, start=None, end=None) -> pd.DataFrame
+update_bonds_market(start=None, session=None, max_days=3000) -> int
+repair_bonds_market(session=None, calendar=None) -> int
 update_bonds_market_all(session=None) -> None
-```
-
-История одной доски по датам (`/history/.../boards/<segment>/securities`) в `bonds/market_<SEGMENT>/<YYYY>.parquet` с рабочим набором колонок: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE`, `DURATION`, `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`; ключ — `date` + `SECID`. Сейчас ведутся TQOB и TQCB с 2021 года — их читает ноутбук `bond-market.py`.
-
-`read_bonds_market()` без `segment` читает все доски, **кроме `ALL`** (полную историю читают явно), `start`/`end` (включительно) ограничивают период и читают только нужные годы. `update_bonds_market_all` обновляет все сегменты, по которым есть данные (включая `ALL`), и докачивает пропуски (`repair_bonds_market`); вызывается шагом 1c. Если `start` раньше сохраненной истории, начало докачивается назад от истории (бэкфилл). Старый единый файл `market_<SEGMENT>.parquet` при первом обращении разбивается по годам со сверкой числа строк.
-
-### Реестр параметров выпусков
-
-```python
+read_bonds_market(start=None, end=None, boards=None, secids=None, columns=None) -> pl.DataFrame
+update_bonds_securities(max_new=500, session=None) -> int
+read_bonds_securities() -> pl.DataFrame
 get_security_description(secid, session=None) -> dict
-update_bonds_securities(session=None, secids=None, max_new=500, flush_every=200) -> int
-read_bonds_securities() -> pd.DataFrame
 ```
 
-`bonds/securities.parquet` — строка на выпуск: карточка ISS (`/iss/securities/<SECID>`, блок description), которую ISS отдает и для погашенных выпусков: `ISIN`, `NAME`, `EMITTER_ID`, `REGNUMBER`, `ISSUEDATE`, `MATDATE`, `ISSUESIZE`, `FACEVALUE`/`INITIALFACEVALUE`, `FACEUNIT`, `COUPONFREQUENCY`, `TYPE`/`TYPENAME`, `BOND_TYPE`/`BOND_SUBTYPE`, `HASDEFAULT`, `HASTECHNICALDEFAULT`, `LISTLEVEL` и др. (набор полей зависит от выпуска), плюс `FETCHED` — дата запроса. `update_bonds_securities` добавляет выпуски, которых в реестре нет; по умолчанию список берется из полной истории `ALL`. `max_new` ограничивает число запросов за прогон: ночью — 500, первичное наполнение — `max_new=None` (около 20 тыс. запросов).
+Обертки над `history` для набора `bonds`. Полная история **всех** облигаций MOEX с 1997 года — все доски: старые EQOB/EQNB/EQOS (до 2016–2020), TQOB (гособлигации), TQCB (корпоративные), валютные TQOD/TQOE/TQOY/TQUD, TQRD. Колонки ISS: цены (`OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE`, `LEGALCLOSEPRICE`), доходности (`YIELDCLOSE`, `YIELDATWAP`, `YIELDTOOFFER`), `DURATION` (дни), НКД `ACCINT`, `ZSPREAD`, `BEICLOSE`/`IRICPICLOSE` для ОФЗ-ИН, купон (`COUPONPERCENT`, `COUPONVALUE`), номинал и валюта, оферты и call/put-даты, `BONDTYPE`/`BONDSUBTYPE`, обороты. Погашенные выпуски остаются в истории. Выпуск может торговаться на нескольких досках в один день — для анализа фильтруйте `boards` (например `['TQOB', 'TQCB']`).
 
-### Отдельные выпуски и снапшот доски
+**Реестр карточек** `lake.bonds_securities` — строка на выпуск, включая погашенные: `ISIN`, `NAME`, `EMITTER_ID`, `REGNUMBER`, `ISSUEDATE`, `MATDATE`, `ISSUESIZE`, `FACEVALUE`/`INITIALFACEVALUE`, `FACEUNIT`, `COUPONFREQUENCY`, `TYPE`/`TYPENAME`, `BOND_TYPE`/`BOND_SUBTYPE`, `HASDEFAULT`, `HASTECHNICALDEFAULT`, `LISTLEVEL` и др., плюс `FETCHED` — дата запроса. Ночью добавляются до 500 новых выпусков. Флаги дефолта — текущий статус, как правило на уровне эмитента (все его действующие выпуски), а не история: у погашенных выпусков они не выставлены.
 
-```python
-get_moex_bonds_list(segment='TQCB', session=None) -> pd.DataFrame
-get_moex_bond_params(secid, session=None) -> pd.DataFrame
-get_moex_bond_prices(secid, start='2023-01-01', end=None, session=None) -> pd.DataFrame
-save_moex_bond(secid, start='2023-01-01', end=None, session=None) -> None
-read_moex_bond(secid) -> pd.DataFrame
-update_moex_bond(secid, session=None) -> None
-save_bonds_params(segment='TQOB', session=None) -> pd.DataFrame
-read_bonds_params() -> pd.DataFrame
-download_bonds_universe(segment='TQOB', start='2014-01-01', session=None,
-                        min_issue_size=None, max_issues=None) -> int
-update_all_bonds(session=None, refresh_params=True) -> None
-```
-
-Ранний механизм, до мониторинга по датам: список бумаг доски, параметры выпуска, история одного выпуска (`bonds/<SECID>.parquet`), снапшот параметров торгуемых выпусков доски (`bonds/params.parquet`) и выгрузка «вселенной» доски с фильтрами объема (`min_issue_size` — руб., ISSUESIZE × FACEVALUE) и числа выпусков. `update_all_bonds` (шаг 1c) дообновляет сохраненные истории выпусков и снапшот параметров. Для полной истории рынка используйте сегмент `ALL` и реестр выпусков.
+Первичная выгрузка — около 95 тыс. запросов, 6–7 часов: `python update_data.py --history-init bonds` (реестр карточек наполняется следом).
 
 ### Метрики облигаций
 
@@ -233,37 +262,21 @@ update_all_bonds(session=None, refresh_params=True) -> None
 calculate_ytm(price, face_value, coupon_rate, years_to_maturity, coupon_freq=2) -> float
 calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm, coupon_freq=2) -> float
 calculate_convexity(price, face_value, coupon_rate, years_to_maturity, ytm, coupon_freq=2) -> float
-add_bond_metrics(df, params) -> pd.DataFrame
 ```
 
-Учебные расчеты по упрощенной модели (равные купоны, без НКД и реального графика выплат): YTM бисекцией в диапазоне [−50%, 500%], модифицированные дюрация (годы) и выпуклость (годы²): dP/P ≈ −D·dy + 0.5·C·dy². `add_bond_metrics` добавляет `years_to_maturity`, `ytm`, `duration`, `convexity` к ряду цен (цена — `CLOSE` или `WAPRICE`; без `MATDATE` — NaN). В аналитике используйте биржевые `YIELDCLOSE` и `DURATION` из истории.
+Учебные расчеты по упрощенной модели (равные купоны, без НКД и реального графика выплат): YTM бисекцией в диапазоне [−50%, 500%], модифицированные дюрация (годы) и выпуклость (годы²): dP/P ≈ −D·dy + 0.5·C·dy². В аналитике используйте биржевые `YIELDCLOSE` и `DURATION` из истории; модель — фоллбэк (так делает ноутбук `bond-market.py`).
 
 ---
 
 ## Фьючерсы FORTS
 
 ```python
-update_futures_history(start='2024-01-01', session=None, max_days=3000) -> int
+update_futures_history(start=None, session=None, max_days=3000) -> int
 repair_futures_history(session=None, calendar=None) -> int
-read_futures_history(start=None, end=None, assets=None) -> pd.DataFrame
+read_futures_history(start=None, end=None, assets=None, columns=None) -> pl.DataFrame
 ```
 
-История торгов **всех** фьючерсных контрактов FORTS по датам с 2002 года (`/history/engines/futures/markets/forts/securities`, все колонки ISS): `OPEN`, `LOW`, `HIGH`, `CLOSE`, расчетная цена `SETTLEPRICE`, открытый интерес `OPENPOSITION` и `OPENPOSITIONVALUE`, `VOLUME`, `VALUE`, `NUMTRADES`, `SWAPRATE`, код базового актива `ASSETCODE`, `SHORTNAME`. Истекшие контракты остаются в истории.
-
-Коды контрактов повторяются раз в 10 лет (`SiZ5` — декабрь 2015 и декабрь 2025), поэтому уникальна пара `date` + `SECID` (+ `BOARDID`), а год контракта берется из `SHORTNAME` (`Si-12.25`). `read_futures_history(assets='Si')` фильтрует по базовому активу (строка или список). Хранение — `futures/history/<YYYY>.parquet`. Счетчик `TOTAL` в ответе ISS бывает больше числа реально отдаваемых строк — это особенность ISS, загрузчик берет все, что отдается. Первичная выгрузка — около 25 тыс. запросов (`--futures-init`), дальше — ночной шаг 1e.
-
----
-
-## Хранилища истории по датам
-
-Мониторинг облигаций (доски и `ALL`) и фьючерсы используют общую механику:
-
-- **Годовые файлы** `<folder>/<YYYY>.parquet`; при обновлении перезаписываются только затронутые годы.
-- **Хвост и бэкфилл.** Докачиваются даты после последней сохраненной; если `start` раньше истории — начало, от истории назад.
-- **Без дыр.** На сбое загрузки даты прогон останавливается и сохраняет скачанное; следующий запуск продолжит с той же даты.
-- **Прогресс.** Скачанное сбрасывается на диск каждые 50 дат — многочасовая выгрузка не теряет результат при обрыве.
-- **Досчет пропусков** по будням IMOEX; даты, за которые ISS подтвержденно пуст, запоминаются в `_empty_dates.csv` и больше не запрашиваются.
-- **Блокировка** `.lock`: пока идет выгрузка, ночное обновление пропускает хранилище; брошенная блокировка старше 12 часов снимается.
+Обертки над `history` для набора `futures`: история **всех** фьючерсных контрактов FORTS с 2002 года — `OPEN`, `LOW`, `HIGH`, `CLOSE`, расчетная цена `SETTLEPRICE`, открытый интерес `OPENPOSITION` и `OPENPOSITIONVALUE`, `VOLUME`, `VALUE`, `NUMTRADES`, `SWAPRATE`, базовый актив `ASSETCODE`, `SHORTNAME`. Истекшие контракты остаются в истории. Коды контрактов повторяются раз в 10 лет (`SiZ5` — декабрь 2015 и декабрь 2025), уникальна пара `date` + `SECID` (+ `BOARDID`); год контракта — в `SHORTNAME` (`Si-12.25`). `assets` фильтрует по базовому активу (строка или список). Счетчик `TOTAL` в ответе ISS бывает больше числа реально отдаваемых строк — особенность ISS. Первичная выгрузка — около 25 тыс. запросов: `python update_data.py --history-init futures`.
 
 ---
 
@@ -289,7 +302,7 @@ find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
 | `price_spike` | скачок цены больше `adj_jump` с разворотом на следующий день — возможна сбойная цена |
 | `dividend_skipped` | дивиденд из CSV отброшен как неправдоподобный |
 | `dividend_gap` | гэп открытия хуже −4%, не объясненный IMOEX, сплитом или дивидендом из CSV в пределах 5 дней, — кандидат в пропущенный дивиденд. Гэп в тот же день у 3+ бумаг помечается как возможное отраслевое движение |
-| `bonds_stale` / `bonds_gaps` | мониторинг облигаций отстает от IMOEX или с пропусками в окне |
+| `bonds_stale` / `bonds_gaps` | история облигаций в хранилище отстает от IMOEX или с пропусками в окне |
 | `futures_stale` / `futures_gaps` | история фьючерсов отстает от IMOEX или с пропусками в окне |
 
 При кандидатах `dividend_gap` обновите проект дивидендов (`python parse_all_dividends.py` в `../dividends`) и пересчитайте `adj_close`. Если выплаты нет и в источнике (закрытияреестров.рф), кандидат останется в отчете. `quality_summary` — одна строка итога для лога.
@@ -304,39 +317,38 @@ find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
 |-----|-----------|-----------|
 | 1 | Акции: дозагрузка, сразу adj_close и market_cap (снятые с торгов пропускаются) | `--no-update` |
 | 1b | Индексы IMOEX, MCFTR, RGBITR | `--no-index` |
-| 1c | Облигации: истории выпусков, мониторинг всех сегментов с докачкой пропусков, новые выпуски в реестр (до 500) | `--no-bonds` |
+| 1c | Облигации: хвост и пропуски истории в хранилище, новые выпуски в реестр (до 500) | `--no-bonds` |
 | 1d | Ключевая ставка ЦБ | `--no-key-rate` |
-| 1e | Фьючерсы FORTS (если история уже выгружена) | `--no-futures` |
+| 1e | Фьючерсы: хвост и пропуски истории в хранилище | `--no-futures` |
 | 2 | Сверка adj_close по дивидендам (пишет только изменившиеся файлы) | `--no-adj` |
 | 3 | Сверка market_cap | `--no-cap` |
 | 4 | Проверка данных: замечания и строка итога | `--no-check` |
+| 5 | Обслуживание хранилища: слияние файлов, снимки старше 30 дней | `--no-maintenance` |
+
+Облигации и фьючерсы ночью только дообновляются: если набора в хранилище нет, шаг подсказывает команду первичной выгрузки и ничего не качает. Если хранилище недоступно (Postgres не запущен), шаги 1c, 1e и 5 пишут предупреждение, остальное обновление идет как обычно.
 
 Прочие опции:
 
 | Опция | Описание |
 |-------|----------|
 | `--check` | Только проверка данных: без обновления, окно — год, статус ISS для отстающих бумаг |
-| `--rebuild` | Перескачать историю всех тикеров целиком |
+| `--history-init` | Первичная выгрузка истории наборов через запятую: `bonds,futures` (многочасовая; для `bonds` следом наполняется реестр карточек) |
+| `--history-start` | Начальная дата первичной выгрузки (по умолчанию — начало истории ISS: 1997 для облигаций, 2002 для фьючерсов) |
+| `--rebuild` | Перескачать историю всех акций целиком |
 | `--indexes` | Индексы через запятую (по умолчанию `IMOEX,MCFTR,RGBITR`) |
-| `--bonds-market-init` | Первичная выгрузка сегментов через запятую (`ALL` — весь рынок; `TQOB,TQCB` — доски) |
-| `--bonds-market-start` | Начальная дата при `--bonds-market-init` (по умолчанию 2024-01-01; для полной истории `ALL` — `1997-01-01`) |
-| `--bonds-init` | Выгрузка «вселенной» доски (ранний механизм, например `TQOB`) |
-| `--bonds-min-issue` | Мин. объем выпуска в млрд руб при `--bonds-init` |
-| `--futures-init` | Первичная выгрузка истории всех фьючерсов |
-| `--futures-start` | Начальная дата при `--futures-init` (по умолчанию 2002-01-01) |
 | `--div-folder` | Папка CSV дивидендов (по умолчанию `../dividends/data`) |
 | `--data-folder` | Папка акций |
 | `--metadata-file` | Excel с количеством акций |
 
+Прежние флаги `--bonds-market-init` и `--futures-init` работают как синонимы `--history-init bonds` / `futures`.
+
 Первичные выгрузки (многочасовые, запускать в фоне):
 
 ```bash
-python update_data.py --bonds-market-init ALL --bonds-market-start 1997-01-01 --no-update --no-index --no-key-rate --no-futures --no-adj --no-cap --no-check
-python update_data.py --futures-init --no-update --no-index --no-bonds --no-key-rate --no-adj --no-cap --no-check
-python -c "import moex_utils as m; m.update_bonds_securities(max_new=None)"
+python update_data.py --history-init bonds,futures --no-update --no-index --no-key-rate --no-adj --no-cap --no-check
 ```
 
-Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(do_update=True, do_check=True, ...)` — параметры `main` повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_adj_close`, `do_market_cap`, `do_check`, `check_days`, `check_div_days`, `check_iss`, `bonds_market_init`, `bonds_market_start`, `futures_init`, `futures_start`, `rebuild`, `div_folder`, `data_folder`, `metadata_file`, `index_tickers`).
+Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_adj_close`, `do_market_cap`, `do_check`, `do_maintenance`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `data_folder`, `metadata_file`, `index_tickers`).
 
 ### Ночной запуск
 

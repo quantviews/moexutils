@@ -14,6 +14,8 @@
 
 Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы пока не выгружаются.
 
+**Хранение.** Облигации и фьючерсы — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL. Акции и индексы пока в Parquet-файлах и pandas — идет поэтапная миграция всего проекта на polars и DuckLake.
+
 ## Установка
 
 Python 3.11+ (CI проверяет 3.11 и 3.12; рабочее окружение — conda `py312`).
@@ -33,13 +35,18 @@ sber = moex.read_moex_stock('SBER')                  # close, adj_close, market_
 imoex = moex.read_moex_index('IMOEX')
 stocks = moex.adjust_for_splits(moex.combine_moex_stocks())  # все тикеры, склейка переименований
 
-# Облигации
-ofz_corp = moex.read_bonds_market()                  # доски TQOB + TQCB с 2021 года
-market = moex.read_bonds_market('ALL', start='2008-01-01', end='2009-12-31')  # весь рынок, все поля
-issues = moex.read_bonds_securities()                # параметры выпусков, включая погашенные
+# Облигации (polars): весь рынок с 1997 года, все поля ISS
+ofz_corp = moex.read_bonds_market(boards=['TQOB', 'TQCB'], start='2026-01-01')
+crisis = moex.read_bonds_market(start='2008-01-01', end='2009-12-31')
+issues = moex.read_bonds_securities()                # карточки выпусков, включая погашенные
 
-# Фьючерсы
+# Фьючерсы (polars)
 si = moex.read_futures_history(assets='Si', start='2024-01-01')
+
+# SQL поверх хранилища
+import lake
+zspread = lake.query("SELECT date, median(ZSPREAD) AS z FROM lake.bonds "
+                     "WHERE BOARDID = 'TQCB' GROUP BY date ORDER BY date")
 
 # Качество данных
 print(moex.quality_summary(moex.data_quality_report()))
@@ -80,7 +87,10 @@ marimo edit marimo/bond-market.py
 
 ```
 moexutils/
-├── moex_utils.py        # ядро библиотеки
+├── moex_utils.py        # основной интерфейс: акции, индексы, корп. события, качество данных
+├── lake.py              # хранилище DuckLake (каталог Postgres, результаты — polars)
+├── history.py           # история рынков в хранилище: облигации, фьючерсы, реестры бумаг
+├── iss.py               # доступ к MOEX ISS: HTTP-сессия, разбор ответов в polars
 ├── update_data.py       # пайплайн обновления (CLI)
 ├── update_data.bat      # запуск на Windows
 ├── scheduled_update.cmd # обертка для планировщика задач
@@ -90,7 +100,7 @@ moexutils/
 ├── metadata/            # реестры: сплиты, переименования, снятые с торгов, ставка ЦБ
 └── logs/                # логи обновлений (не в git)
 
-F:\moex-data/           # данные (MOEX_DATA_ROOT): data/ indexes/ bonds/ futures/ — вне git и облака
+F:\moex-data/           # данные (MOEX_DATA_ROOT), вне git и облака: lake/ (хранилище), data/ и indexes/ (акции, индексы)
 ```
 
 Рыночные данные лежат вне проекта, в папке из переменной окружения `MOEX_DATA_ROOT` (на рабочей машине `F:\moex-data`): облачная синхронизация частых перезаписей портила файлы. Без переменной данные ищутся в папке проекта.

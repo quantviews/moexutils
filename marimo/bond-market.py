@@ -2,17 +2,16 @@
 marimo notebook: Долговой рынок — кривая ОФЗ, доходности выпусков, RGBITR
 
 Использование:
-1. Первичная выгрузка данных (мониторинг всех выпусков досок):
-   python update_data.py --no-update --no-adj --no-cap --bonds-market-init TQOB,TQCB
-   (дальше доски обновляются штатным шагом 1c update_data.py)
+1. Данные — полная история рынка облигаций в хранилище (lake.bonds); первичная
+   выгрузка: python update_data.py --history-init bonds
+   (дальше обновляется ночным шагом 1c update_data.py)
 2. marimo edit bond-market.py
 
 Функционал:
 - Кривая доходности ОФЗ (YTM × срок до погашения): сегодня против выбранной
   прошлой даты; только выпуски с фиксированным купоном (ОФЗ-ПД)
 - Сводка: короткий/длинный конец, наклон кривой, сдвиг за период
-- История кривой из мониторинга: ОФЗ 2 года / 10 лет, ключевая ставка,
-  терм-спред 10л−2г
+- История кривой: ОФЗ 2 года / 10 лет, ключевая ставка, терм-спред 10л−2г
 - Корпоративные выпуски (TQCB): G-спреды к кривой ОФЗ (ликвидные, оборот
   ≥ 1 млн руб) + история медианного G-спреда
 - RGBITR (гособлигации, полная доходность) против IMOEX
@@ -33,9 +32,10 @@ def _():
     # moex_utils лежит в корне проекта (родительская папка от marimo/)
     import sys as _sys
     import os as _os
+    import datetime as dt
     _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
     import moex_utils as moex
-    import pandas as pd
+    import polars as pl
     import numpy as np
     import marimo as mo
     try:
@@ -44,7 +44,7 @@ def _():
     except ImportError:
         go = None
         plotly_available = False
-    return go, mo, moex, np, pd, plotly_available
+    return dt, go, mo, moex, np, pl, plotly_available
 
 
 @app.cell(hide_code=True)
@@ -81,136 +81,87 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(mo, moex, pd):
-    # Загрузка вселенной единым длинным DataFrame.
-    # Приоритет — консолидированный мониторинг досок (bonds/market_<SEG>/<YYYY>.parquet,
-    # все выпуски, обновляется по датам); фоллбэк — пофайловые истории + params.
-    import os as _osb
+def _(mo, moex, pl):
+    # Все выпуски досок TQOB (гособлигации) и TQCB (корпоративные) из хранилища
+    _COLS = ['date', 'SECID', 'BOARDID', 'SHORTNAME', 'CLOSE', 'LEGALCLOSEPRICE',
+             'YIELDCLOSE', 'DURATION', 'VALUE', 'MATDATE', 'FACEVALUE', 'FACEUNIT',
+             'COUPONPERCENT']
+    _OFZ_SERIES = {'25': 'ПД', '26': 'ПД', '24': 'ПК', '29': 'ПК',
+                   '52': 'ИН', '46': 'АД', '48': 'АД'}
 
-    def _bond_type(_secid):
-        """Тип ОФЗ по серии в SECID: SU26238RMFS4 → 26 → ПД"""
-        if not str(_secid).startswith('SU') or len(str(_secid)) < 4:
-            return 'прочее'
-        _series = str(_secid)[2:4]
-        return {'25': 'ПД', '26': 'ПД', '24': 'ПК', '29': 'ПК',
-                '52': 'ИН', '46': 'АД', '48': 'АД'}.get(_series, 'прочее')
-
-    _LONG_COLS = ['date', 'SECID', 'SHORTNAME', 'CLOSE', 'PRICE_ALT', 'YIELDCLOSE',
-                  'DURATION', 'VALUE', 'MATDATE', 'FACEVALUE', 'FACEUNIT',
-                  'COUPONPERCENT', 'segment']
-
-    bonds_long = pd.DataFrame(columns=_LONG_COLS)
-    _src_desc = ''
     try:
-        _mkt = moex.read_bonds_market()
-        _mkt = _mkt.rename(columns={'LEGALCLOSEPRICE': 'PRICE_ALT'})
-        for _c in _LONG_COLS:
-            if _c not in _mkt.columns:
-                _mkt[_c] = None
-        bonds_long = _mkt[_LONG_COLS]
-        _segs = sorted(bonds_long['segment'].dropna().unique())
-        _src_desc = 'мониторинг досок ' + ', '.join(_segs)
-    except FileNotFoundError:
-        try:
-            _params = moex.read_bonds_params().dropna(subset=['SECID'])
-            _params = _params.drop_duplicates(subset=['SECID'], keep='last')
-            _frames = []
-            for _r in _params.itertuples():
-                _fp = _osb.path.join(moex.BONDS_FOLDER, f"{_r.SECID}.parquet")
-                if not _osb.path.exists(_fp):
-                    continue
-                _px = pd.read_parquet(_fp).sort_index()
-                _f = pd.DataFrame({
-                    'date': _px.index,
-                    'SECID': _r.SECID,
-                    'CLOSE': _px.get('CLOSE'),
-                    'PRICE_ALT': _px.get('WAPRICE'),
-                    'YIELDCLOSE': _px.get('YIELDCLOSE'),
-                    'DURATION': _px.get('DURATION'),
-                    'VALUE': _px.get('VALUE'),
-                })
-                _f['SHORTNAME'] = getattr(_r, 'SHORTNAME', _r.SECID)
-                _f['MATDATE'] = getattr(_r, 'MATDATE', None)
-                _f['FACEVALUE'] = getattr(_r, 'FACEVALUE', 1000)
-                _f['FACEUNIT'] = getattr(_r, 'FACEUNIT', 'SUR')
-                _f['COUPONPERCENT'] = getattr(_r, 'COUPONPERCENT', 0)
-                _f['segment'] = getattr(_r, 'segment', '')
-                _frames.append(_f)
-            if _frames:
-                bonds_long = pd.concat(_frames, ignore_index=True)[_LONG_COLS]
-                _src_desc = 'пофайловые истории выпусков'
-        except FileNotFoundError:
-            pass
+        bonds_long = (
+            moex.read_bonds_market(boards=['TQOB', 'TQCB'], columns=_COLS)
+            .rename({'LEGALCLOSEPRICE': 'PRICE_ALT', 'BOARDID': 'segment'})
+            .with_columns(
+                pl.col('MATDATE').cast(pl.Utf8).str.to_date('%Y-%m-%d', strict=False),
+                # тип ОФЗ по серии в SECID: SU26238RMFS4 -> 26 -> ПД
+                pl.when(pl.col('SECID').str.starts_with('SU'))
+                  .then(pl.col('SECID').str.slice(2, 2).replace_strict(_OFZ_SERIES, default='прочее'))
+                  .otherwise(pl.lit('прочее')).alias('bond_type'),
+            )
+        )
+        _error = None
+    except Exception as _e:
+        bonds_long = pl.DataFrame()
+        _error = str(_e)
 
-    bonds_ready = len(bonds_long) > 0
+    bonds_ready = bonds_long.height > 0
     if bonds_ready:
-        bonds_long = bonds_long.copy()
-        bonds_long['date'] = pd.to_datetime(bonds_long['date'])
-        bonds_long['bond_type'] = bonds_long['SECID'].map(_bond_type)
         _status = mo.md(
-            f"**Данные:** {bonds_long['SECID'].nunique()} выпусков "
-            f"({_src_desc}) · последняя дата: {bonds_long['date'].max():%d.%m.%Y}")
+            f"**Данные:** {bonds_long['SECID'].n_unique()} выпусков досок TQOB и TQCB "
+            f"(хранилище, с {bonds_long['date'].min():%d.%m.%Y}) · "
+            f"последняя дата: {bonds_long['date'].max():%d.%m.%Y}")
     else:
         _status = mo.md(
-            "⚠️ **Данные облигаций не выгружены.** Для мониторинга всех выпусков "
-            "выполните разово:\n\n"
-            "```\npython update_data.py --no-update --no-adj --no-cap "
-            "--bonds-market-init TQOB,TQCB\n```\n\n"
-            "Дальше доски будут обновляться обычным `update_data.py` (шаг 1c)."
+            "⚠️ **Данные облигаций не загружены** из хранилища"
+            + (f" ({_error})" if _error else "") + ". Первичная выгрузка:\n\n"
+            "```\npython update_data.py --history-init bonds\n```"
         )
     _status
     return bonds_long, bonds_ready
 
 
 @app.cell(hide_code=True)
-def _(bonds_long, bonds_ready, moex, pd):
+def _(bonds_long, bonds_ready, dt, moex, pl):
     # Метрики всех выпусков на дату (последняя котировка не старше 14 дней до нее)
     def bonds_snapshot(asof=None):
-        _w = bonds_long if asof is None else bonds_long[bonds_long['date'] <= asof]
-        if len(_w) == 0:
-            return pd.DataFrame()
-        _last_rows = _w.sort_values('date').groupby('SECID', as_index=False).tail(1)
-        _ref = _last_rows['date'].max() if asof is None else asof
-        _last_rows = _last_rows[_last_rows['date'] >= _ref - pd.Timedelta(days=14)]
+        _w = bonds_long if asof is None else bonds_long.filter(pl.col('date') <= asof)
+        if _w.height == 0:
+            return pl.DataFrame()
+        _last = _w.sort('date').group_by('SECID').last()
+        _ref = _last['date'].max() if asof is None else asof
+        _last = _last.filter(pl.col('date') >= _ref - dt.timedelta(days=14))
 
         rows = []
-        for _r in _last_rows.itertuples():
-            _date = _r.date
-            _price = _r.CLOSE
-            if pd.isna(_price):
-                _price = _r.PRICE_ALT
-            _mat = pd.to_datetime(_r.MATDATE, errors='coerce')
-            _face = float(_r.FACEVALUE) if pd.notna(_r.FACEVALUE) else 1000.0
-            _coupon = float(_r.COUPONPERCENT) if pd.notna(_r.COUPONPERCENT) else 0.0
-            if pd.isna(_price) or pd.isna(_mat):
+        for _r in _last.iter_rows(named=True):
+            _price = _r['CLOSE'] if _r['CLOSE'] is not None else _r['PRICE_ALT']
+            _mat = _r['MATDATE']
+            if _price is None or _mat is None:
                 continue
-            _years = (_mat - _date).days / 365.25
+            _years = (_mat - _r['date']).days / 365.25
             if _years <= 0.05:
                 continue
-            _price = float(_price)
+            _face = _r['FACEVALUE'] if _r['FACEVALUE'] is not None else 1000.0
+            _coupon = _r['COUPONPERCENT'] if _r['COUPONPERCENT'] is not None else 0.0
 
             # Биржевые YTM/дюрация из истории ISS (точные: с НКД и фактическим
             # графиком купонов); упрощенная модель — фоллбэк для строк без них
-            _y_exch = _r.YIELDCLOSE
-            if _y_exch is not None and pd.notna(_y_exch) and 0 < float(_y_exch) < 100:
-                _ytm = float(_y_exch)
-                _src = 'ISS'
+            _y = _r['YIELDCLOSE']
+            if _y is not None and 0 < _y < 100:
+                _ytm, _src = _y, 'ISS'
             else:
-                _ytm = moex.calculate_ytm(_price, _face, _coupon, _years)
-                _src = 'модель'
-
-            _d_exch = _r.DURATION  # ISS отдает дюрацию в днях
-            if _d_exch is not None and pd.notna(_d_exch) and float(_d_exch) > 0:
-                _dur = float(_d_exch) / 365.25
-            else:
-                _dur = moex.calculate_duration(_price, _face, _coupon, _years, _ytm)
+                _ytm, _src = moex.calculate_ytm(_price, _face, _coupon, _years), 'модель'
+            _d = _r['DURATION']  # ISS отдает дюрацию в днях
+            _dur = (_d / 365.25 if _d is not None and _d > 0
+                    else moex.calculate_duration(_price, _face, _coupon, _years, _ytm))
 
             rows.append({
-                'SECID': _r.SECID,
-                'name': _r.SHORTNAME if pd.notna(_r.SHORTNAME) else _r.SECID,
-                'type': _r.bond_type,
-                'segment': _r.segment if pd.notna(_r.segment) else '',
-                'faceunit': _r.FACEUNIT if pd.notna(_r.FACEUNIT) else 'SUR',
+                'SECID': _r['SECID'],
+                'name': _r['SHORTNAME'] or _r['SECID'],
+                'type': _r['bond_type'],
+                'segment': _r['segment'] or '',
+                'faceunit': _r['FACEUNIT'] or 'SUR',
                 'maturity': _mat,
                 'years': _years,
                 'coupon': _coupon,
@@ -218,56 +169,59 @@ def _(bonds_long, bonds_ready, moex, pd):
                 'ytm': _ytm,
                 'duration': _dur,
                 'convexity': moex.calculate_convexity(_price, _face, _coupon, _years, _ytm),
-                'value': float(_r.VALUE) if pd.notna(_r.VALUE) else 0.0,
+                'value': _r['VALUE'] if _r['VALUE'] is not None else 0.0,
                 'src': _src,
-                'date': _date,
+                'date': _r['date'],
             })
-        return pd.DataFrame(rows)
+        return pl.DataFrame(rows)
 
-    snap_now = bonds_snapshot() if bonds_ready else pd.DataFrame()
+    snap_now = bonds_snapshot() if bonds_ready else pl.DataFrame()
     return bonds_snapshot, snap_now
 
 
 @app.cell(hide_code=True)
-def _(bonds_ready, bonds_snapshot, compare_dropdown, pd, snap_now):
+def _(bonds_ready, bonds_snapshot, compare_dropdown, dt, pl, snap_now):
     # Срез кривой на прошлую дату
-    if bonds_ready and len(snap_now):
-        _last_date = snap_now['date'].max()
-        compare_date = _last_date - pd.DateOffset(months=compare_dropdown.value)
+    def _minus_months(_d, _m):
+        _y, _mo = divmod(_d.month - 1 - _m, 12)
+        return dt.date(_d.year + _y, _mo + 1, min(_d.day, 28))
+
+    if bonds_ready and snap_now.height:
+        compare_date = _minus_months(snap_now['date'].max(), compare_dropdown.value)
         snap_past = bonds_snapshot(asof=compare_date)
     else:
         compare_date = None
-        snap_past = pd.DataFrame()
+        snap_past = pl.DataFrame()
     return compare_date, snap_past
 
 
 @app.cell(hide_code=True)
-def _(compare_dropdown, go, mo, plotly_available, snap_now, snap_past):
+def _(compare_dropdown, go, mo, pl, plotly_available, snap_now, snap_past):
     # Кривая ОФЗ-ПД: сейчас против прошлой даты
-    if not plotly_available or len(snap_now) == 0:
+    if not plotly_available or snap_now.height == 0:
         curve_block = mo.md("")
     else:
-        _now = snap_now[snap_now['type'] == 'ПД'].sort_values('years')
-        _past = (snap_past[snap_past['type'] == 'ПД'].sort_values('years')
-                 if len(snap_past) else snap_past)
+        _now = snap_now.filter(pl.col('type') == 'ПД').sort('years')
+        _past = (snap_past.filter(pl.col('type') == 'ПД').sort('years')
+                 if snap_past.height else snap_past)
 
         _figc = go.Figure()
         _figc.add_scatter(
-            x=_now['years'], y=_now['ytm'], mode='lines+markers',
+            x=_now['years'].to_list(), y=_now['ytm'].to_list(), mode='lines+markers',
             name=f"сейчас ({_now['date'].max():%d.%m.%Y})",
             line=dict(color='#102D69', width=2.2), marker=dict(size=7),
-            customdata=_now[['name', 'SECID', 'duration']].values,
+            customdata=_now.select('name', 'SECID', 'duration').rows(),
             hovertemplate='<b>%{customdata[0]}</b> (%{customdata[1]})'
                           '<br>срок: %{x:.1f} лет · YTM: %{y:.2f}%'
                           '<br>дюрация: %{customdata[2]:.1f}<extra></extra>')
-        if len(_past):
+        if _past.height:
             _figc.add_scatter(
-                x=_past['years'], y=_past['ytm'], mode='lines+markers',
+                x=_past['years'].to_list(), y=_past['ytm'].to_list(), mode='lines+markers',
                 name=f"{compare_dropdown.selected_key or 'ранее'} "
                      f"({_past['date'].max():%d.%m.%Y})",
                 line=dict(color='#9AAFD4', width=1.6, dash='dash'),
                 marker=dict(size=5),
-                customdata=_past[['name']].values,
+                customdata=_past.select('name').rows(),
                 hovertemplate='<b>%{customdata[0]}</b>'
                               '<br>срок: %{x:.1f} лет · YTM: %{y:.2f}%<extra></extra>')
         _figc.update_layout(
@@ -284,7 +238,7 @@ def _(compare_dropdown, go, mo, plotly_available, snap_now, snap_past):
 
 
 @app.cell(hide_code=True)
-def _(mo, snap_now, snap_past):
+def _(mo, pl, snap_now, snap_past):
     # Сводка по кривой
     def _sgn(_v, _suffix=' п.п.', _nd=2):
         if _v != _v:
@@ -293,11 +247,10 @@ def _(mo, snap_now, snap_past):
         return f'<span class="{_cls}">{format(_v, f"+.{_nd}f")}{_suffix}</span>'
 
     def _bucket(_snap, _lo, _hi):
-        _pd_only = _snap[_snap['type'] == 'ПД']
-        _b = _pd_only[(_pd_only['years'] >= _lo) & (_pd_only['years'] <= _hi)]['ytm']
-        return float(_b.mean()) if len(_b) else float('nan')
+        _b = _snap.filter((pl.col('type') == 'ПД') & pl.col('years').is_between(_lo, _hi))['ytm']
+        return float(_b.mean()) if _b.len() else float('nan')
 
-    if len(snap_now) == 0:
+    if snap_now.height == 0:
         curve_summary = mo.md("")
     else:
         _s2 = _bucket(snap_now, 1, 3)
@@ -310,7 +263,7 @@ def _(mo, snap_now, snap_past):
             + (" — **кривая инвертирована** (рынок ждет снижения ставки)"
                if _slope < -0.3 else "")
         ]
-        if len(snap_past):
+        if snap_past.height:
             _p2 = _bucket(snap_past, 1, 3)
             _p10 = _bucket(snap_past, 8, 12)
             _lines.append(
@@ -322,84 +275,77 @@ def _(mo, snap_now, snap_past):
 
 
 @app.cell(hide_code=True)
-def _(bonds_long, bonds_ready, np, pd):
-    # История кривой и спредов из накопленного мониторинга:
-    # на каждую дату — доходности ОФЗ в точках 2 и 10 лет (интерполяция)
-    # и медианный G-спред ликвидных корпоратов
-    curve_hist = pd.DataFrame()
-    gspread_hist = pd.DataFrame()
+def _(bonds_long, bonds_ready, np, pl):
+    # История кривой и спредов: на каждую дату — доходности ОФЗ в точках 2 и 10 лет
+    # (интерполяция) и медианный G-спред ликвидных корпоратов
+    curve_hist = pl.DataFrame()
+    gspread_hist = pl.DataFrame()
     if bonds_ready:
-        _h = bonds_long.copy()
-        _h['ytm_h'] = pd.to_numeric(_h['YIELDCLOSE'], errors='coerce')
-        _h['mat_h'] = pd.to_datetime(_h['MATDATE'], errors='coerce')
-        _h = _h[_h['ytm_h'].between(0.1, 60) & pd.notna(_h['mat_h'])]
-        _h['yrs_h'] = (_h['mat_h'] - _h['date']).dt.days / 365.25
-        _h = _h[_h['yrs_h'] > 0.1]
+        _h = (bonds_long
+              .with_columns(yrs_h=(pl.col('MATDATE') - pl.col('date')).dt.total_days() / 365.25)
+              .filter(pl.col('YIELDCLOSE').is_between(0.1, 60) & (pl.col('yrs_h') > 0.1)))
 
-        _ofz_h = _h[_h['bond_type'] == 'ПД']
-        _ofz_by_date = {_d: _g.sort_values('yrs_h')
-                        for _d, _g in _ofz_h.groupby('date')}
-
+        _ofz_by_date = {
+            _k[0]: _g.sort('yrs_h')
+            for _k, _g in _h.filter(pl.col('bond_type') == 'ПД').partition_by('date', as_dict=True).items()
+        }
         _rows_c = []
         for _d, _g in _ofz_by_date.items():
-            if len(_g) >= 3 and _g['yrs_h'].iloc[0] <= 2 and _g['yrs_h'].iloc[-1] >= 10:
-                _y2, _y10 = np.interp([2.0, 10.0], _g['yrs_h'], _g['ytm_h'])
-                _rows_c.append({'date': _d, 'y2': _y2, 'y10': _y10})
-        curve_hist = pd.DataFrame(_rows_c).sort_values('date') if _rows_c else curve_hist
+            _yrs = _g['yrs_h'].to_numpy()
+            if _g.height >= 3 and _yrs[0] <= 2 and _yrs[-1] >= 10:
+                _y2, _y10 = np.interp([2.0, 10.0], _yrs, _g['YIELDCLOSE'].to_numpy())
+                _rows_c.append({'date': _d, 'y2': float(_y2), 'y10': float(_y10)})
+        if _rows_c:
+            curve_hist = pl.DataFrame(_rows_c).sort('date')
 
-        _crp_h = _h[(_h['segment'] == 'TQCB')
-                    & (_h['FACEUNIT'].isin(['SUR', 'RUB']))
-                    & (pd.to_numeric(_h['VALUE'], errors='coerce').fillna(0) >= 1e6)]
+        _crp = _h.filter((pl.col('segment') == 'TQCB')
+                         & pl.col('FACEUNIT').is_in(['SUR', 'RUB'])
+                         & (pl.col('VALUE').fill_null(0) >= 1e6))
         _rows_g = []
-        for _d, _g in _crp_h.groupby('date'):
-            _o = _ofz_by_date.get(_d)
-            if _o is None or len(_o) < 3 or len(_g) < 20:
+        for _k, _g in _crp.partition_by('date', as_dict=True).items():
+            _o = _ofz_by_date.get(_k[0])
+            if _o is None or _o.height < 3 or _g.height < 20:
                 continue
-            _sp = (_g['ytm_h'].values
-                   - np.interp(_g['yrs_h'], _o['yrs_h'], _o['ytm_h'])) * 100
-            _rows_g.append({'date': _d, 'med_bp': float(np.median(_sp)), 'n': len(_g)})
-        gspread_hist = (pd.DataFrame(_rows_g).sort_values('date')
-                        if _rows_g else gspread_hist)
+            _sp = (_g['YIELDCLOSE'].to_numpy()
+                   - np.interp(_g['yrs_h'].to_numpy(), _o['yrs_h'].to_numpy(),
+                               _o['YIELDCLOSE'].to_numpy())) * 100
+            _rows_g.append({'date': _k[0], 'med_bp': float(np.median(_sp)), 'n': _g.height})
+        if _rows_g:
+            gspread_hist = pl.DataFrame(_rows_g).sort('date')
     return curve_hist, gspread_hist
 
 
 @app.cell(hide_code=True)
-def _(curve_hist, go, mo, moex, pd, plotly_available):
+def _(curve_hist, go, mo, moex, pl, plotly_available):
     # Динамика кривой: 2 года, 10 лет, ключевая ставка и терм-спред
-    if not plotly_available or len(curve_hist) < 20:
+    if not plotly_available or curve_hist.height < 20:
         term_block = mo.md("")
     else:
         from plotly.subplots import make_subplots
+        _dates = curve_hist['date'].to_list()
         _figt = make_subplots(rows=2, cols=1, shared_xaxes=True,
                               row_heights=[0.68, 0.32], vertical_spacing=0.06)
-        _figt.add_scatter(x=curve_hist['date'], y=curve_hist['y10'],
+        _figt.add_scatter(x=_dates, y=curve_hist['y10'].to_list(),
                           name='ОФЗ 10 лет', line=dict(color='#102D69', width=1.8),
-                          hovertemplate='%{y:.2f}%<extra>10 лет</extra>',
-                          row=1, col=1)
-        _figt.add_scatter(x=curve_hist['date'], y=curve_hist['y2'],
+                          hovertemplate='%{y:.2f}%<extra>10 лет</extra>', row=1, col=1)
+        _figt.add_scatter(x=_dates, y=curve_hist['y2'].to_list(),
                           name='ОФЗ 2 года', line=dict(color='#0050CF', width=1.6),
-                          hovertemplate='%{y:.2f}%<extra>2 года</extra>',
-                          row=1, col=1)
-        _kr = moex.load_key_rate()
-        if len(_kr):
-            _kr_s = (_kr.set_index('date')['rate']
-                     .reindex(pd.to_datetime(curve_hist['date']), method='ffill'))
-            _figt.add_scatter(x=curve_hist['date'], y=_kr_s.values,
-                              name='ключевая ставка',
+                          hovertemplate='%{y:.2f}%<extra>2 года</extra>', row=1, col=1)
+        _kr = pl.read_csv(moex.KEY_RATE_FILE, try_parse_dates=True).sort('date')
+        if _kr.height:
+            _kr_s = curve_hist.select('date').join_asof(_kr, on='date', strategy='backward')
+            _figt.add_scatter(x=_dates, y=_kr_s['rate'].to_list(), name='ключевая ставка',
                               line=dict(color='#7f7f7f', width=1.2, dash='dot'),
-                              hovertemplate='%{y:.2f}%<extra>ключевая</extra>',
-                              row=1, col=1)
-        _ts = curve_hist['y10'] - curve_hist['y2']
-        _figt.add_scatter(x=curve_hist['date'], y=_ts, name='спред 10л − 2г',
-                          fill='tozeroy', line=dict(color='#d73027', width=1.2),
+                              hovertemplate='%{y:.2f}%<extra>ключевая</extra>', row=1, col=1)
+        _figt.add_scatter(x=_dates, y=(curve_hist['y10'] - curve_hist['y2']).to_list(),
+                          name='спред 10л − 2г', fill='tozeroy',
+                          line=dict(color='#d73027', width=1.2),
                           fillcolor='rgba(215,48,39,0.15)',
-                          hovertemplate='%{y:+.2f} п.п.<extra>терм-спред</extra>',
-                          row=2, col=1)
+                          hovertemplate='%{y:+.2f} п.п.<extra>терм-спред</extra>', row=2, col=1)
         _figt.add_hline(y=0, line_width=1, line_color='#999', row=2, col=1)
         _figt.update_layout(
             height=520, hovermode='x unified',
-            title=dict(text='Кривая ОФЗ во времени: 2 года, 10 лет и терм-спред',
-                       font_size=15),
+            title=dict(text='Кривая ОФЗ во времени: 2 года, 10 лет и терм-спред', font_size=15),
             legend=dict(orientation='h', y=1.08, x=1, xanchor='right'),
             margin=dict(t=52, l=10, r=10, b=10),
         )
@@ -419,49 +365,45 @@ def _(curve_hist, go, mo, moex, pd, plotly_available):
 
 
 @app.cell(hide_code=True)
-def _(go, gspread_hist, mo, np, pd, plotly_available, snap_now):
+def _(go, gspread_hist, mo, np, pl, plotly_available, snap_now):
     # Корпоративные облигации: G-спреды к интерполированной кривой ОФЗ
-    _ofz = (snap_now[snap_now['type'] == 'ПД'].sort_values('years')
-            if len(snap_now) else pd.DataFrame())
-    _corp_all = (snap_now[(snap_now['segment'] == 'TQCB')
-                          & (snap_now['faceunit'].isin(['SUR', 'RUB']))
-                          & snap_now['ytm'].between(0.1, 60)].copy()
-                 if len(snap_now) else pd.DataFrame())
+    _ofz = (snap_now.filter(pl.col('type') == 'ПД').sort('years')
+            if snap_now.height else pl.DataFrame())
+    _corp_all = (snap_now.filter((pl.col('segment') == 'TQCB')
+                                 & pl.col('faceunit').is_in(['SUR', 'RUB'])
+                                 & pl.col('ytm').is_between(0.1, 60))
+                 if snap_now.height else pl.DataFrame())
     # Неликвид дает фиктивные спреды: оставляем выпуски с оборотом ≥ 1 млн руб
-    _corp = (_corp_all[_corp_all['value'] >= 1e6].copy()
-             if len(_corp_all) else _corp_all)
-    if len(_corp_all) and len(_corp) == 0:
-        _corp = _corp_all.copy()
+    _corp = _corp_all.filter(pl.col('value') >= 1e6) if _corp_all.height else _corp_all
+    if _corp_all.height and _corp.height == 0:
+        _corp = _corp_all
 
-    if not plotly_available or len(snap_now) == 0:
+    if not plotly_available or snap_now.height == 0:
         corp_block = mo.md("")
-    elif len(_corp_all) == 0:
-        corp_block = mo.md(
-            "*Корпоративные облигации не выгружены. Для G-спредов выполните разово:*\n\n"
-            "```\npython update_data.py --no-update --no-adj --no-cap "
-            "--bonds-market-init TQCB\n```"
-        )
-    elif len(_ofz) < 3:
+    elif _corp_all.height == 0:
+        corp_block = mo.md("*Нет котировок корпоративных облигаций (TQCB) на последнюю дату*")
+    elif _ofz.height < 3:
         corp_block = mo.md("*Недостаточно точек кривой ОФЗ для расчета спредов*")
     else:
         # G-спред = YTM корпората − YTM ОФЗ, интерполированная на его срок
-        _corp['gspread_bp'] = (
-            _corp['ytm'] - np.interp(_corp['years'], _ofz['years'], _ofz['ytm'])
-        ) * 100
+        _corp = _corp.with_columns(gspread_bp=pl.Series(
+            (_corp['ytm'].to_numpy()
+             - np.interp(_corp['years'].to_numpy(), _ofz['years'].to_numpy(),
+                         _ofz['ytm'].to_numpy())) * 100))
 
         _figg = go.Figure()
         _figg.add_scatter(
-            x=_ofz['years'], y=_ofz['ytm'], mode='lines',
+            x=_ofz['years'].to_list(), y=_ofz['ytm'].to_list(), mode='lines',
             name='кривая ОФЗ', line=dict(color='#102D69', width=2),
             hovertemplate='ОФЗ %{x:.1f} лет: %{y:.2f}%<extra></extra>')
         _figg.add_scatter(
-            x=_corp['years'], y=_corp['ytm'], mode='markers',
+            x=_corp['years'].to_list(), y=_corp['ytm'].to_list(), mode='markers',
             name='корпораты (TQCB)',
-            marker=dict(size=8, color=_corp['gspread_bp'],
+            marker=dict(size=8, color=_corp['gspread_bp'].to_list(),
                         colorscale='RdYlGn', reversescale=True, cmin=0,
                         cmax=float(_corp['gspread_bp'].quantile(0.95)),
                         colorbar=dict(title='спред,<br>б.п.')),
-            customdata=_corp[['name', 'gspread_bp']].values,
+            customdata=_corp.select('name', 'gspread_bp').rows(),
             hovertemplate='<b>%{customdata[0]}</b><br>срок: %{x:.1f} лет · '
                           'YTM: %{y:.2f}%<br>G-спред: %{customdata[1]:+.0f} б.п.'
                           '<extra></extra>')
@@ -475,53 +417,50 @@ def _(go, gspread_hist, mo, np, pd, plotly_available, snap_now):
         )
 
         _med = float(_corp['gspread_bp'].median())
-        _wide = _corp.nlargest(5, 'gspread_bp')
-        _tight = _corp.nsmallest(5, 'gspread_bp')
+        _wide = _corp.sort('gspread_bp', descending=True).head(5)
+        _tight = _corp.sort('gspread_bp').head(5)
         _md_corp = mo.md(
-            f"**Корпоративный сегмент:** {len(_corp)} ликвидных выпусков "
-            f"(оборот ≥ 1 млн ₽, всего на доске {len(_corp_all)}) · "
+            f"**Корпоративный сегмент:** {_corp.height} ликвидных выпусков "
+            f"(оборот ≥ 1 млн ₽, всего на доске {_corp_all.height}) · "
             f"медианный G-спред **{_med:.0f} б.п.**\n\n"
             f"- Самые широкие: " + ", ".join(
-                f"**{_r.name}** {_r.gspread_bp:+.0f}" for _r in _wide.itertuples()) + "\n"
+                f"**{_n}** {_g:+.0f}" for _n, _g in _wide.select('name', 'gspread_bp').rows()) + "\n"
             f"- Самые узкие: " + ", ".join(
-                f"**{_r.name}** {_r.gspread_bp:+.0f}" for _r in _tight.itertuples())
+                f"**{_n}** {_g:+.0f}" for _n, _g in _tight.select('name', 'gspread_bp').rows())
         )
 
-        _tbl = _corp.sort_values('gspread_bp', ascending=False)[
-            ['SECID', 'name', 'maturity', 'years', 'price', 'ytm', 'duration',
-             'gspread_bp', 'value']
-        ].copy()
-        _tbl['maturity'] = _tbl['maturity'].dt.strftime('%d.%m.%Y')
-        _tbl['value'] = _tbl['value'] / 1e6
-        _tbl.columns = ['SECID', 'Выпуск', 'Погашение', 'Лет', 'Цена %',
-                        'YTM %', 'Дюрация', 'G-спред, б.п.', 'Оборот, млн ₽']
-        for _cc, _nd2 in (('Лет', 1), ('Цена %', 2), ('YTM %', 2),
-                          ('Дюрация', 1), ('G-спред, б.п.', 0), ('Оборот, млн ₽', 1)):
-            _tbl[_cc] = _tbl[_cc].round(_nd2)
+        _tbl = (_corp.sort('gspread_bp', descending=True)
+                .select(
+                    'SECID',
+                    pl.col('name').alias('Выпуск'),
+                    pl.col('maturity').dt.strftime('%d.%m.%Y').alias('Погашение'),
+                    pl.col('years').round(1).alias('Лет'),
+                    pl.col('price').round(2).alias('Цена %'),
+                    pl.col('ytm').round(2).alias('YTM %'),
+                    pl.col('duration').round(1).alias('Дюрация'),
+                    pl.col('gspread_bp').round(0).alias('G-спред, б.п.'),
+                    (pl.col('value') / 1e6).round(1).alias('Оборот, млн ₽')))
 
         _parts = [_md_corp, _figg,
                   mo.ui.table(_tbl, pagination=True, page_size=15,
                               label='Корпоративные выпуски по G-спреду')]
 
         # История медианного G-спреда — барометр кредитных условий
-        if len(gspread_hist) >= 20:
+        if gspread_hist.height >= 20:
+            _gh = gspread_hist.with_columns(
+                sm=pl.col('med_bp').rolling_median(window_size=21, min_samples=10))
             _figh = go.Figure()
             _figh.add_scatter(
-                x=gspread_hist['date'], y=gspread_hist['med_bp'],
-                name='медианный G-спред',
+                x=_gh['date'].to_list(), y=_gh['med_bp'].to_list(), name='медианный G-спред',
                 line=dict(color='#0050CF', width=1.2),
-                customdata=gspread_hist[['n']].values,
-                hovertemplate='%{y:.0f} б.п. · выпусков: %{customdata[0]}'
-                              '<extra></extra>')
-            _sm = gspread_hist.set_index('date')['med_bp'].rolling(
-                21, min_periods=10).median()
-            _figh.add_scatter(x=_sm.index, y=_sm.values, name='медиана за месяц',
-                              line=dict(color='#102D69', width=2),
+                customdata=_gh.select('n').rows(),
+                hovertemplate='%{y:.0f} б.п. · выпусков: %{customdata[0]}<extra></extra>')
+            _figh.add_scatter(x=_gh['date'].to_list(), y=_gh['sm'].to_list(),
+                              name='медиана за месяц', line=dict(color='#102D69', width=2),
                               hovertemplate='%{y:.0f} б.п.<extra>сглаженный</extra>')
             _figh.update_layout(
                 height=340, hovermode='x unified',
-                title=dict(text='Медианный G-спред ликвидных корпоратов во времени',
-                           font_size=14),
+                title=dict(text='Медианный G-спред ликвидных корпоратов во времени', font_size=14),
                 yaxis=dict(title='б.п.'),
                 legend=dict(orientation='h', y=1.12, x=1, xanchor='right'),
                 margin=dict(t=48, l=10, r=10, b=10),
@@ -538,13 +477,17 @@ def _(go, gspread_hist, mo, np, pd, plotly_available, snap_now):
 
 
 @app.cell(hide_code=True)
-def _(go, mo, moex, pd, plotly_available):
+def _(dt, go, mo, moex, pl, plotly_available):
     # RGBITR (гособлигации, полная доходность) против IMOEX за год
+    def _index(_ticker):
+        # кэш индексов пока в Parquet (moex_utils, pandas) — сразу в polars
+        _df = pl.from_pandas(moex.read_moex_index(_ticker).reset_index())
+        return (_df.select(pl.col('date').cast(pl.Date), pl.col('close').cast(pl.Float64))
+                .sort('date'))
+
     try:
-        _rgb = moex.read_moex_index('RGBITR')
-        _rgb.index = pd.to_datetime(_rgb.index)
-        _rgb_close = _rgb['close'].astype(float).sort_index()
-        _rgb_ok = True
+        _rgb = _index('RGBITR')
+        _rgb_ok = _rgb.height > 0
     except Exception:
         _rgb_ok = False
 
@@ -553,18 +496,18 @@ def _(go, mo, moex, pd, plotly_available):
             "*Кэш RGBITR не найден — обновите индексы: `python update_data.py`*"
         ) if plotly_available else mo.md("")
     else:
-        _from = _rgb_close.index.max() - pd.DateOffset(years=1)
-        _r = _rgb_close[_rgb_close.index >= _from]
+        _last = _rgb['date'].max()
+        _from = dt.date(_last.year - 1, _last.month, min(_last.day, 28))
+        _r = _rgb.filter(pl.col('date') >= _from)
         _figr = go.Figure()
-        _figr.add_scatter(x=_r.index, y=_r / _r.iloc[0] * 100, name='RGBITR (ОФЗ, полная дох.)',
+        _figr.add_scatter(x=_r['date'].to_list(), y=(_r['close'] / _r['close'][0] * 100).to_list(),
+                          name='RGBITR (ОФЗ, полная дох.)',
                           line=dict(color='#102D69', width=1.8),
                           hovertemplate='%{y:.1f}<extra>RGBITR</extra>')
         try:
-            _imx = moex.read_moex_index('IMOEX')
-            _imx.index = pd.to_datetime(_imx.index)
-            _i = _imx['close'].astype(float).sort_index()
-            _i = _i[_i.index >= _from]
-            _figr.add_scatter(x=_i.index, y=_i / _i.iloc[0] * 100, name='IMOEX (акции)',
+            _i = _index('IMOEX').filter(pl.col('date') >= _from)
+            _figr.add_scatter(x=_i['date'].to_list(), y=(_i['close'] / _i['close'][0] * 100).to_list(),
+                              name='IMOEX (акции)',
                               line=dict(color='#7f7f7f', width=1.4, dash='dot'),
                               hovertemplate='%{y:.1f}<extra>IMOEX</extra>')
         except Exception:
@@ -581,24 +524,27 @@ def _(go, mo, moex, pd, plotly_available):
 
 
 @app.cell(hide_code=True)
-def _(mo, snap_now):
+def _(mo, pl, snap_now):
     # Таблица всех выпусков
-    if len(snap_now) == 0:
+    if snap_now.height == 0:
         bonds_table = mo.md("")
     else:
-        _t = snap_now.sort_values('years').copy()
-        _t['maturity'] = _t['maturity'].dt.strftime('%d.%m.%Y')
-        _t['value'] = _t['value'] / 1e6
-        _t = _t[['SECID', 'name', 'type', 'segment', 'maturity', 'years',
-                 'coupon', 'price', 'ytm', 'duration', 'convexity', 'value', 'src']]
-        _t.columns = ['SECID', 'Выпуск', 'Тип', 'Доска', 'Погашение', 'Лет',
-                      'Купон %', 'Цена %', 'YTM %', 'Дюрация', 'Выпуклость',
-                      'Оборот, млн ₽', 'Источник']
-        for _c, _nd in (('Лет', 1), ('Купон %', 2), ('Цена %', 2), ('YTM %', 2),
-                        ('Дюрация', 1), ('Выпуклость', 1), ('Оборот, млн ₽', 1)):
-            _t[_c] = _t[_c].round(_nd)
+        _t = snap_now.sort('years').select(
+            'SECID',
+            pl.col('name').alias('Выпуск'),
+            pl.col('type').alias('Тип'),
+            pl.col('segment').alias('Доска'),
+            pl.col('maturity').dt.strftime('%d.%m.%Y').alias('Погашение'),
+            pl.col('years').round(1).alias('Лет'),
+            pl.col('coupon').round(2).alias('Купон %'),
+            pl.col('price').round(2).alias('Цена %'),
+            pl.col('ytm').round(2).alias('YTM %'),
+            pl.col('duration').round(1).alias('Дюрация'),
+            pl.col('convexity').round(1).alias('Выпуклость'),
+            (pl.col('value') / 1e6).round(1).alias('Оборот, млн ₽'),
+            pl.col('src').alias('Источник'))
         bonds_table = mo.ui.table(_t, pagination=True, page_size=20,
-                                  label='Все сохраненные выпуски (YTM у ПК/ИН — некорректен, это флоатеры/линкеры)')
+                                  label='Все выпуски (YTM у ПК/ИН — некорректен, это флоатеры/линкеры)')
     bonds_table
     return
 

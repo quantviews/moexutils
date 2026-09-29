@@ -27,29 +27,24 @@ moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
     └── backfill_*.log
 
 moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не в git, не в облаке)
-├── data/                    # акции
+├── lake/                    # файлы данных хранилища DuckLake (каталог — PostgreSQL moex_lake)
+│   └── main/<таблица>/...   # bonds, futures, bonds_securities, empty_dates, stocks, indexes
+├── data/                    # акции — рабочий источник до перевода в хранилище
 │   ├── SBER/SBER.parquet
 │   └── ...
-├── indexes/                 # IMOEX.parquet, MCFTR.parquet, RGBITR.parquet
-├── bonds/
-│   ├── market_ALL/<YYYY>.parquet    # весь рынок облигаций с 1997 года, все доски и колонки
-│   ├── market_TQOB/<YYYY>.parquet   # доска гособлигаций с 2021 года (рабочие колонки)
-│   ├── market_TQCB/<YYYY>.parquet   # доска корпоративных облигаций с 2021 года
-│   ├── securities.parquet           # реестр параметров всех выпусков, включая погашенные
-│   ├── params.parquet               # снапшот параметров торгуемых выпусков досок
-│   └── <SECID>.parquet              # истории отдельных выпусков (ранний механизм)
-└── futures/
-    └── history/<YYYY>.parquet       # все контракты FORTS с 2002 года
-
+├── indexes/                 # кэш индексов IMOEX, MCFTR, RGBITR — рабочий источник до перевода
+├── bonds/, futures/         # прежнее файловое хранение — заменено хранилищем, не обновляется
 dividends/                   # соседний проект: F:\Yandex.Disk\FINANCE\dividends
 ├── data/<TICKER>.csv        # приведены к текущей акции — их читает moexutils
 ├── data/raw/<TICKER>.csv    # сырые значения с сайта
 └── metadata/splits.json     # реестр сплитов проекта dividends (внешний реестр для moexutils)
 ```
 
-**Почему данные вне Яндекс.Диска.** При многочасовых выгрузках и частой перезаписи годовых файлов клиент Яндекс.Диска создавал конфликтные копии и подменял файлы старыми серверными версиями — терялись даты (так пострадала история фьючерсов, восстановлена объединением версий). По той же причине `.git` исключен из синхронизации. Данные можно заново скачать с биржи, поэтому облачная копия им не нужна; код и реестры остаются в Яндекс.Диске и git.
+**Почему данные вне Яндекс.Диска.** При многочасовых выгрузках и частой перезаписи файлов клиент Яндекс.Диска создавал конфликтные копии и подменял файлы старыми серверными версиями — терялись даты (так пострадала история фьючерсов, восстановлена объединением версий). По той же причине `.git` исключен из синхронизации. Данные можно заново скачать с биржи, поэтому облачная копия им не нужна; код и реестры остаются в Яндекс.Диске и git.
 
-Без `MOEX_DATA_ROOT` данные ищутся в папке проекта (`moexutils/data`, `moexutils/bonds`, ...). Переменная задана для пользователя Windows постоянно; ее видят новые процессы, включая ночную задачу.
+Без `MOEX_DATA_ROOT` данные ищутся в папке проекта. Переменная задана для пользователя Windows постоянно; ее видят новые процессы, включая ночную задачу.
+
+**Хранилище DuckLake.** Облигации и фьючерсы (а после следующей части миграции — и акции с индексами) живут в таблицах DuckLake: каталог — база `moex_lake` в локальном PostgreSQL 17 (служба `postgresql-x64-17`), файлы данных — Parquet (zstd) в `F:\moex-data\lake`. Файлы хранилища вручную не трогать: какие из них актуальны, знает только каталог. Читать — через `lake.query(...)` или функции `moex_utils`/`history`; снимки старше 30 дней удаляются ночным обслуживанием, более свежие позволяют откатиться (`SELECT ... FROM lake.bonds AT (VERSION => n)`).
 
 ---
 
@@ -74,42 +69,32 @@ dividends/                   # соседний проект: F:\Yandex.Disk\FIN
 
 ---
 
-## Облигации
+## Облигации: `lake.bonds`
 
-### Весь рынок: `bonds/market_ALL/<YYYY>.parquet`
-
-Строка — выпуск на доске за торговую дату; ключ `date` + `SECID` + `BOARDID`. Все колонки истории ISS (набор со временем расширялся — в ранних годах часть колонок пустая):
+Строка — выпуск на доске за торговую дату; ключ `date` + `SECID` + `BOARDID`. Разбита по годам. Все колонки истории ISS (набор со временем расширялся — в ранних годах часть колонок пустая):
 
 | Группа | Колонки |
 |--------|---------|
-| Идентификация | `date`, `BOARDID`, `SECID`, `SHORTNAME`, `segment` (=`ALL`) |
+| Идентификация | `date`, `BOARDID`, `SECID`, `SHORTNAME` |
 | Цены (% от номинала) | `OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE`, `LEGALCLOSEPRICE`, `MARKETPRICE2`, `MARKETPRICE3`, `ADMITTEDQUOTE` |
 | Доходность и риск | `YIELDCLOSE`, `YIELDATWAP`, `YIELDTOOFFER`, `YIELDLASTCOUPON`, `DURATION` (дни), `ZSPREAD`, `ZSPREADATWAPRICE`, `CALLOPTIONYIELD`, `CALLOPTIONDURATION` |
 | ОФЗ-ИН | `BEICLOSE` (breakeven-инфляция), `IRICPICLOSE` (индекс потребительских цен) |
 | Купон и номинал | `COUPONPERCENT`, `COUPONVALUE`, `ACCINT` (НКД), `FACEVALUE`, `FACEUNIT`, `FACEVALUE_TYPE`, `CURRENCYID`, `COUPON_DETAILS` |
-| Даты | `MATDATE`, `OFFERDATE`, `BUYBACKDATE`, `CALLOPTIONDATE`, `PUTOPTIONDATE`, `LASTTRADEDATE`, `DATEYIELDFROMISSUER` |
+| Даты (строки `YYYY-MM-DD`) | `MATDATE`, `OFFERDATE`, `BUYBACKDATE`, `CALLOPTIONDATE`, `PUTOPTIONDATE`, `LASTTRADEDATE`, `DATEYIELDFROMISSUER` |
 | Обороты | `VALUE`, `VOLUME`, `NUMTRADES`, `MP2VALTRD`, `MARKETPRICE3TRADESVALUE`, `ADMITTEDVALUE` |
 | Тип | `BONDTYPE`, `BONDSUBTYPE` |
 
-Доски по периодам: до перехода на режим Т+ основные торги шли на EQOB, EQNB, EQOS, EQNO и др.; TQOB работает с середины 2010-х, TQCB — примерно с 2019–2020 (точные даты видны в самих данных: `groupby('BOARDID')['date'].min()`); валютные — TQOD (USD), TQOE (EUR), TQOY (CNY), TQUD; TQRD. Типы колонок приведены: числовые — float, текстовые — string.
+Числовые колонки — DOUBLE, остальные — строки. Доски по периодам: до перехода на режим Т+ основные торги шли на EQOB, EQNB, EQOS, EQNO и др.; TQOB — с середины 2010-х, TQCB — примерно с 2019–2020 (точные даты: `SELECT BOARDID, min(date) FROM lake.bonds GROUP BY 1`).
 
-### Доски: `bonds/market_TQOB/`, `bonds/market_TQCB/`
+### Реестр выпусков: `lake.bonds_securities`
 
-Рабочий набор колонок: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE` (биржевая YTM, %), `DURATION` (дни), `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`; ключ `date` + `SECID`. История с 2021 года; их читает ноутбук `bond-market.py` (`read_bonds_market()` без аргумента).
-
-### Реестр выпусков: `bonds/securities.parquet`
-
-Строка на `SECID`: карточка ISS, включая погашенные выпуски — `ISIN`, `NAME`, `SHORTNAME`, `EMITTER_ID`, `REGNUMBER`, `ISSUEDATE`, `MATDATE`, `ISSUESIZE`, `FACEVALUE`, `INITIALFACEVALUE`, `FACEUNIT`, `COUPONFREQUENCY`, `COUPONPERCENT`, `TYPE`, `TYPENAME`, `BOND_TYPE`, `BOND_SUBTYPE`, `HASDEFAULT`, `HASTECHNICALDEFAULT`, `LISTLEVEL` и др. (поля зависят от выпуска) и `FETCHED` — дата запроса.
-
-### Ранний механизм: `bonds/params.parquet`, `bonds/<SECID>.parquet`
-
-`params.parquet` — снапшот параметров торгуемых выпусков досок (колонка `segment`). `<SECID>.parquet` — история одного выпуска (индекс `TRADEDATE`, колонки истории ISS, `secid`).
+Строка на `SECID`: карточка ISS, включая погашенные выпуски — `ISIN`, `NAME`, `SHORTNAME`, `EMITTER_ID`, `REGNUMBER`, `ISSUEDATE`, `MATDATE`, `ISSUESIZE`, `FACEVALUE`, `INITIALFACEVALUE`, `FACEUNIT`, `COUPONFREQUENCY`, `COUPONPERCENT`, `TYPE`, `TYPENAME`, `BOND_TYPE`, `BOND_SUBTYPE`, `HASDEFAULT`, `HASTECHNICALDEFAULT`, `LISTLEVEL` и др. (поля зависят от выпуска) и `FETCHED` — дата запроса. Флаги дефолта — текущий статус на уровне эмитента, не история.
 
 ---
 
-## Фьючерсы: `futures/history/<YYYY>.parquet`
+## Фьючерсы: `lake.futures`
 
-Строка — контракт за торговую дату; ключ `date` + `SECID` + `BOARDID`.
+Строка — контракт за торговую дату; ключ `date` + `SECID` + `BOARDID`. Разбита по годам.
 
 | Колонка | Описание |
 |---------|----------|
@@ -125,12 +110,9 @@ dividends/                   # соседний проект: F:\Yandex.Disk\FIN
 
 ---
 
-## Служебные файлы хранилищ
+## Служебная таблица `lake.empty_dates`
 
-В каждой папке хранилища истории (`bonds/market_*`, `futures/history`):
-
-- `_empty_dates.csv` — торговые (по IMOEX) даты, за которые ISS подтвержденно не вернул строк; больше не запрашиваются.
-- `.lock` — блокировка на время записи; ночное обновление пропускает занятое хранилище. Блокировка старше 12 часов считается брошенной.
+Торговые (по IMOEX) даты, за которые ISS подтвержденно не вернул строк (`dataset, date`): при докачке пропусков они больше не запрашиваются.
 
 ---
 

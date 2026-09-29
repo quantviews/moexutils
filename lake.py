@@ -54,6 +54,7 @@ TABLE_KEYS = {
 PARTITIONED_BY_YEAR = ('bonds', 'futures')
 
 _RETRYABLE = (duckdb.IOException, duckdb.TransactionException, duckdb.ConnectionException)
+_extensions_installed = False
 
 
 class LakeConfigError(RuntimeError):
@@ -115,21 +116,35 @@ def connect(read_only: bool = False, retries: int = 5) -> duckdb.DuckDBPyConnect
     read_only=True — для чтения (ноутбуки, отчеты). При занятом каталоге
     повторяет попытку с растущей паузой.
     """
+    global _extensions_installed
     catalog = os.environ.get("MOEX_LAKE_CATALOG")
     data_path = LAKE_DATA_PATH.replace("\\", "/").rstrip("/") + "/"
     last_error = None
     for attempt in range(retries):
         con = duckdb.connect()
         try:
-            con.execute("INSTALL ducklake; LOAD ducklake")
+            if not _extensions_installed:
+                con.execute("INSTALL ducklake; INSTALL postgres")
+                _extensions_installed = True
+            con.execute("LOAD ducklake")
             if not catalog:
-                con.execute("INSTALL postgres; LOAD postgres")
+                con.execute("LOAD postgres")
                 con.execute(
                     f"CREATE TEMPORARY SECRET (TYPE postgres, HOST {_sql_str(PG_HOST)}, "
                     f"PORT {PG_PORT}, USER {_sql_str(PG_USER)}, PASSWORD {_sql_str(pg_password())})")
             target = catalog or f"ducklake:postgres:dbname={PG_DATABASE}"
-            ro = ", READ_ONLY" if read_only else ""
-            con.execute(f"ATTACH {_sql_str(target)} AS {ALIAS} (DATA_PATH {_sql_str(data_path)}{ro})")
+            attach = f"ATTACH {_sql_str(target)} AS {ALIAS} (DATA_PATH {_sql_str(data_path)}"
+            if read_only:
+                try:
+                    con.execute(attach + ", READ_ONLY)")
+                except duckdb.IOException as e:
+                    # каталога еще нет (новое хранилище): открыть на запись один раз —
+                    # DuckLake его создаст; дальше чтение идет как обычно
+                    if "does not exist" not in str(e) and "not initialized" not in str(e):
+                        raise
+                    con.execute(attach + ")")
+            else:
+                con.execute(attach + ")")
             return con
         except LakeConfigError:
             con.close()
@@ -189,7 +204,14 @@ def write(table: str, df: pl.DataFrame, key: Optional[Iterable[str]] = None,
     """
     if df.is_empty():
         return 0
-    key = list(key or TABLE_KEYS[table])
+    if key is None:
+        if table in TABLE_KEYS:
+            key = TABLE_KEYS[table]
+        elif table.endswith('_securities'):
+            key = ['SECID']
+        else:
+            raise ValueError(f"{table}: не задан ключ таблицы (TABLE_KEYS или параметр key)")
+    key = list(key)
     missing_key = [k for k in key if k not in df.columns]
     if missing_key:
         raise ValueError(f"{table}: в данных нет ключевых колонок {missing_key}")
