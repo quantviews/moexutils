@@ -6,3 +6,5 @@ openpyxl
 lxml
 numpy<2
 plotly
+duckdb>=1.5
+polars>=1.44
