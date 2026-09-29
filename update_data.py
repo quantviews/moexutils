@@ -2,7 +2,7 @@
 Обновление данных: загрузка с MOEX, расчёт adj_close и капитализации (market_cap).
 Использует moex_utils.
 
-Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 2 adj_close → 3 market_cap
+Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы → 2 adj_close → 3 market_cap
 → 4 проверка данных (одна строка итога в логе + замечания).
 Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate] [--no-adj] [--no-cap] [--no-check]
 Только проверка (без обновления, окно — год, со статусом ISS): python update_data.py --check
@@ -33,11 +33,16 @@ def main(
     data_folder: Optional[str] = None,
     metadata_file: Optional[str] = None,
     index_tickers: Optional[str] = "IMOEX,MCFTR,RGBITR",
+    do_futures: bool = True,
+    futures_init: bool = False,
+    futures_start: str = "2002-01-01",
     do_check: bool = True,
     check_days: Optional[int] = 30,
     check_div_days: Optional[int] = 120,
     check_iss: bool = False,
 ) -> None:
+    print(f"Данные: {moex.DATA_ROOT}"
+          + ("" if os.environ.get("MOEX_DATA_ROOT") else " (MOEX_DATA_ROOT не задана — папка проекта)"))
     if data_folder is not None:
         moex.DATA_FOLDER = data_folder
     if metadata_file is not None:
@@ -72,7 +77,7 @@ def main(
     if bonds_market_init:
         print(f"=== 1c. Облигации: инициализация мониторинга досок {bonds_market_init} ===")
         for seg in [s.strip().upper() for s in bonds_market_init.split(",") if s.strip()]:
-            n = moex.update_bonds_market(seg, start=bonds_market_start)
+            n = moex.update_bonds_market(seg, start=bonds_market_start, max_days=20000)
             print(f"{seg}: +{n} строк")
     elif bonds_init:
         print(f"=== 1c. Облигации: первичная выгрузка вселенной {bonds_init} ===")
@@ -84,6 +89,10 @@ def main(
         print("=== 1c. Обновление облигаций ===")
         moex.update_all_bonds()
         moex.update_bonds_market_all()
+        try:
+            moex.update_bonds_securities()  # новые выпуски в реестр параметров, до 500 за ночь
+        except Exception as e:
+            print(f"[WARN] Реестр выпусков облигаций: не удалось обновить — {e}")
     else:
         print("=== 1c. Облигации — пропуск (--no-bonds) ===")
 
@@ -95,6 +104,20 @@ def main(
             print(f"[WARN] Ключевая ставка: не удалось обновить — {e}")
     else:
         print("=== 1d. Ключевая ставка — пропуск (--no-key-rate) ===")
+
+    if futures_init:
+        print(f"=== 1e. Фьючерсы: первичная выгрузка истории FORTS с {futures_start} ===")
+        n = moex.update_futures_history(start=futures_start, max_days=20000)
+        print(f"Фьючерсы: +{n} строк")
+    elif do_futures and os.path.isdir(os.path.join(moex.FUTURES_FOLDER, "history")):
+        print("=== 1e. Обновление фьючерсов ===")
+        try:
+            moex.update_futures_history()
+            moex.repair_futures_history()
+        except Exception as e:
+            print(f"[WARN] Фьючерсы: не удалось обновить — {e}")
+    else:
+        print("=== 1e. Фьючерсы — пропуск ===")
 
     if do_adj_close:
         if not div_ok:
@@ -159,12 +182,17 @@ if __name__ == "__main__":
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
     ap.add_argument("--metadata-file", type=str, default=None, help="Путь к Excel с метаданными (metadata/stock-index-base.xlsx)")
+    ap.add_argument("--no-futures", action="store_true", help="Не обновлять историю фьючерсов")
+    ap.add_argument("--futures-init", action="store_true",
+                    help="Первичная выгрузка истории всех фьючерсов FORTS (многочасовая)")
+    ap.add_argument("--futures-start", type=str, default="2002-01-01",
+                    help="Начальная дата при --futures-init (по умолчанию 2002-01-01)")
     ap.add_argument("--no-check", action="store_true", help="Не выполнять проверку данных в конце")
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS для отстающих бумаг")
     args = ap.parse_args()
     if args.check:
-        args.no_update = args.no_index = args.no_bonds = args.no_key_rate = True
+        args.no_update = args.no_index = args.no_bonds = args.no_key_rate = args.no_futures = True
         args.no_adj = args.no_cap = True
 
     main(
@@ -183,6 +211,9 @@ if __name__ == "__main__":
         data_folder=args.data_folder,
         metadata_file=args.metadata_file,
         index_tickers=args.indexes,
+        do_futures=not args.no_futures,
+        futures_init=args.futures_init,
+        futures_start=args.futures_start,
         do_check=not args.no_check,
         check_days=250 if args.check else 30,
         check_div_days=250 if args.check else 120,

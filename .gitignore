@@ -18,3 +18,5 @@ __marimo__/
 *.parquet
 *.csv
 logs/
+bonds/
+futures/

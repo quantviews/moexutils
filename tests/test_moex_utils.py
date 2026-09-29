@@ -1646,6 +1646,7 @@ class TestQualityReport:
         for name, val in (('DATA_FOLDER', data), ('INDEXES_FOLDER', idx), ('BONDS_FOLDER', bonds)):
             monkeypatch.setattr(mu, name, str(val))
         monkeypatch.setattr(mu, 'DELISTED_FILE', str(tmp_path / 'delisted.csv'))
+        monkeypatch.setattr(mu, 'FUTURES_FOLDER', str(tmp_path / 'futures'))
         monkeypatch.setattr(mu, 'SPLITS_FILE', str(tmp_path / 'no_splits.csv'))
         monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'no_ext.json'))
         cal = pd.bdate_range('2025-01-01', periods=60)
@@ -1709,3 +1710,199 @@ class TestQualityReport:
             os.path.join(folder, '2025.parquet'))
         issues = mu.data_quality_report(days=30, div_folder=env['divs'])
         assert list(issues['check']) == ['bonds_stale']
+
+
+# ---------------------------------------------------------------- history store, ALL bonds, futures
+
+class _PagedSession:
+    """Фейковая ISS-сессия: history по страницам из rows, курсор с TOTAL."""
+
+    def __init__(self, columns, rows, page=2):
+        self.columns, self.rows, self.page = columns, rows, page
+        self.urls = []
+
+    def get(self, url, params=None):
+        self.urls.append(url)
+        start = int(params.get('start', 0))
+        chunk = self.rows[start:start + self.page]
+
+        class _R:
+            def raise_for_status(_):
+                pass
+
+            def json(_):
+                return {'history': {'columns': self.columns, 'data': chunk},
+                        'history.cursor': {'columns': ['INDEX', 'TOTAL', 'PAGESIZE'],
+                                           'data': [[start, len(self.rows), self.page]]}}
+        return _R()
+
+
+class TestHistoryStore:
+    def test_normalize_iss_frame(self):
+        df = pd.DataFrame({'num': [None, '1.5', 2], 'txt': ['a', None, 'b'], 'mix': ['1', 'x', None]})
+        out = mu._normalize_iss_frame(df)
+        assert out['num'].dtype == 'float64'
+        assert str(out['txt'].dtype) == 'string' and str(out['mix'].dtype) == 'string'
+
+    def test_all_segment_uses_market_url_and_keeps_boards(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        cols = ['BOARDID', 'TRADEDATE', 'SECID', 'CLOSE', 'ZSPREAD']
+        rows = [['TQCB', '2025-06-02', 'B1', 100.0, 50.0],
+                ['PSOB', '2025-06-02', 'B1', 99.0, None],      # тот же выпуск на другой доске
+                ['TQOB', '2025-06-02', 'B2', 98.0, 10.0]]
+        sess = _PagedSession(cols, rows)
+        df = mu._fetch_market_rows('ALL', '2025-06-02', sess)
+        assert sess.urls[0].endswith('/markets/bonds/securities.json')  # весь рынок, не доска
+        assert 'ZSPREAD' in df.columns and len(df) == 3
+        mu._merge_market_rows('ALL', df)
+        stored = mu.read_bonds_market('ALL')
+        assert len(stored) == 3                     # ключ включает BOARDID — дубли по SECID не схлопнуты
+        assert mu._market_segments() == ['ALL']
+
+    def test_read_without_segment_skips_all(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        for seg in ('TQOB', 'ALL'):
+            mu._merge_market_rows(seg, pd.DataFrame({'date': pd.to_datetime(['2025-06-02']),
+                                                     'SECID': ['B1'], 'segment': [seg]}))
+        assert set(mu.read_bonds_market()['segment']) == {'TQOB'}
+        assert set(mu.read_bonds_market('ALL')['segment']) == {'ALL'}
+
+    def test_lock_blocks_concurrent_update(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        folder = mu._market_dir('TQOB')
+        calls = []
+        monkeypatch.setattr(mu, '_fetch_bonds_board_date', lambda *a: calls.append(1) or pd.DataFrame())
+        with mu._store_lock(folder):
+            assert mu.update_bonds_market('TQOB', start='2025-06-02') == 0
+        assert calls == []                          # занято — ничего не запрашивали
+        assert not os.path.exists(os.path.join(folder, '.lock'))
+
+    def test_stale_lock_is_taken_over(self, tmp_path):
+        folder = str(tmp_path / 'store')
+        os.makedirs(folder)
+        lock = os.path.join(folder, '.lock')
+        open(lock, 'w').close()
+        import time
+        old = time.time() - 13 * 3600
+        os.utime(lock, (old, old))
+        with mu._store_lock(folder):
+            pass
+        assert not os.path.exists(lock)
+
+    def test_flush_keeps_progress_on_failure(self, tmp_path):
+        folder = str(tmp_path / 'store')
+        n = {'i': 0}
+
+        def fetch(d):
+            n['i'] += 1
+            if n['i'] == 5:
+                raise ConnectionError('down')
+            return pd.DataFrame({'date': [d], 'SECID': ['X']})
+
+        added = mu._update_store(folder, fetch, start='2025-01-01', max_days=10,
+                                 label='test', flush_every=2)
+        assert added == 4 and len(mu._store_dates(folder)) == 4
+
+    def test_repair_remembers_empty_dates(self, tmp_path):
+        folder = str(tmp_path / 'store')
+        mu._store_merge(folder, pd.DataFrame({'date': pd.to_datetime(['2025-06-02', '2025-06-05']),
+                                              'SECID': ['X', 'X']}))
+        asked = []
+
+        def fetch(d):
+            asked.append(d)
+            return pd.DataFrame()                   # ISS пуст за эти даты
+
+        cal = pd.bdate_range('2025-06-02', '2025-06-05')
+        assert mu._repair_store(folder, fetch, cal, 'test') == 0
+        assert len(asked) == 2
+        asked.clear()
+        assert mu._repair_store(folder, fetch, cal, 'test') == 0
+        assert asked == []                          # подтвержденно пустые больше не запрашиваются
+
+
+class TestFutures:
+    def test_update_and_read_futures(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'FUTURES_FOLDER', str(tmp_path))
+        cols = ['BOARDID', 'TRADEDATE', 'SECID', 'SHORTNAME', 'ASSETCODE', 'SETTLEPRICE', 'OPENPOSITION']
+
+        def fake_pages(url, date, session, max_pages=1000):
+            d = pd.Timestamp(date).strftime('%Y-%m-%d')
+            return pd.DataFrame([['RFUD', d, 'SiZ5', 'Si-12.25', 'Si', 80000.0, 100.0],
+                                 ['RFUD', d, 'BRX5', 'BR-11.25', 'BR', 65.0, 50.0]], columns=cols)
+
+        monkeypatch.setattr(mu, '_iss_history_pages', fake_pages)
+        start = (pd.Timestamp.today().normalize() - pd.Timedelta(days=6)).strftime('%Y-%m-%d')
+        n = mu.update_futures_history(start=start)
+        assert n > 0
+        si = mu.read_futures_history(assets='Si')
+        assert set(si['SECID']) == {'SiZ5'} and 'TRADEDATE' not in si.columns
+        assert si['date'].dtype.kind == 'M'
+
+    def test_read_futures_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'FUTURES_FOLDER', str(tmp_path))
+        with pytest.raises(FileNotFoundError):
+            mu.read_futures_history()
+
+
+class TestBondsSecurities:
+    def test_registry_adds_only_new_secids(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        mu._merge_market_rows('ALL', pd.DataFrame({
+            'date': pd.to_datetime(['2005-06-01', '2005-06-01', '2026-09-25']),
+            'SECID': ['OLD1', 'OLD2', 'NEW1'], 'BOARDID': ['EQOB', 'EQNB', 'TQCB']}))
+        asked = []
+
+        def fake_desc(secid, session=None):
+            asked.append(secid)
+            return {'SECID': secid, 'MATDATE': '2005-10-21', 'ISSUESIZE': '3000000',
+                    'HASDEFAULT': '0'}
+
+        monkeypatch.setattr(mu, 'get_security_description', fake_desc)
+        assert mu.update_bonds_securities(max_new=2) == 2
+        assert mu.update_bonds_securities() == 1             # остаток — в следующий прогон
+        reg = mu.read_bonds_securities()
+        assert sorted(reg['SECID']) == ['NEW1', 'OLD1', 'OLD2']
+        assert reg['ISSUESIZE'].dtype == 'float64'
+        asked.clear()
+        assert mu.update_bonds_securities() == 0 and asked == []
+
+    def test_registry_without_full_history_is_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'BONDS_FOLDER', str(tmp_path))
+        assert mu.update_bonds_securities() == 0
+
+
+class TestAtomicWriteRetry:
+    def test_retries_replace_while_file_is_busy(self, tmp_path, monkeypatch):
+        path = str(tmp_path / 'x.parquet')
+        real_replace = os.replace
+        calls = {'n': 0}
+
+        def flaky_replace(src, dst):
+            calls['n'] += 1
+            if calls['n'] < 3:
+                raise PermissionError('busy')
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(mu.os, 'replace', flaky_replace)
+        monkeypatch.setattr(mu.time, 'sleep', lambda s: None)
+        mu._atomic_to_parquet(pd.DataFrame({'a': [1]}), path)
+        assert calls['n'] == 3 and os.path.exists(path)
+        assert not os.path.exists(path + '.tmp')
+
+
+class TestDataRoot:
+    def test_env_var_moves_data_folders(self, tmp_path, monkeypatch):
+        import importlib
+        monkeypatch.setenv('MOEX_DATA_ROOT', str(tmp_path))
+        try:
+            m = importlib.reload(mu)
+            assert m.DATA_ROOT == str(tmp_path)
+            for folder, name in ((m.DATA_FOLDER, 'data'), (m.INDEXES_FOLDER, 'indexes'),
+                                 (m.BONDS_FOLDER, 'bonds'), (m.FUTURES_FOLDER, 'futures')):
+                assert folder == os.path.join(str(tmp_path), name)
+            # реестры остаются в проекте
+            assert m.SPLITS_FILE.startswith(m.BASE_DIR)
+        finally:
+            monkeypatch.delenv('MOEX_DATA_ROOT')
+            importlib.reload(mu)

@@ -7,6 +7,8 @@ import logging
 import math
 import os
 import sys
+import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -16,9 +18,14 @@ import requests
 
 # Пути привязаны к папке модуля, чтобы импорт из nb/ и scripts/ работал при любом cwd
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FOLDER = os.path.join(BASE_DIR, "data")
+# Корень рыночных данных (data/, indexes/, bonds/, futures/). По умолчанию — папка
+# проекта; переменная окружения MOEX_DATA_ROOT выносит данные наружу (например,
+# из облачной папки: синхронизация частых перезаписей портила файлы).
+# Реестры metadata/ остаются в проекте и в git.
+DATA_ROOT = os.environ.get("MOEX_DATA_ROOT") or BASE_DIR
+DATA_FOLDER = os.path.join(DATA_ROOT, "data")
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
-INDEXES_FOLDER = os.path.join(BASE_DIR, "indexes")
+INDEXES_FOLDER = os.path.join(DATA_ROOT, "indexes")
 SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
 RENAMES_FILE = os.path.join(BASE_DIR, "metadata", "renames.csv")
 KEY_RATE_FILE = os.path.join(BASE_DIR, "metadata", "key_rate.csv")
@@ -74,7 +81,16 @@ def _atomic_to_parquet(df: pd.DataFrame, path: str) -> None:
     tmp_path = path + ".tmp"
     try:
         df.to_parquet(tmp_path)
-        os.replace(tmp_path, path)
+        # На Windows замена падает, пока целевой файл открыт другим процессом
+        # (чтение из ноутбука, облачная синхронизация, антивирус) — ждем и повторяем
+        for attempt in range(10):
+            try:
+                os.replace(tmp_path, path)
+                break
+            except PermissionError:
+                if attempt == 9:
+                    raise
+                time.sleep(0.5 * (attempt + 1))
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
@@ -1379,7 +1395,7 @@ def add_market_cap_to_all_stocks(metadata_file: Optional[str] = None) -> None:
 
 # Bonds functions
 
-BONDS_FOLDER = os.path.join(BASE_DIR, "bonds")
+BONDS_FOLDER = os.path.join(DATA_ROOT, "bonds")
 
 
 def _parse_iss_table(table) -> pd.DataFrame:
@@ -1703,14 +1719,42 @@ _BONDS_MARKET_COLS = ['TRADEDATE', 'SECID', 'SHORTNAME', 'CLOSE', 'LEGALCLOSEPRI
                       'YIELDCLOSE', 'DURATION', 'VALUE', 'VOLUME', 'MATDATE',
                       'FACEVALUE', 'FACEUNIT', 'COUPONPERCENT']
 
+# Сегмент мониторинга «весь рынок облигаций»: история всех досок одним запросом
+# на дату (/history/engines/stock/markets/bonds/securities), все колонки ISS,
+# с 1997 года — включая погашенные выпуски и старые доски EQOB/EQNB/EQOS
+BONDS_ALL = 'ALL'
+_ISS_BONDS_HISTORY = "https://iss.moex.com/iss/history/engines/stock/markets/bonds"
+_ISS_FORTS_HISTORY = "https://iss.moex.com/iss/history/engines/futures/markets/forts/securities.json"
 
-def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd.DataFrame:
-    """История торгов ВСЕЙ доски облигаций за одну дату (с пагинацией ISS)."""
-    url = (f"https://iss.moex.com/iss/history/engines/stock/markets/bonds/"
-           f"boards/{segment}/securities.json")
+# История всех фьючерсных контрактов FORTS по датам: futures/history/<YYYY>.parquet
+FUTURES_FOLDER = os.path.join(DATA_ROOT, "futures")
+
+
+def _normalize_iss_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Приводит типы колонок ответа ISS к устойчивым для Parquet: колонка, все
+    непустые значения которой числовые, — float, остальные object — строки.
+    В старых датах многие колонки пустые (None), в новых — заполнены; без
+    приведения годовые файлы получали бы разные типы одной колонки.
+    """
+    df = df.copy()
+    for col in df.columns:
+        if df[col].dtype != object:
+            continue
+        num = pd.to_numeric(df[col], errors='coerce')
+        if num.notna().sum() == df[col].notna().sum():
+            df[col] = num.astype('float64')
+        else:
+            df[col] = df[col].astype('string')
+    return df
+
+
+def _iss_history_pages(url: str, date, session: requests.Session,
+                       max_pages: int = 1000) -> pd.DataFrame:
+    """История ISS за одну дату со всеми страницами (ISS отдает по 100 строк)."""
     pages = []
     offset = 0
-    for _ in range(200):  # защита от бесконечного цикла
+    for _ in range(max_pages):  # защита от бесконечного цикла
         resp = session.get(url, params={'date': pd.Timestamp(date).strftime('%Y-%m-%d'),
                                         'start': offset})
         resp.raise_for_status()
@@ -1727,22 +1771,40 @@ def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd
             break
     if not pages:
         return pd.DataFrame()
-    cols = [c for c in _BONDS_MARKET_COLS if c in pages[0].columns]
+    cols = list(pages[0].columns)
     # Полностью пустые колонки страниц убираем до concat (FutureWarning pandas
     # о типах для all-NA), затем возвращаем полный набор колонок
-    df = pd.concat([pg[[c for c in cols if c in pg.columns]].dropna(axis=1, how='all')
-                    for pg in pages], ignore_index=True)
+    df = pd.concat([pg.dropna(axis=1, how='all') for pg in pages], ignore_index=True)
     return df.reindex(columns=cols)
 
 
-def _market_dir(segment: str) -> str:
-    """Папка мониторинга доски: bonds/market_<SEGMENT>/<YYYY>.parquet."""
-    return os.path.join(BONDS_FOLDER, f"market_{segment}")
+def _fetch_bonds_board_date(segment: str, date, session: requests.Session) -> pd.DataFrame:
+    """
+    История торгов облигаций за одну дату (с пагинацией ISS): вся доска segment
+    (рабочий набор колонок) или, для segment='ALL', весь рынок со всеми колонками.
+    """
+    if segment == BONDS_ALL:
+        df = _iss_history_pages(f"{_ISS_BONDS_HISTORY}/securities.json", date, session)
+        return _normalize_iss_frame(df) if len(df) else df
+    df = _iss_history_pages(f"{_ISS_BONDS_HISTORY}/boards/{segment}/securities.json",
+                            date, session, max_pages=200)
+    if df.empty:
+        return df
+    return df[[c for c in _BONDS_MARKET_COLS if c in df.columns]]
 
 
-def _market_year_files(segment: str) -> dict[int, str]:
-    """Годовые файлы мониторинга доски: {год: путь}, по возрастанию года."""
-    folder = _market_dir(segment)
+# ------------------------------------------ хранилище истории по датам (по годам)
+#
+# Общая механика для мониторинга облигаций и истории фьючерсов: строки за
+# торговые даты копятся в <folder>/<YYYY>.parquet; перезаписываются только
+# годы, куда попали новые строки. Ключ строки — date + SECID (+ BOARDID).
+
+class StoreLocked(RuntimeError):
+    """Хранилище занято другим процессом (идет выгрузка истории)."""
+
+
+def _store_year_files(folder: str) -> dict[int, str]:
+    """Годовые файлы хранилища: {год: путь}, по возрастанию года."""
     if not os.path.isdir(folder):
         return {}
     files = {}
@@ -1751,6 +1813,229 @@ def _market_year_files(segment: str) -> dict[int, str]:
         if f.endswith('.parquet') and stem.isdigit():
             files[int(stem)] = os.path.join(folder, f)
     return dict(sorted(files.items()))
+
+
+def _store_key(rows: pd.DataFrame) -> list[str]:
+    return ['date', 'SECID'] + (['BOARDID'] if 'BOARDID' in rows.columns else [])
+
+
+def _store_merge(folder: str, rows: pd.DataFrame) -> None:
+    """Дописывает строки в годовые файлы; перезаписываются только затронутые годы."""
+    os.makedirs(folder, exist_ok=True)
+    rows = rows.copy()
+    rows['date'] = pd.to_datetime(rows['date'])
+    key = _store_key(rows)
+    for year, part in rows.groupby(rows['date'].dt.year):
+        path = os.path.join(folder, f"{int(year)}.parquet")
+        if os.path.exists(path):
+            part = pd.concat([pd.read_parquet(path), part], ignore_index=True)
+        part = part.drop_duplicates(subset=key, keep='last')
+        part = part.sort_values(key).reset_index(drop=True)
+        _atomic_to_parquet(part, path)
+
+
+def _store_dates(folder: str) -> pd.DatetimeIndex:
+    """Все сохраненные даты хранилища (читается только колонка date)."""
+    frames = [pd.read_parquet(p, columns=['date']) for p in _store_year_files(folder).values()]
+    if not frames:
+        return pd.DatetimeIndex([])
+    return pd.DatetimeIndex(pd.to_datetime(pd.concat(frames)['date']).unique()).sort_values()
+
+
+def _store_empty_dates(folder: str) -> set:
+    """Торговые (по IMOEX) даты, за которые ISS подтвержденно не вернул строк."""
+    path = os.path.join(folder, '_empty_dates.csv')
+    if not os.path.exists(path):
+        return set()
+    return set(pd.to_datetime(pd.read_csv(path)['date']))
+
+
+def _store_add_empty_dates(folder: str, dates) -> None:
+    dates = sorted(set(pd.to_datetime(list(dates))) | _store_empty_dates(folder))
+    if dates:
+        os.makedirs(folder, exist_ok=True)
+        pd.DataFrame({'date': [d.strftime('%Y-%m-%d') for d in dates]}).to_csv(
+            os.path.join(folder, '_empty_dates.csv'), index=False)
+
+
+@contextmanager
+def _store_lock(folder: str, stale_hours: float = 12.0):
+    """
+    Эксклюзивная блокировка хранилища на время записи: многочасовая выгрузка
+    истории и ночное обновление не должны писать в одни годовые файлы.
+    Блокировка старше stale_hours считается брошенной (упавший процесс).
+    """
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, '.lock')
+    if os.path.exists(path):
+        age_h = (datetime.now().timestamp() - os.path.getmtime(path)) / 3600
+        if age_h < stale_hours:
+            raise StoreLocked(f"{folder} занят другим процессом (lock {age_h:.1f} ч)")
+        os.remove(path)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    try:
+        os.write(fd, f"{os.getpid()} {datetime.now():%Y-%m-%d %H:%M:%S}".encode())
+        os.close(fd)
+        yield
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def _update_store(folder: str, fetch, start: str, max_days: int, label: str,
+                  flush_every: int = 50) -> int:
+    """
+    Докачивает торговые даты хранилища: хвост (после последней даты) и, если
+    start раньше истории, начало (бэкфилл — от истории назад). При сбое даты
+    прогон останавливается: дата не перескакивается, иначе осталась бы дыра.
+    Скачанное сбрасывается на диск каждые flush_every дат — многочасовая
+    выгрузка не теряет прогресс при обрыве.
+
+    fetch(date) -> DataFrame строк за дату (колонка date) или пустой.
+    Returns: число добавленных строк (0, если хранилище занято).
+    """
+    try:
+        lock = _store_lock(folder)
+        lock.__enter__()
+    except StoreLocked as e:
+        logger.warning(f"[WARN] {label}: {e} — пропуск")
+        return 0
+    try:
+        have = _store_dates(folder)
+        first_date = pd.Timestamp(start)
+        today = pd.Timestamp.today().normalize()
+        if len(have):
+            _emin, _emax = have.min(), have.max()
+            # Бэкфилл в начале; зазор до 10 дней считаем закрытым (праздники).
+            # Бэкфилл идет от сохраненной истории назад: при обрыве прогона
+            # скачанные даты примыкают к истории, и следующий запуск продолжит без дыр
+            head = ([] if (_emin - first_date).days <= 10 else
+                    [d for d in pd.date_range(first_date, _emin - pd.Timedelta(days=1))
+                     if d.weekday() < 5][::-1])
+            tail = [d for d in pd.date_range(_emax + pd.Timedelta(days=1), today)
+                    if d.weekday() < 5]
+            dates = (head + tail)[:max_days]
+        else:
+            dates = [d for d in pd.date_range(first_date, today, freq='D')
+                     if d.weekday() < 5][:max_days]
+        if not dates:
+            logger.info(f"[INFO] {label}: история актуальна")
+            return 0
+
+        frames, added = [], 0
+
+        def flush():
+            nonlocal frames, added
+            if frames:
+                rows = pd.concat(frames, ignore_index=True)
+                _store_merge(folder, rows)
+                added += len(rows)
+                frames = []
+
+        for i, d in enumerate(dates, 1):
+            try:
+                rows = fetch(d)
+            except Exception as e:
+                logger.warning(f"[WARN] {label} {d:%Y-%m-%d}: {e} — прогон остановлен, "
+                               f"сохраняю скачанное")
+                break
+            if len(rows):
+                frames.append(rows)
+            if i % flush_every == 0:
+                flush()
+                logger.info(f"[INFO] {label}: обработано дат {i}/{len(dates)} "
+                            f"(до {d:%Y-%m-%d}), строк +{added}")
+        flush()
+    finally:
+        lock.__exit__(None, None, None)
+
+    if added:
+        logger.info(f"[OK] {label}: +{added} строк → {folder}")
+    else:
+        logger.info(f"[INFO] {label}: новых торговых дат нет")
+    return added
+
+
+def _repair_store(folder: str, fetch, calendar: Optional[pd.DatetimeIndex], label: str) -> int:
+    """
+    Докачивает пропущенные торговые даты ВНУТРИ сохраненной истории (дыры от
+    сбоев прошлых прогонов). Календарь — будни IMOEX, если не передан; даты, за
+    которые ISS подтвержденно пуст, запоминаются и больше не запрашиваются.
+    """
+    have = _store_dates(folder)
+    if not len(have):
+        return 0
+    if calendar is None:
+        try:
+            calendar = pd.DatetimeIndex(read_moex_index('IMOEX').index)
+        except FileNotFoundError:
+            logger.info(f"[INFO] {label}: нет кэша IMOEX — проверка пропусков пропущена")
+            return 0
+    cal = pd.DatetimeIndex(calendar).normalize()
+    cal = cal[(cal >= have.min()) & (cal <= have.max()) & (cal.weekday < 5)]
+    missing = cal.difference(have).difference(pd.DatetimeIndex(sorted(_store_empty_dates(folder))))
+    if missing.empty:
+        return 0
+
+    try:
+        lock = _store_lock(folder)
+        lock.__enter__()
+    except StoreLocked as e:
+        logger.warning(f"[WARN] {label}: {e} — проверка пропусков пропущена")
+        return 0
+    try:
+        logger.info(f"[INFO] {label}: пропущенных торговых дат — {len(missing)}, докачиваю")
+        frames, empty = [], []
+        for d in missing:
+            try:
+                rows = fetch(d)
+            except Exception as e:
+                logger.warning(f"[WARN] {label} {d:%Y-%m-%d}: {e}")
+                continue
+            if len(rows):
+                frames.append(rows)
+            else:
+                empty.append(d)
+        if empty:
+            _store_add_empty_dates(folder, empty)
+        if not frames:
+            return 0
+        new_rows = pd.concat(frames, ignore_index=True)
+        _store_merge(folder, new_rows)
+    finally:
+        lock.__exit__(None, None, None)
+    logger.info(f"[OK] {label}: +{len(new_rows)} строк за {len(frames)} пропущенных дат")
+    return len(new_rows)
+
+
+def _read_store(folder: str, start=None, end=None) -> pd.DataFrame:
+    """Читает хранилище за период (только нужные годовые файлы)."""
+    lo = pd.Timestamp(start) if start is not None else None
+    hi = pd.Timestamp(end) if end is not None else None
+    frames = [pd.read_parquet(p) for y, p in _store_year_files(folder).items()
+              if not ((lo is not None and y < lo.year) or (hi is not None and y > hi.year))]
+    if not frames:
+        return pd.DataFrame(columns=['date', 'SECID'])
+    df = pd.concat(frames, ignore_index=True)
+    if lo is not None:
+        df = df[df['date'] >= lo]
+    if hi is not None:
+        df = df[df['date'] <= hi]
+    return df.reset_index(drop=True)
+
+
+# ------------------------------------------------- облигации: мониторинг рынка
+
+def _market_dir(segment: str) -> str:
+    """Папка мониторинга доски: bonds/market_<SEGMENT>/<YYYY>.parquet."""
+    return os.path.join(BONDS_FOLDER, f"market_{segment}")
+
+
+def _market_year_files(segment: str) -> dict[int, str]:
+    """Годовые файлы мониторинга доски: {год: путь}, по возрастанию года."""
+    return _store_year_files(_market_dir(segment))
 
 
 def _market_segments() -> list[str]:
@@ -1769,21 +2054,8 @@ def _market_segments() -> list[str]:
 
 
 def _merge_market_rows(segment: str, rows: pd.DataFrame) -> None:
-    """
-    Дописывает строки в годовые файлы мониторинга: перезаписываются только
-    годы, в которые попали новые строки (текущий год при ежедневном обновлении).
-    """
-    folder = _market_dir(segment)
-    os.makedirs(folder, exist_ok=True)
-    rows = rows.copy()
-    rows['date'] = pd.to_datetime(rows['date'])
-    for year, part in rows.groupby(rows['date'].dt.year):
-        path = os.path.join(folder, f"{int(year)}.parquet")
-        if os.path.exists(path):
-            part = pd.concat([pd.read_parquet(path), part], ignore_index=True)
-        part = part.drop_duplicates(subset=['date', 'SECID'], keep='last')
-        part = part.sort_values(['date', 'SECID']).reset_index(drop=True)
-        _atomic_to_parquet(part, path)
+    """Дописывает строки в годовые файлы мониторинга доски."""
+    _store_merge(_market_dir(segment), rows)
 
 
 def _migrate_market_legacy(segment: str) -> None:
@@ -1799,7 +2071,7 @@ def _migrate_market_legacy(segment: str) -> None:
     df = pd.read_parquet(legacy)
     if len(df):
         _merge_market_rows(segment, df)
-        expected = df.drop_duplicates(subset=['date', 'SECID'])
+        expected = df.drop_duplicates(subset=_store_key(df))
         years = set(pd.to_datetime(expected['date']).dt.year)
         written = sum(len(pd.read_parquet(p, columns=['date']))
                       for y, p in _market_year_files(segment).items() if y in years)
@@ -1812,10 +2084,7 @@ def _migrate_market_legacy(segment: str) -> None:
 
 def _market_dates(segment: str) -> pd.DatetimeIndex:
     """Все сохраненные торговые даты мониторинга (читается только колонка date)."""
-    frames = [pd.read_parquet(p, columns=['date']) for p in _market_year_files(segment).values()]
-    if not frames:
-        return pd.DatetimeIndex([])
-    return pd.DatetimeIndex(pd.to_datetime(pd.concat(frames)['date']).unique()).sort_values()
+    return _store_dates(_market_dir(segment))
 
 
 def _fetch_market_rows(segment: str, date, session: requests.Session) -> pd.DataFrame:
@@ -1838,61 +2107,22 @@ def update_bonds_market(segment: str = 'TQOB', start: str = '2024-01-01',
     файлы bonds/market_<SEGMENT>/<YYYY>.parquet. Новые размещения появляются
     автоматически, погашенные выпуски перестают приходить сами.
 
+    segment='ALL' — весь рынок облигаций: все доски (включая старые EQOB/EQNB/
+    EQOS до 2016-2020 и валютные) и все колонки ISS, история с 1997 года.
+
     Если start раньше уже сохраненной истории, недостающие даты в начале
-    докачиваются (бэкфилл): update_bonds_market('TQOB', start='2021-01-01').
+    докачиваются (бэкфилл): update_bonds_market('ALL', start='1997-01-01').
 
     Returns:
     int: число добавленных строк.
     """
     if session is None:
         session = make_session()
-
     os.makedirs(BONDS_FOLDER, exist_ok=True)
     _migrate_market_legacy(segment)
-    have = _market_dates(segment)
-
-    first_date = pd.Timestamp(start)
-    today = pd.Timestamp.today().normalize()
-    if len(have):
-        _emin, _emax = have.min(), have.max()
-        # Бэкфилл в начале; зазор до 10 дней считаем закрытым (праздники)
-        # Бэкфилл идет от сохраненной истории назад: при обрыве прогона
-        # скачанные даты примыкают к истории, и следующий запуск продолжит без дыр
-        head = ([] if (_emin - first_date).days <= 10 else
-                [d for d in pd.date_range(first_date, _emin - pd.Timedelta(days=1))
-                 if d.weekday() < 5][::-1])
-        tail = [d for d in pd.date_range(_emax + pd.Timedelta(days=1), today)
-                if d.weekday() < 5]
-        dates = (head + tail)[:max_days]
-    else:
-        dates = [d for d in pd.date_range(first_date, today, freq='D')
-                 if d.weekday() < 5][:max_days]
-    if not dates:
-        logger.info(f"[INFO] {segment}: мониторинг облигаций актуален")
-        return 0
-    frames = []
-    for i, d in enumerate(dates, 1):
-        try:
-            rows = _fetch_market_rows(segment, d, session)
-        except Exception as e:
-            # Не перескакиваем дату: следующий запуск стартует от последней
-            # сохраненной даты, пропуск в середине остался бы дырой навсегда
-            logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e} — прогон остановлен, "
-                           f"сохраняю скачанное")
-            break
-        if len(rows):
-            frames.append(rows)
-        if i % 20 == 0:
-            logger.info(f"[INFO] {segment}: обработано дат {i}/{len(dates)}")
-
-    if not frames:
-        logger.info(f"[INFO] {segment}: новых торговых дат нет")
-        return 0
-
-    new_rows = pd.concat(frames, ignore_index=True)
-    _merge_market_rows(segment, new_rows)
-    logger.info(f"[OK] {segment}: +{len(new_rows)} строк мониторинга → {_market_dir(segment)}")
-    return len(new_rows)
+    return _update_store(_market_dir(segment),
+                         lambda d: _fetch_market_rows(segment, d, session),
+                         start, max_days, label=f"облигации {segment}")
 
 
 def repair_bonds_market(segment: str = 'TQOB', session: Optional[requests.Session] = None,
@@ -1906,78 +2136,41 @@ def repair_bonds_market(segment: str = 'TQOB', session: Optional[requests.Sessio
     int: число добавленных строк.
     """
     _migrate_market_legacy(segment)
-    have = _market_dates(segment)
-    if not len(have):
-        return 0
-    if calendar is None:
-        try:
-            calendar = pd.DatetimeIndex(read_moex_index('IMOEX').index)
-        except FileNotFoundError:
-            logger.info("[INFO] Нет кэша IMOEX — проверка пропусков мониторинга пропущена")
-            return 0
-    cal = pd.DatetimeIndex(calendar).normalize()
-    cal = cal[(cal >= have.min()) & (cal <= have.max()) & (cal.weekday < 5)]
-    missing = cal.difference(have)
-    if missing.empty:
-        return 0
-
-    logger.info(f"[INFO] {segment}: пропущенных торговых дат в мониторинге — {len(missing)}, докачиваю")
     if session is None:
         session = make_session()
-    frames = []
-    for d in missing:
-        try:
-            rows = _fetch_market_rows(segment, d, session)
-        except Exception as e:
-            logger.warning(f"[WARN] {segment} {d:%Y-%m-%d}: {e}")
-            continue
-        if len(rows):
-            frames.append(rows)
-    if not frames:
-        return 0
-
-    new_rows = pd.concat(frames, ignore_index=True)
-    _merge_market_rows(segment, new_rows)
-    logger.info(f"[OK] {segment}: +{len(new_rows)} строк за {len(frames)} пропущенных дат")
-    return len(new_rows)
+    return _repair_store(_market_dir(segment),
+                         lambda d: _fetch_market_rows(segment, d, session),
+                         calendar, label=f"облигации {segment}")
 
 
 def read_bonds_market(segment: Optional[str] = None, start: Optional[str] = None,
                       end: Optional[str] = None) -> pd.DataFrame:
     """
     Читает консолидированный мониторинг облигаций. Без segment — все доски
-    одним DataFrame. start/end (включительно) ограничивают период и читают
-    только нужные годовые файлы.
+    одним DataFrame (кроме 'ALL': это полная история всего рынка, ее читают
+    явно — read_bonds_market('ALL', start=...)). start/end (включительно)
+    ограничивают период и читают только нужные годовые файлы.
     """
-    segments = [segment] if segment is not None else _market_segments()
+    segments = ([segment] if segment is not None
+                else [s for s in _market_segments() if s != BONDS_ALL])
     if not segments:
         raise FileNotFoundError(
             f"В {BONDS_FOLDER} нет мониторинга досок (market_<SEG>/). "
             f"Выполните update_data.py --bonds-market-init TQOB,TQCB.")
-    lo = pd.Timestamp(start) if start is not None else None
-    hi = pd.Timestamp(end) if end is not None else None
 
     frames = []
     for seg in segments:
         _migrate_market_legacy(seg)
-        files = _market_year_files(seg)
-        if not files and segment is not None:
+        if not _market_year_files(seg) and segment is not None:
             raise FileNotFoundError(
                 f"Мониторинг не найден: {_market_dir(seg)}. Выполните update_bonds_market('{seg}') "
                 f"или update_data.py --bonds-market-init {seg}.")
-        for year, path in files.items():
-            if (lo is not None and year < lo.year) or (hi is not None and year > hi.year):
-                continue
-            frames.append(pd.read_parquet(path))
+        part = _read_store(_market_dir(seg), start, end)
+        if len(part):
+            frames.append(part)
     if not frames:
         return pd.DataFrame(columns=['date', 'SECID', 'segment'])
-
-    df = pd.concat(frames, ignore_index=True)
-    if lo is not None:
-        df = df[df['date'] >= lo]
-    if hi is not None:
-        df = df[df['date'] <= hi]
-    return df.reset_index(drop=True)
+    return pd.concat(frames, ignore_index=True)
 
 
 def update_bonds_market_all(session: Optional[requests.Session] = None) -> None:
@@ -1993,6 +2186,162 @@ def update_bonds_market_all(session: Optional[requests.Session] = None) -> None:
             repair_bonds_market(seg, session=session)
         except Exception as e:
             logger.error(f"Error updating bonds market {seg}: {e}")
+
+
+# ------------------------------------------------- облигации: реестр параметров выпусков
+
+def _bonds_securities_path() -> str:
+    return os.path.join(BONDS_FOLDER, 'securities.parquet')
+
+
+def get_security_description(secid: str, session: Optional[requests.Session] = None) -> dict:
+    """
+    Карточка бумаги ISS (/iss/securities/<SECID>, блок description) как словарь
+    {поле: значение}. Отдается и для погашенных выпусков: ISIN, эмитент
+    (EMITTER_ID), даты размещения и погашения, объем, номинал, частота купона,
+    тип облигации, признаки дефолта. Пустой словарь — ISS бумагу не знает.
+    """
+    if session is None:
+        session = make_session()
+    resp = session.get(f"https://iss.moex.com/iss/securities/{secid}.json",
+                       params={'iss.only': 'description'})
+    resp.raise_for_status()
+    desc = _parse_iss_table(resp.json().get('description'))
+    if desc.empty or 'name' not in desc.columns:
+        return {}
+    return dict(zip(desc['name'], desc['value']))
+
+
+def read_bonds_securities() -> pd.DataFrame:
+    """Реестр параметров облигаций bonds/securities.parquet: строка на SECID."""
+    path = _bonds_securities_path()
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Реестр выпусков не найден: {path}. Выполните update_bonds_securities().")
+    return pd.read_parquet(path)
+
+
+def update_bonds_securities(session: Optional[requests.Session] = None,
+                            secids=None, max_new: Optional[int] = 500,
+                            flush_every: int = 200) -> int:
+    """
+    Дополняет реестр параметров облигаций bonds/securities.parquet карточками
+    ISS для выпусков, которых в нем еще нет. По умолчанию выпуски берутся из
+    полной истории рынка (read_bonds_market('ALL')) — так в реестр попадают и
+    погашенные. max_new ограничивает число запросов за прогон (ночное
+    обновление); None — все сразу (первичное наполнение, ~20 тыс. запросов).
+
+    Returns:
+    int: число добавленных выпусков.
+    """
+    if secids is None:
+        files = _market_year_files(BONDS_ALL)
+        if not files:
+            logger.info("[INFO] Реестр выпусков: нет полной истории рынка (market_ALL) — пропуск")
+            return 0
+        secids = pd.concat([pd.read_parquet(p, columns=['SECID']) for p in files.values()])['SECID']
+    wanted = pd.Series(pd.unique(pd.Series(list(secids)).dropna().astype(str)))
+
+    path = _bonds_securities_path()
+    registry = pd.read_parquet(path) if os.path.exists(path) else pd.DataFrame(columns=['SECID'])
+    todo = [s for s in wanted if s not in set(registry['SECID'].astype(str))]
+    if max_new is not None:
+        todo = todo[:max_new]
+    if not todo:
+        logger.info("[INFO] Реестр выпусков актуален")
+        return 0
+
+    if session is None:
+        session = make_session()
+    logger.info(f"[INFO] Реестр выпусков: новых {len(todo)}")
+    rows, added = [], 0
+
+    def flush():
+        nonlocal registry, rows, added
+        if rows:
+            new = _normalize_iss_frame(pd.DataFrame(rows))
+            registry = new if registry.empty else pd.concat([registry, new], ignore_index=True)
+            registry = _normalize_iss_frame(registry.astype(object).where(registry.notna(), None))
+            registry = registry.drop_duplicates(subset='SECID', keep='last').reset_index(drop=True)
+            os.makedirs(BONDS_FOLDER, exist_ok=True)
+            _atomic_to_parquet(registry, path)
+            added += len(rows)
+            rows = []
+
+    for i, secid in enumerate(todo, 1):
+        try:
+            desc = get_security_description(secid, session=session)
+        except Exception as e:
+            logger.warning(f"[WARN] {secid}: карточка ISS недоступна — {e}; прогон остановлен")
+            break
+        rows.append({**desc, 'SECID': secid, 'FETCHED': pd.Timestamp.today().strftime('%Y-%m-%d')})
+        if i % flush_every == 0:
+            flush()
+            logger.info(f"[INFO] Реестр выпусков: {i}/{len(todo)}")
+    flush()
+    logger.info(f"[OK] Реестр выпусков: +{added} → {path}")
+    return added
+
+
+# ------------------------------------------------- фьючерсы FORTS
+
+def _futures_dir() -> str:
+    """Папка истории фьючерсов: futures/history/<YYYY>.parquet."""
+    return os.path.join(FUTURES_FOLDER, 'history')
+
+
+def _fetch_futures_rows(date, session: requests.Session) -> pd.DataFrame:
+    """История торгов всех фьючерсных контрактов FORTS за дату (все колонки ISS)."""
+    df = _iss_history_pages(_ISS_FORTS_HISTORY, date, session)
+    if df.empty:
+        return df
+    df = _normalize_iss_frame(df)
+    df['date'] = pd.to_datetime(df['TRADEDATE'].astype(str))
+    return df.drop(columns=['TRADEDATE'])
+
+
+def update_futures_history(start: str = '2024-01-01', session: Optional[requests.Session] = None,
+                           max_days: int = 3000) -> int:
+    """
+    История торгов ВСЕХ фьючерсных контрактов FORTS по датам (одна дата — все
+    контракты, с пагинацией) в futures/history/<YYYY>.parquet: цены, расчетная
+    цена SETTLEPRICE, открытый интерес, объемы, ASSETCODE базового актива.
+    Истекшие контракты остаются в истории. Коды контрактов (SiZ5) повторяются
+    раз в 10 лет — уникальна пара date + SECID, год контракта — в SHORTNAME
+    (Si-12.25). Первичная выгрузка: update_futures_history(start='2002-01-01').
+
+    Returns:
+    int: число добавленных строк.
+    """
+    if session is None:
+        session = make_session()
+    return _update_store(_futures_dir(), lambda d: _fetch_futures_rows(d, session),
+                         start, max_days, label="фьючерсы FORTS")
+
+
+def repair_futures_history(session: Optional[requests.Session] = None,
+                           calendar: Optional[pd.DatetimeIndex] = None) -> int:
+    """Докачивает пропущенные торговые даты внутри истории фьючерсов."""
+    if session is None:
+        session = make_session()
+    return _repair_store(_futures_dir(), lambda d: _fetch_futures_rows(d, session),
+                         calendar, label="фьючерсы FORTS")
+
+
+def read_futures_history(start: Optional[str] = None, end: Optional[str] = None,
+                         assets=None) -> pd.DataFrame:
+    """
+    Читает историю фьючерсов за период; assets — код базового актива или список
+    (ASSETCODE: 'Si', 'RTS', 'BR', ...).
+    """
+    if not _store_year_files(_futures_dir()):
+        raise FileNotFoundError(
+            f"История фьючерсов не найдена: {_futures_dir()}. "
+            f"Выполните update_data.py --futures-init.")
+    df = _read_store(_futures_dir(), start, end)
+    if assets is not None and len(df):
+        assets = [assets] if isinstance(assets, str) else list(assets)
+        df = df[df['ASSETCODE'].isin(assets)].reset_index(drop=True)
+    return df
 
 
 def calculate_ytm(price: float, face_value: float, coupon_rate: float, years_to_maturity: float, coupon_freq: int = 2) -> float:
@@ -2339,9 +2688,20 @@ def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = No
             continue
         if have.max() < last_day:
             add('bonds_stale', seg, f"последняя дата {have.max():%Y-%m-%d}, IMOEX — {last_day:%Y-%m-%d}")
-        missing = cal[(cal >= max(win_start, have.min())) & (cal <= have.max())].difference(have)
+        missing = (cal[(cal >= max(win_start, have.min())) & (cal <= have.max())].difference(have)
+                   .difference(pd.DatetimeIndex(sorted(_store_empty_dates(_market_dir(seg))))))
         if len(missing):
             add('bonds_gaps', seg, f"{len(missing)} пропущенных торговых дат в окне, первая {missing[0]:%Y-%m-%d}")
+
+    fut = _store_dates(_futures_dir())
+    if len(fut):
+        if fut.max() < last_day:
+            add('futures_stale', 'FORTS', f"последняя дата {fut.max():%Y-%m-%d}, IMOEX — {last_day:%Y-%m-%d}")
+        missing = (cal[(cal >= max(win_start, fut.min())) & (cal <= fut.max())]
+                   .difference(fut).difference(pd.DatetimeIndex(sorted(_store_empty_dates(_futures_dir())))))
+        if len(missing):
+            add('futures_gaps', 'FORTS', f"{len(missing)} пропущенных торговых дат в окне, "
+                                         f"первая {missing[0]:%Y-%m-%d}")
 
     return pd.DataFrame(issues, columns=['check', 'object', 'detail'])
 

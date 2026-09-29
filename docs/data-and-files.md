@@ -2,98 +2,163 @@
 
 ## Структура каталогов
 
+Код и реестры живут в папке проекта (Яндекс.Диск, git), рыночные данные — в корне `MOEX_DATA_ROOT` (на рабочей машине `F:\moex-data`, вне облачной синхронизации).
+
 ```
-moexutils/
-├── moex_utils.py       # ядро библиотеки
-├── update_data.py      # пайплайн обновления данных (CLI)
-├── nb/                 # Jupyter-ноутбуки
-├── scripts/            # обычные аналитические скрипты
-├── marimo/             # marimo-ноутбуки (аналитика и преподавание)
-├── tests/              # pytest-тесты
-├── data/
-│   ├── SBER/
-│   │   └── SBER.parquet
-│   ├── GAZP/
-│   │   └── GAZP.parquet
-│   └── ...
-├── bonds/
-│   ├── market_TQOB/        # мониторинг ВСЕХ выпусков доски по датам (гособлигации), <YYYY>.parquet
-│   ├── market_TQCB/        # то же для корпоративных
-│   ├── params.parquet      # снапшот параметров выпусков (купон, погашение, доска)
-│   └── <SECID>.parquet     # пофайловые истории отдельных выпусков (фоллбэк/глубокая история)
-├── indexes/
-│   └── IMOEX.parquet       # локальный кэш индексов (update_data.py, шаг 1b)
+moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
+├── moex_utils.py            # ядро библиотеки
+├── update_data.py           # пайплайн обновления (CLI)
+├── update_data.bat          # запуск на Windows (выбор интерпретатора)
+├── scheduled_update.cmd     # обертка для планировщика задач (лог в logs/)
+├── marimo/                  # marimo-ноутбуки (аналитика и преподавание)
+├── nb/                      # Jupyter-ноутбуки (исследования, примеры)
+├── scripts/                 # аналитические скрипты
+├── tests/                   # офлайн pytest-тесты
+├── docs/                    # документация
 ├── metadata/
-│   ├── stock-index-base.xlsx
-│   ├── sectors.csv         # справочник тикер→сектор (для секторного разреза)
-│   ├── splits.csv          # реестр сплитов: ticker,date,ratio,kind
-│   ├── renames.csv         # реестр переименований: old,new,date (склейка историй, источник — в source_ticker)
-│   ├── key_rate.csv        # история ключевой ставки ЦБ: date,rate (безрисковая для Sharpe)
-│   └── delisted.csv        # снятые с торгов тикеры: ticker,last_date,note (не обновляются)
-└── (опционально) ../dividends/data/   # CSV дивидендов для adj_close
-    ├── SBER.csv
-    └── ...
+│   ├── stock-index-base.xlsx  # количество акций по датам (капитализация)
+│   ├── splits.csv             # реестр сплитов: ticker, date, ratio, kind
+│   ├── renames.csv            # реестр переименований: old, new, date
+│   ├── delisted.csv           # снятые с торгов: ticker, last_date, note
+│   ├── key_rate.csv           # ключевая ставка ЦБ: date, rate
+│   └── sectors.csv            # ticker, sector — секторный разрез
+└── logs/                    # логи ночного обновления и выгрузок (не в git)
+    ├── update.log
+    └── backfill_*.log
+
+moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не в git, не в облаке)
+├── data/                    # акции
+│   ├── SBER/SBER.parquet
+│   └── ...
+├── indexes/                 # IMOEX.parquet, MCFTR.parquet, RGBITR.parquet
+├── bonds/
+│   ├── market_ALL/<YYYY>.parquet    # весь рынок облигаций с 1997 года, все доски и колонки
+│   ├── market_TQOB/<YYYY>.parquet   # доска гособлигаций с 2021 года (рабочие колонки)
+│   ├── market_TQCB/<YYYY>.parquet   # доска корпоративных облигаций с 2021 года
+│   ├── securities.parquet           # реестр параметров всех выпусков, включая погашенные
+│   ├── params.parquet               # снапшот параметров торгуемых выпусков досок
+│   └── <SECID>.parquet              # истории отдельных выпусков (ранний механизм)
+└── futures/
+    └── history/<YYYY>.parquet       # все контракты FORTS с 2002 года
+
+dividends/                   # соседний проект: F:\Yandex.Disk\FINANCE\dividends
+├── data/<TICKER>.csv        # приведены к текущей акции — их читает moexutils
+├── data/raw/<TICKER>.csv    # сырые значения с сайта
+└── metadata/splits.json     # реестр сплитов проекта dividends (внешний реестр для moexutils)
 ```
 
-- **data/** — локальные котировки: подпапка на тикер, один Parquet на тикер.
-- **bonds/** — локальные данные облигаций: `market_<SEGMENT>/<YYYY>.parquet` — мониторинг всех выпусков доски по датам, по годам (основной источник для аналитики), плюс один Parquet на SECID для отдельных выпусков.
-- **metadata/** — Excel с количеством акций по датам (для market_cap).
-- Пути `data/`, `bonds/`, `metadata/` привязаны к папке модуля `moex_utils.py` и не зависят от рабочего каталога.
-- Папка дивидендов задаётся параметром `div_folder` (в `update_data.py` по умолчанию `../dividends/data`).
+**Почему данные вне Яндекс.Диска.** При многочасовых выгрузках и частой перезаписи годовых файлов клиент Яндекс.Диска создавал конфликтные копии и подменял файлы старыми серверными версиями — терялись даты (так пострадала история фьючерсов, восстановлена объединением версий). По той же причине `.git` исключен из синхронизации. Данные можно заново скачать с биржи, поэтому облачная копия им не нужна; код и реестры остаются в Яндекс.Диске и git.
+
+Без `MOEX_DATA_ROOT` данные ищутся в папке проекта (`moexutils/data`, `moexutils/bonds`, ...). Переменная задана для пользователя Windows постоянно; ее видят новые процессы, включая ночную задачу.
 
 ---
 
-## Формат Parquet (акции)
-
-Файл: `data/<TICKER>/<TICKER>.parquet`.
+## Акции: `data/<TICKER>/<TICKER>.parquet`
 
 | Колонка | Описание |
 |---------|----------|
-| **Индекс** | `date` (datetime64) |
-| `close` | Цена закрытия основной сессии, руб. |
-| `open`, `low`, `high` | OHLC основной сессии |
-| `waprice` | Средневзвешенная цена за день |
-| `value_rub` | Оборот торгов за период, руб. — не цена |
-| `volume` | Объём торгов |
+| **индекс** `date` | Торговая дата (datetime64) |
+| `open`, `low`, `high`, `close` | Цены основной сессии, руб.; `close` — официальное закрытие из ISS `/history` |
+| `waprice` | Средневзвешенная цена дня |
+| `volume` | Объем, шт. |
+| `value_rub` | Оборот, руб. — не цена |
 | `ticker` | Тикер |
-| `shares` | Количество акций (если считался market_cap) |
-| `market_cap` | close × shares (если считался) |
-| `adj_close` | Цена, скорректированная на дивиденды и сплиты, в текущей базе (если считалась) |
+| `adj_close` | Цена, скорректированная на дивиденды и сплиты, в текущей базе |
+| `shares`, `market_cap` | Количество акций и капитализация (`close × shares`) |
+
+Цены в файле — как их отдает ISS (без поправки на сплиты, если ISS ее не сделал); для доходностей применяйте `adjust_for_splits` или берите `adj_close`.
+
+## Индексы: `indexes/<TICKER>.parquet`
+
+Индекс `date`, колонки `close`, `volume`, `ticker`. Даты IMOEX (будни) — торговый календарь для проверок и докачки пропусков.
 
 ---
 
-## Формат Parquet (облигации)
+## Облигации
 
-Файл: `bonds/<SECID>.parquet`.
+### Весь рынок: `bonds/market_ALL/<YYYY>.parquet`
+
+Строка — выпуск на доске за торговую дату; ключ `date` + `SECID` + `BOARDID`. Все колонки истории ISS (набор со временем расширялся — в ранних годах часть колонок пустая):
+
+| Группа | Колонки |
+|--------|---------|
+| Идентификация | `date`, `BOARDID`, `SECID`, `SHORTNAME`, `segment` (=`ALL`) |
+| Цены (% от номинала) | `OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE`, `LEGALCLOSEPRICE`, `MARKETPRICE2`, `MARKETPRICE3`, `ADMITTEDQUOTE` |
+| Доходность и риск | `YIELDCLOSE`, `YIELDATWAP`, `YIELDTOOFFER`, `YIELDLASTCOUPON`, `DURATION` (дни), `ZSPREAD`, `ZSPREADATWAPRICE`, `CALLOPTIONYIELD`, `CALLOPTIONDURATION` |
+| ОФЗ-ИН | `BEICLOSE` (breakeven-инфляция), `IRICPICLOSE` (индекс потребительских цен) |
+| Купон и номинал | `COUPONPERCENT`, `COUPONVALUE`, `ACCINT` (НКД), `FACEVALUE`, `FACEUNIT`, `FACEVALUE_TYPE`, `CURRENCYID`, `COUPON_DETAILS` |
+| Даты | `MATDATE`, `OFFERDATE`, `BUYBACKDATE`, `CALLOPTIONDATE`, `PUTOPTIONDATE`, `LASTTRADEDATE`, `DATEYIELDFROMISSUER` |
+| Обороты | `VALUE`, `VOLUME`, `NUMTRADES`, `MP2VALTRD`, `MARKETPRICE3TRADESVALUE`, `ADMITTEDVALUE` |
+| Тип | `BONDTYPE`, `BONDSUBTYPE` |
+
+Доски по периодам: до перехода на режим Т+ основные торги шли на EQOB, EQNB, EQOS, EQNO и др.; TQOB работает с середины 2010-х, TQCB — примерно с 2019–2020 (точные даты видны в самих данных: `groupby('BOARDID')['date'].min()`); валютные — TQOD (USD), TQOE (EUR), TQOY (CNY), TQUD; TQRD. Типы колонок приведены: числовые — float, текстовые — string.
+
+### Доски: `bonds/market_TQOB/`, `bonds/market_TQCB/`
+
+Рабочий набор колонок: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE` (биржевая YTM, %), `DURATION` (дни), `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`; ключ `date` + `SECID`. История с 2021 года; их читает ноутбук `bond-market.py` (`read_bonds_market()` без аргумента).
+
+### Реестр выпусков: `bonds/securities.parquet`
+
+Строка на `SECID`: карточка ISS, включая погашенные выпуски — `ISIN`, `NAME`, `SHORTNAME`, `EMITTER_ID`, `REGNUMBER`, `ISSUEDATE`, `MATDATE`, `ISSUESIZE`, `FACEVALUE`, `INITIALFACEVALUE`, `FACEUNIT`, `COUPONFREQUENCY`, `COUPONPERCENT`, `TYPE`, `TYPENAME`, `BOND_TYPE`, `BOND_SUBTYPE`, `HASDEFAULT`, `HASTECHNICALDEFAULT`, `LISTLEVEL` и др. (поля зависят от выпуска) и `FETCHED` — дата запроса.
+
+### Ранний механизм: `bonds/params.parquet`, `bonds/<SECID>.parquet`
+
+`params.parquet` — снапшот параметров торгуемых выпусков досок (колонка `segment`). `<SECID>.parquet` — история одного выпуска (индекс `TRADEDATE`, колонки истории ISS, `secid`).
+
+---
+
+## Фьючерсы: `futures/history/<YYYY>.parquet`
+
+Строка — контракт за торговую дату; ключ `date` + `SECID` + `BOARDID`.
 
 | Колонка | Описание |
 |---------|----------|
-| **Индекс** | `TRADEDATE` (datetime64) |
-| `CLOSE`, `WAPRICE` | Цена закрытия / средневзвешенная, % от номинала |
-| `secid` | Идентификатор бумаги |
-| `years_to_maturity`, `ytm`, `duration` | Метрики (если рассчитывались через `add_bond_metrics`) |
+| `date`, `BOARDID`, `SECID`, `SHORTNAME` | Дата, режим, код контракта (`SiZ5`), краткое имя с месяцем и годом (`Si-12.25`) |
+| `ASSETCODE` | Базовый актив (`Si`, `RTS`, `BR`, `GD`, `MIX`, ...) |
+| `OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE` | Цены |
+| `SETTLEPRICE` | Расчетная цена (для вариационной маржи) |
+| `OPENPOSITION`, `OPENPOSITIONVALUE` | Открытый интерес: контракты и руб. |
+| `VOLUME`, `VALUE`, `NUMTRADES`, `QTY` | Объемы и число сделок |
+| `SWAPRATE`, `SWAPRATE_CURR`, `CHANGE` | Своп-ставка (для вечных фьючерсов), изменение |
 
-Прочие колонки — как в таблице history ISS MOEX.
-
-### Мониторинг досок: `bonds/market_<SEGMENT>/<YYYY>.parquet`
-
-Длинная таблица истории торгов **всех выпусков доски**, разбитая на годовые файлы (`market_TQCB/2025.parquet`, `market_TQCB/2026.parquet`, ...): при ежедневном обновлении перезаписывается только текущий год, а не вся история (для TQCB — десятки МБ, которые иначе каждую ночь гоняла бы облачная синхронизация). Читать — через `read_bonds_market`. Обновляется по датам через `update_bonds_market`. Колонки: `date`, `SECID`, `SHORTNAME`, `CLOSE`, `LEGALCLOSEPRICE`, `YIELDCLOSE` (биржевой YTM, %), `DURATION` (дни), `VALUE`, `VOLUME`, `MATDATE`, `FACEVALUE`, `FACEUNIT`, `COUPONPERCENT`, `segment`. Уникальность — пара `date`+`SECID`.
-
----
-
-## Метаданные: stock-index-base.xlsx
-
-Используется для расчёта капитализации.
-
-- Листы с именами в формате даты **DD.MM.YYYY**.
-- На листе: колонки **Code** (тикер), **Number of issued shares**. При чтении используется `skiprows=3`.
-- Между срезами дат — forward fill; до первого среза — backward fill.
+Коды контрактов повторяются раз в 10 лет, год берите из `SHORTNAME`.
 
 ---
 
-## Дивиденды (CSV для adj_close)
+## Служебные файлы хранилищ
 
-- Один файл на тикер: `<TICKER>.csv` в папке `div_folder`.
-- Обязательные колонки: **closing_date** (дата закрытия реестра), **dividend_value** (руб. на акцию, > 0).
-- Экс-дата выводится из даты закрытия реестра по режиму расчетов (T+1 с 31.07.2023, раньше T+2) — см. `calculate_adj_close` в справочнике API.
-- Расчёт adj_close идёт от последних дивидендов к ранним.
+В каждой папке хранилища истории (`bonds/market_*`, `futures/history`):
+
+- `_empty_dates.csv` — торговые (по IMOEX) даты, за которые ISS подтвержденно не вернул строк; больше не запрашиваются.
+- `.lock` — блокировка на время записи; ночное обновление пропускает занятое хранилище. Блокировка старше 12 часов считается брошенной.
+
+---
+
+## Метаданные
+
+### stock-index-base.xlsx
+
+Листы с датами `DD.MM.YYYY`, на листе колонки `Code` (тикер) и `Number of issued shares`, шапка на 4-й строке (`skiprows=3`). Между срезами — forward fill, до первого среза — backward fill.
+
+### Реестры
+
+| Файл | Колонки | Назначение |
+|------|---------|------------|
+| `splits.csv` | `ticker, date, ratio, kind` | Сплиты и консолидации (`price` / `shares` / `auto`) |
+| `renames.csv` | `old, new, date` | Склейка историй переименованных тикеров |
+| `delisted.csv` | `ticker, last_date, note` | Снятые с торгов — не опрашиваются при обновлении (статус подтвержден ISS) |
+| `key_rate.csv` | `date, rate` | Ключевая ставка ЦБ; дописывается автоматически с cbr.ru |
+| `sectors.csv` | `ticker, sector` | Секторный разрез в ноутбуках |
+
+Корпоративные события вносятся только через реестры, данные руками не правятся. Папка `metadata/` в `.gitignore`: новый файл реестра добавляется в git принудительно (`git add -f`).
+
+---
+
+## Дивиденды: `../dividends/data/<TICKER>.csv`
+
+Соседний проект `F:\Yandex.Disk\FINANCE\dividends` собирает историю выплат с сайта закрытияреестров.рф (`parse_all_dividends.py`) и приводит значения к текущей акции с учетом сплитов. moexutils читает `data/<TICKER>.csv`:
+
+- **closing_date** — дата закрытия реестра; экс-дата выводится из нее по режиму расчетов (T+1 с 31.07.2023, раньше T+2);
+- **dividend_value** — руб. на акцию (> 0); `year`, `period_type` — за какой период.
+
+Привилегированные акции — в файле `<TICKER>P.csv` по правилам проекта dividends. Объявленные, но еще не наступившие выплаты в файле бывают — adj_close их игнорирует до экс-даты. Если сайт еще не внес выплату, проверка данных покажет ее как `dividend_gap`.

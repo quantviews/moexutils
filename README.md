@@ -1,409 +1,122 @@
 # MOEX Utils
 
-A Python utility library for fetching and managing stock data from the Moscow Exchange (MOEX) API.
+Загрузка, хранение и проверка данных Московской биржи (MOEX ISS): акции, индексы, облигации всего рынка, фьючерсы FORTS — плюс marimo-ноутбуки с аналитикой поверх локальных данных. Данные обновляются каждую ночь и проверяются на качество.
 
-## Features
+## Что есть в данных
 
-- Fetch historical stock data from MOEX
-- Fetch index data from MOEX
-- Save data locally in Parquet format
-- Update existing data files
-- Combine multiple stock datasets
-- Calculate and visualize stock performance
-- **Automatic market cap calculation** using shares data from metadata
-- **Adjusted close price calculation** based on dividend history
-- **Bonds support**: board-wide monitoring of ALL issues (TQOB/TQCB), exchange YTM and duration, convexity, G-spreads to the OFZ curve
-- Support for different time frequencies (1min, 10min, 1hour, 1day, 1week, 1month, 1quarter)
+| Рынок | Что хранится | Глубина |
+|-------|--------------|---------|
+| Акции | Дневные OHLC основной сессии, обороты, `adj_close` (дивиденды + сплиты), капитализация; ~100 тикеров, включая снятые с торгов | с 2003 (у большинства — с 2011) |
+| Индексы | IMOEX, MCFTR, RGBITR | с 2000–2010 |
+| Облигации | История **всех** выпусков всех досок (гос-, корпоративные, валютные, погашенные) со всеми полями ISS: цены, доходности, дюрация, НКД, Z-спред, оферты; реестр параметров каждого выпуска | с 1997 |
+| Фьючерсы | История **всех** контрактов FORTS: цены, расчетная цена, открытый интерес, объемы, базовый актив | с 2002 |
+| Ставки | Ключевая ставка ЦБ (безрисковая для Sharpe); до 13.09.2013 — ставка рефинансирования | с 2003 |
 
-## Installation
+Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы пока не выгружаются.
+
+## Установка
+
+Python 3.11+ (CI проверяет 3.11 и 3.12; рабочее окружение — conda `py312`).
 
 ```bash
 pip install -r requirements.txt            # ядро и тесты
 pip install -r requirements-notebooks.txt  # + marimo-ноутбуки
 ```
 
-or manually:
-
-```bash
-pip install requests apimoex pandas pyarrow openpyxl
-```
-
-## Usage
-
-### Basic Import
+## Быстрый старт
 
 ```python
 import moex_utils as moex
+
+# Акции и индексы (локальные файлы; при отсутствии — загрузка с MOEX)
+sber = moex.read_moex_stock('SBER')                  # close, adj_close, market_cap, ...
+imoex = moex.read_moex_index('IMOEX')
+stocks = moex.adjust_for_splits(moex.combine_moex_stocks())  # все тикеры, склейка переименований
+
+# Облигации
+ofz_corp = moex.read_bonds_market()                  # доски TQOB + TQCB с 2021 года
+market = moex.read_bonds_market('ALL', start='2008-01-01', end='2009-12-31')  # весь рынок, все поля
+issues = moex.read_bonds_securities()                # параметры выпусков, включая погашенные
+
+# Фьючерсы
+si = moex.read_futures_history(assets='Si', start='2024-01-01')
+
+# Качество данных
+print(moex.quality_summary(moex.data_quality_report()))
 ```
 
-### Fetching Stock Data
+## Обновление данных
 
-```python
-# Fetch stock data for a specific ticker
-df = moex.get_moex_stock('SBER', start='2023-01-01', end='2023-12-31')
-
-# Fetch data with different frequency (1 hour candles)
-df = moex.get_moex_stock('SBER', start='2023-01-01', frequency=60)
+```bash
+python update_data.py          # полный цикл: акции → индексы → облигации → ставка ЦБ → фьючерсы → adj_close → market_cap → проверка
+python update_data.py --check  # только проверка данных за год
 ```
 
-### Fetching Index Data
-
-```python
-# Fetch index data
-df = moex.get_moex_index('IMOEX', start='2023-01-01', end='2023-12-31')
-```
-
-### Saving Data Locally
-
-```python
-# Save stock data to local Parquet file (market cap calculated automatically)
-moex.save_moex_stock('SBER', start='2023-01-01')
-
-# Save without market cap calculation
-moex.save_moex_stock('SBER', start='2023-01-01', calculate_market_cap_flag=False)
-
-# Save multiple stocks
-tickers = ['SBER', 'LKOH', 'GAZP']
-for ticker in tickers:
-    moex.save_moex_stock(ticker, start='2000-01-01')
-```
-
-### Reading Local Data
-
-```python
-# Read local data (creates file if it doesn't exist)
-df = moex.read_moex_stock('SBER')
-```
-
-### Updating Data
-
-```python
-# Update single stock data (market cap recalculated automatically)
-moex.update_moex_stock('SBER')
-
-# Update without market cap recalculation
-moex.update_moex_stock('SBER', calculate_market_cap_flag=False)
-
-# Update all stocks
-moex.update_all_stocks()
-```
-
-На Windows полный цикл обновления (котировки → индексы → облигации → ключевая ставка ЦБ → adj_close → market_cap) запускается через `update_data.bat` (двойной клик или планировщик задач). Флаги пробрасываются в `update_data.py`:
-
-```bat
-update_data.bat --no-adj    :: без пересчета adj_close
-```
-
-Интерпретатор: переменная окружения `MOEX_PYTHON`, иначе conda-окружение `H:\conda\envs\py312`, иначе `python` из PATH (системный python без `apimoex` не подходит — bat сообщит об этом).
-
-**Ночное обновление.** Задача планировщика Windows `MOEX data nightly` запускает `scheduled_update.cmd` вт–сб в 00:30 (покрывает торги пн–пт). Слот выбран свободным от других ночных задач (FedStat с 02:00, еженедельные с 01:00 по воскресеньям): лимит 25 минут, пониженный приоритет, пропущенный запуск не догоняется — следующий прогон докачивает все сам. Лог — `logs/update.log` (ротация после 5 МБ), код выхода виден в планировщике.
+На Windows — `update_data.bat` (сам находит нужный интерпретатор). Каждую ночь вт–сб в 00:30 задача планировщика `MOEX data nightly` запускает `scheduled_update.cmd`; лог — `logs/update.log`, в конце — строка «Проверка данных: …».
 
 ```powershell
-Start-ScheduledTask -TaskName 'MOEX data nightly'          # запустить вручную
-Get-ScheduledTaskInfo -TaskName 'MOEX data nightly'        # последний запуск и результат
+Start-ScheduledTask -TaskName 'MOEX data nightly'     # запустить вручную
+Get-ScheduledTaskInfo -TaskName 'MOEX data nightly'   # последний запуск и результат
 ```
 
-### Market Cap Calculation
+Первичные многочасовые выгрузки (облигации всего рынка, фьючерсы, реестр выпусков) и все опции — в [справочнике API](docs/api-reference.md#скрипт-update_datapy).
 
-```python
-# Market cap is automatically calculated when saving/updating data
-# It uses shares data from metadata/stock-index-base.xlsx
+## Ноутбуки (marimo)
 
-# Calculate market cap for all existing stocks
-moex.add_market_cap_to_all_stocks()
-
-# Calculate market cap for a specific DataFrame
-df = moex.read_moex_stock('SBER')
-df_with_mc = moex.calculate_market_cap(df, 'SBER')
-```
-
-### Adjusted Close Price
-
-```python
-# Calculate adjusted close for a single stock
-df = moex.read_moex_stock('SBER')
-df_adj = moex.calculate_adj_close(df, div_folder='path/to/dividends/')
-
-# Add adjusted close to all stocks
-moex.add_adj_close_to_all_stocks(div_folder='path/to/dividends/')
-```
-
-### Combining Data
-
-```python
-# Combine all local stock data into one dataset
-combined_df = moex.combine_moex_stocks()
-```
-
-## Bonds Support
-
-### Мониторинг всех выпусков (основной механизм)
-
-История торгов **всей доски** запрашивается по датам (одна доска-дата — один постраничный запрос) и копится в годовых файлах `bonds/market_<SEGMENT>/<YYYY>.parquet` (ночью перезаписывается только текущий год): новые размещения появляются автоматически, погашенные выпуски отваливаются сами. В строках — биржевые `YIELDCLOSE`/`DURATION`, цены, обороты, купон, номинал, валюта.
+| Ноутбук | Содержание |
+|---------|------------|
+| `stocks-performance.py` | Обзор рынка акций за период: доходности, капитализация, сектора |
+| `ticker-analysis.py` | Анализ отдельной бумаги против индекса |
+| `portfolio-analysis.py` | Портфельный анализ и оптимизация |
+| `momentum-strategy.py` | Моментум-стратегия: walk-forward, vol scaling, trend filter |
+| `arima-analysis.py` | ARIMA-модели доходностей |
+| `bond-market.py` | Кривая ОФЗ, G-спреды корпоративных облигаций, RGBITR против IMOEX |
 
 ```bash
-# разовая инициализация досок (гособлигации + корпоративные)
-python update_data.py --no-update --no-adj --no-cap --bonds-market-init TQOB,TQCB --bonds-market-start 2021-01-01
-
-# дальше доски обновляются штатным запуском (шаг 1c)
-python update_data.py
+marimo edit marimo/bond-market.py
 ```
 
-```python
-df = moex.read_bonds_market()        # все доски одним длинным DataFrame
-df = moex.read_bonds_market('TQCB')  # только корпоративные
-```
-
-Аналитика поверх мониторинга — ноутбук `marimo/bond-market.py`: кривая ОФЗ (сегодня против прошлой даты), G-спреды корпоративных выпусков к кривой, RGBITR vs IMOEX, таблица всех выпусков.
-
-### Работа с отдельными выпусками
-
-- `get_moex_bonds_list(segment='TQCB')` — список облигаций сегмента (корпоративные TQCB, государственные TQOB и др.)
-- `get_moex_bond_params(secid)` — параметры облигации (купон, срок погашения, ISIN, номинал и др.)
-- `get_moex_bond_prices(secid, start, end)` — исторические данные по цене и доходности
-- `save_moex_bond(secid, start, end)` — сохранение в `bonds/<SECID>.parquet`
-- `read_moex_bond(secid)` — чтение локального файла
-- `update_moex_bond(secid)` — инкрементальное обновление данных
-
-### Пример
-
-```python
-import moex_utils as moex
-
-# 1. Получить список корпоративных облигаций
-bonds = moex.get_moex_bonds_list('TQCB')
-
-# 2. Параметры конкретной облигации
-params = moex.get_moex_bond_params('SBERB')
-
-# 3. Получить исторические цены
-hist = moex.get_moex_bond_prices('SBERB', '2024-01-01', '2024-12-31')
-
-# 4. Добавить метрики доходности на каждый день
-hist_with_metrics = moex.add_bond_metrics(hist, params.iloc[0])
-
-# 5. Сохранить в папку bonds
-moex.save_moex_bond('SBERB', '2024-01-01')
-```
-
-### Метрики облигаций
-
-- `calculate_ytm(price, face_value, coupon_rate, years_to_maturity)` — доходность до погашения
-- `calculate_duration(price, face_value, coupon_rate, years_to_maturity, ytm)` — модифицированная дюрация
-- `calculate_convexity(price, face_value, coupon_rate, years_to_maturity, ytm)` — модифицированная выпуклость
-- `add_bond_metrics(df, params)` — расчет YTM, duration и convexity для временного ряда цен
-
-## API Reference
-
-### Functions
-
-#### `get_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24)`
-
-Fetches stock data from MOEX API.
-
-**Parameters:**
-- `ticker` (str): Stock ticker symbol
-- `start` (str): Start date in 'YYYY-MM-DD' format
-- `end` (str): End date in 'YYYY-MM-DD' format (default: today)
-- `session` (requests.Session): Optional session object
-- `frequency` (int): Candle frequency (1=1min, 10=10min, 60=1hour, 24=1day, 7=1week, 31=1month, 4=1quarter)
-
-**Returns:** pandas.DataFrame with columns: date (index), value_rub, close, volume, ticker
-
-#### `get_moex_index(ticker, start='2023-01-01', end=None, session=None)`
-
-Fetches index data from MOEX API.
-
-**Parameters:**
-- `ticker` (str): Index ticker symbol
-- `start` (str): Start date in 'YYYY-MM-DD' format
-- `end` (str): End date in 'YYYY-MM-DD' format (default: today)
-- `session` (requests.Session): Optional session object
-
-**Returns:** pandas.DataFrame with columns: date, volume, close
-
-#### `save_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24, out_dir=None, calculate_market_cap_flag=True, metadata_file=None)`
-
-Downloads and saves stock data to local Parquet file. Automatically calculates and saves market cap if `calculate_market_cap_flag=True`.
-
-**Parameters:**
-- `ticker` (str): Stock ticker symbol
-- `start` (str): Start date in 'YYYY-MM-DD' format
-- `end` (str): End date in 'YYYY-MM-DD' format (default: today)
-- `session` (requests.Session): Optional session object
-- `frequency` (int): Candle frequency (1=1min, 10=10min, 60=1hour, 24=1day, 7=1week, 31=1month, 4=1quarter)
-- `out_dir` (str | None): Output directory (default: project `data/` folder)
-- `calculate_market_cap_flag` (bool): If True, calculates and saves market cap (default: True)
-- `metadata_file` (str | None): Path to Excel file with shares metadata (default: project `metadata/stock-index-base.xlsx`)
-
-**Returns:** str | None: Path to saved file or None on error
-
-#### `read_moex_stock(ticker, start='2023-01-01', end=None, session=None)`
-
-Reads local stock data, creates file if it doesn't exist.
-
-**Returns:** pandas.DataFrame with stock data
-
-#### `update_moex_stock(ticker, session=None, calculate_market_cap_flag=True, metadata_file=None, frequency=24)`
-
-Updates existing local stock data from last date to current date. Automatically recalculates market cap if `calculate_market_cap_flag=True`.
-
-**Parameters:**
-- `ticker` (str): Stock ticker symbol
-- `session` (requests.Session): Optional session object
-- `calculate_market_cap_flag` (bool): If True, recalculates market cap for all data (default: True)
-- `metadata_file` (str): Path to Excel file with shares metadata
-
-#### `update_all_stocks(calculate_market_cap_flag=True)`
-
-Updates data for all stocks that have existing local files (single shared HTTP session).
-
-#### `combine_moex_stocks(data_folder=None)`
-
-Combines all local stock data files into one unified dataset.
-
-#### `load_shares_data(metadata_file=None)`
-
-Loads shares data from Excel metadata file. Result is cached in memory until the file changes (mtime).
-
-**Parameters:**
-- `metadata_file` (str): Path to Excel file with metadata
-
-**Returns:** pandas.DataFrame with columns: Code, date, Number of issued shares
-
-#### `calculate_market_cap(df, ticker, metadata_file=None)`
-
-Calculates market cap for a DataFrame with stock price data.
-
-**Parameters:**
-- `df` (pd.DataFrame): DataFrame with stock price data (must contain 'close' or 'value_rub')
-- `ticker` (str): Stock ticker symbol
-- `metadata_file` (str): Path to Excel file with metadata
-
-**Returns:** pandas.DataFrame with added 'shares' and 'market_cap' columns
-
-#### `add_market_cap_to_all_stocks(metadata_file=None)`
-
-Calculates and adds 'shares' and 'market_cap' columns for all stocks in data folder.
-
-**Parameters:**
-- `metadata_file` (str): Path to Excel file with shares metadata
-
-#### `calculate_adj_close(df, div_folder)`
-
-Calculates adjusted close price based on dividend history.
-
-**Parameters:**
-- `df` (pd.DataFrame): DataFrame with stock data (must contain 'ticker' and 'close')
-- `div_folder` (str): Path to folder containing dividend CSV files
-
-**Returns:** pandas.DataFrame with added 'adj_close' column
-
-#### `add_adj_close_to_all_stocks(div_folder)`
-
-Calculates and adds 'adj_close' column for all stocks in data folder.
-
-**Parameters:**
-- `div_folder` (str): Path to folder containing dividend CSV files
-
-Подробное описание функций для облигаций — в [docs/api-reference.md](docs/api-reference.md).
-
-## Data Structure
-
-### Stock Data Columns
-- `date`: Trading date (index)
-- `value_rub`: trading turnover for the period in RUB — NOT a price
-- `close`: stock closing price; for daily data this is the official main-session close from the ISS `/history` endpoint (same methodology as indexes)
-- `volume`: Trading volume
-- `ticker`: Stock ticker symbol
-- `shares`: Number of issued shares (added when market cap is calculated)
-- `market_cap`: Market capitalization = close × shares (added when market cap is calculated)
-- `adj_close`: Adjusted close price (added when dividend adjustment is calculated)
-
-### Index Data Columns
-- `date`: Trading date (index)
-- `volume`: Index volume
-- `close`: Closing value
-
-## Project Layout
+## Структура проекта
 
 ```
 moexutils/
-├── moex_utils.py       # ядро библиотеки
-├── update_data.py      # пайплайн обновления данных (CLI)
-├── nb/                 # Jupyter-ноутбуки (исследования, примеры)
-├── scripts/            # обычные аналитические скрипты
-├── marimo/             # marimo-ноутбуки (аналитика и преподавание)
-├── tests/              # pytest-тесты
-├── docs/               # документация
-├── data/               # локальные котировки акций (не в git)
-│   ├── SBER/
-│   │   └── SBER.parquet
-│   └── ...
-├── bonds/              # локальные данные облигаций (не в git)
-│   ├── market_<SEGMENT>/<YYYY>.parquet  # мониторинг всех выпусков доски по датам, по годам
-│   ├── params.parquet            # снапшот параметров выпусков
-│   └── <SECID>.parquet           # истории отдельных выпусков
-├── indexes/            # локальный кэш индексов (не в git)
-└── metadata/
-    └── stock-index-base.xlsx  # Excel file with shares data (Code, date, Number of issued shares)
+├── moex_utils.py        # ядро библиотеки
+├── update_data.py       # пайплайн обновления (CLI)
+├── update_data.bat      # запуск на Windows
+├── scheduled_update.cmd # обертка для планировщика задач
+├── marimo/  nb/  scripts/
+├── tests/               # офлайн pytest-тесты
+├── docs/                # документация
+├── metadata/            # реестры: сплиты, переименования, снятые с торгов, ставка ЦБ
+└── logs/                # логи обновлений (не в git)
+
+F:\moex-data/           # данные (MOEX_DATA_ROOT): data/ indexes/ bonds/ futures/ — вне git и облака
 ```
 
-Пути `data/`, `bonds/`, `metadata/` привязаны к папке модуля `moex_utils.py`, поэтому импорт из `nb/` и `scripts/` работает при любом рабочем каталоге (в ноутбуках первая ячейка добавляет корень проекта в `sys.path`).
+Рыночные данные лежат вне проекта, в папке из переменной окружения `MOEX_DATA_ROOT` (на рабочей машине `F:\moex-data`): облачная синхронизация частых перезаписей портила файлы. Без переменной данные ищутся в папке проекта.
 
-### Metadata File Format
+Подробно о файлах и форматах — [docs/data-and-files.md](docs/data-and-files.md).
 
-The `metadata/stock-index-base.xlsx` file should contain:
-- Multiple sheets named with dates in format `DD.MM.YYYY`
-- Each sheet should have columns: `Code`, `Number of issued shares`
-- The library automatically reads all date sheets and combines them
+## Документация
 
-## Testing
+- [Справочник API](docs/api-reference.md) — функции `moex_utils`, хранилища истории, проверка качества, `update_data.py`, ночной запуск.
+- [Данные и файлы](docs/data-and-files.md) — каталоги, форматы Parquet, реестры, дивиденды.
+- [План развития](development-plan.md) — что сделано и что дальше.
 
-Тесты в `tests/test_moex_utils.py` полностью офлайновые (MOEX API замокан) и покрывают основные рабочие пути:
-
-- парсинг ответов API по акциям и индексам (`get_moex_stock`, `get_moex_index`)
-- сохранение/чтение/инкрементальное обновление Parquet (`save/read/update_moex_stock`, `update_all_stocks`, `combine_moex_stocks`)
-- разбор Excel-метаданных и расчет капитализации (`load_shares_data`, `calculate_market_cap`, ffill/bfill между срезами)
-- математику корректировки на дивиденды (`calculate_adj_close`, включая составные дивиденды)
-- облигации: API, хранение, мониторинг досок по датам (пагинация, бэкфилл), YTM/дюрация/выпуклость против эталонных значений
-
-Запуск тестов:
+## Тесты
 
 ```bash
-pip install pytest
 pytest -q
 ```
 
-Тесты также запускаются в CI (GitHub Actions, `.github/workflows/python-app.yml`).
+Тесты полностью офлайновые (ISS замокан): парсинг ответов, хранение и инкрементальное обновление, сплиты, переименования, дивиденды и экс-даты, капитализация, облигации и фьючерсы (пагинация, бэкфилл, блокировки, досчет пропусков), проверка качества данных, метрики облигаций. Запускаются в CI (GitHub Actions).
 
-## План развития
+## Принципы
 
-Подробный роадмап — в [development-plan.md](development-plan.md):
+- Корпоративные события — только через реестры в `metadata/`, данные руками не правятся.
+- Загрузчики не теряют данные молча: сбой — остановка и докачка в следующем прогоне.
+- Файлы пишутся атомарно и только при изменениях (папка синхронизируется облаком).
 
-1. Надежность и качество данных: отчет о качестве, партиционирование мониторинга облигаций, данные вне облачной синхронизации
-2. Облигации: КБД MOEX, терм-спред, breakeven-инфляция, корпоративные спреды
-3. Архитектура: разбиение `moex_utils.py` на пакет с фасадом, `pyproject.toml`, ruff
-4. Производные: фьючерсы FORTS, склейка серий, базис и implied rate
+## Лицензия
 
-## Error Handling
-
-The library includes comprehensive error handling for:
-- Invalid date formats
-- Empty API responses
-- Missing required columns
-- Network connection issues
-- File I/O operations
-
-## Dependencies
-
-- `requests`: HTTP requests
-- `apimoex`: MOEX API client
-- `pandas`: Data manipulation
-- `pyarrow`: Parquet file support
-- `openpyxl`: Excel file reading (for metadata)
-- `matplotlib`: Chart visualization (for performance plots)
-
-## License
-
-This project is open source and available under the MIT License.
+MIT.

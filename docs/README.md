@@ -1,55 +1,39 @@
 # Документация moexutils
 
-Библиотека для загрузки и обработки данных Московской биржи (MOEX): котировки акций и индексов, облигации (мониторинг всех выпусков досок по датам, биржевые YTM/дюрация, выпуклость), расчёт скорректированной цены (adj close) и капитализации.
+Библиотека и пайплайн данных Московской биржи (MOEX ISS): акции и индексы, облигации всего рынка с 1997 года (включая корпоративные, валютные и погашенные выпуски), все фьючерсы FORTS с 2002 года, ключевая ставка ЦБ; скорректированная цена (adj close), капитализация, проверка качества данных. Обзор проекта — в [README](../README.md).
 
-**Требования:** Python 3.9+.
+## Разделы
 
-## Установка
-
-```bash
-pip install -r requirements.txt
-```
-
-Или вручную:
-
-```bash
-pip install requests apimoex pandas pyarrow openpyxl "numpy<2"
-```
-
-Ограничение `numpy<2` нужно для совместимости с pandas/numexpr/bottleneck в окружениях, где они собраны под NumPy 1.x. Если используете свежие версии pandas и зависимостей, можно ставить NumPy 2.x.
-
-## Быстрый старт
-
-```python
-import moex_utils as moex
-
-# Чтение данных (при отсутствии файла — загрузка с MOEX)
-df = moex.read_moex_stock('SBER')
-
-# Обновление всех данных + adj_close + market_cap — из командной строки:
-# python update_data.py
-# python update_data.py --div-folder "F:/path/to/dividends/data"
-```
+- [Справочник API](api-reference.md) — функции `moex_utils` по рынкам, хранилища истории по датам, проверка качества, скрипт `update_data.py` и ночной запуск.
+- [Данные и файлы](data-and-files.md) — структура каталогов, форматы Parquet (акции, облигации, фьючерсы), реестры `metadata/`, дивиденды соседнего проекта.
+- [План развития](../development-plan.md) — состояние и ближайшие шаги.
 
 ## Состав проекта
 
 | Файл | Назначение |
 |------|------------|
-| **moex_utils.py** | Ядро: запросы к MOEX ISS (акции, индексы, облигации), сохранение в Parquet, расчёт adj_close, market_cap, YTM/дюрации |
-| **update_data.py** | Скрипт: обновление котировок, пересчёт adj_close и капитализации |
-| **update_data.bat** | Windows-обёртка для update_data.py (двойной клик / планировщик задач) |
-| **tests/** | Офлайновые pytest-тесты (MOEX API замокан), также гоняются в CI |
-| **requirements.txt** | Зависимости ядра и тестов (в т.ч. numpy<2 для совместимости) |
-| **requirements-notebooks.txt** | Дополнительно для marimo-ноутбуков (marimo, statsmodels, arch, PyPortfolioOpt и др.) |
+| `moex_utils.py` | Ядро: загрузка из ISS, хранение в Parquet, корпоративные события, adj_close, капитализация, облигации, фьючерсы, проверка качества |
+| `update_data.py` | Пайплайн обновления: акции → индексы → облигации → ставка ЦБ → фьючерсы → adj_close → market_cap → проверка |
+| `update_data.bat` | Запуск на Windows: выбор интерпретатора (`MOEX_PYTHON` → conda `py312` → `python`), проверка `apimoex` |
+| `scheduled_update.cmd` | Обертка для задачи планировщика `MOEX data nightly` (вт–сб 00:30), лог в `logs/update.log` |
+| `tests/` | Офлайн pytest-тесты (ISS замокан), гоняются в CI |
+| `requirements.txt` | Зависимости ядра и тестов (`numpy<2` — для совместимости со сборками pandas под NumPy 1.x) |
+| `requirements-notebooks.txt` | Дополнительно для marimo-ноутбуков (marimo, statsmodels, arch, PyPortfolioOpt и др.) |
 
-## Разделы
+## Установка и запуск
 
-- [Справочник API](api-reference.md) — функции `moex_utils` и скрипт `update_data`.
-- [Данные и файлы](data-and-files.md) — структура каталогов, формат Parquet, метаданные и дивиденды.
+```bash
+pip install -r requirements.txt
+python update_data.py            # полный цикл обновления
+python update_data.py --check    # только проверка данных
+pytest -q                        # тесты
+```
+
+Рабочее окружение — conda `H:\conda\envs\py312`; системный `python` без `apimoex` не подходит. Данные лежат в `MOEX_DATA_ROOT` (`F:\moex-data`), реестры `metadata/` — в проекте.
 
 ## Зависимости
 
-- **requests**, **apimoex** — работа с API MOEX  
-- **pandas**, **pyarrow** — данные и Parquet  
-- **openpyxl** — чтение Excel (метаданные по акциям)  
-- **numpy<2** — в requirements.txt для совместимости со старыми сборками pandas/numexpr/bottleneck
+- **requests**, **apimoex** — ISS MOEX; **lxml** — таблица ключевой ставки с cbr.ru
+- **pandas**, **pyarrow** — данные и Parquet
+- **openpyxl** — Excel с количеством акций
+- **plotly** — графики в ноутбуках
