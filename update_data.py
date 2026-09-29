@@ -3,8 +3,8 @@
 adj_close и капитализация, проверка качества и обслуживание хранилища.
 
 Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы →
-2 adj_close → 3 market_cap → 4 проверка данных → 5 обслуживание хранилища.
-Облигации и фьючерсы хранятся в DuckLake (lake.py); ночью они только
+2 пересчет adj_close и капитализации → 3 проверка данных → 4 обслуживание хранилища.
+Все данные — в хранилище DuckLake (lake.py). Облигации и фьючерсы ночью только
 дообновляются — первичная выгрузка запускается явно (--history-init).
 
 Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate]
@@ -22,6 +22,8 @@ from typing import Optional
 import history
 import lake
 import moex_utils as moex
+import quality
+import stocks
 
 
 def _lake_tables() -> Optional[list]:
@@ -62,7 +64,6 @@ def main(
     history_start: Optional[str] = None,
     rebuild: bool = False,
     div_folder: Optional[str] = None,
-    data_folder: Optional[str] = None,
     metadata_file: Optional[str] = None,
     index_tickers: Optional[str] = "IMOEX,MCFTR,RGBITR",
     check_days: Optional[int] = 30,
@@ -71,10 +72,8 @@ def main(
 ) -> None:
     print(f"Данные: {moex.DATA_ROOT}"
           + ("" if os.environ.get("MOEX_DATA_ROOT") else " (MOEX_DATA_ROOT не задана — папка проекта)"))
-    if data_folder is not None:
-        moex.DATA_FOLDER = data_folder
     if metadata_file is not None:
-        moex.METADATA_FILE = metadata_file
+        stocks.METADATA_FILE = metadata_file
 
     if div_folder is None:
         base = os.path.dirname(os.path.abspath(__file__))
@@ -92,21 +91,21 @@ def main(
 
     if do_update:
         print("=== 1. Обновление данных с MOEX ===" + (" (полное перескачивание)" if rebuild else ""))
-        # adj_close и market cap считаются сразу при обновлении тикера: файл пишется
-        # один раз за прогон. Шаги 2-3 ниже — сверка: пишут только файлы, у которых
-        # поменялись дивиденды или метаданные
-        moex.update_all_stocks(calculate_market_cap_flag=do_market_cap, rebuild=rebuild,
-                               div_folder=div_folder if div_ok else None)
+        # adj_close и капитализация считаются сразу по всей истории тикера; в
+        # хранилище пишутся только новые и изменившиеся строки
+        try:
+            stocks.update_stocks(div_folder=div_folder if div_ok else None, rebuild=rebuild)
+        except Exception as e:
+            print(f"[WARN] Акции: не удалось обновить — {e}")
     else:
         print("=== 1. Обновление данных — пропуск (--no-update) ===")
 
     if do_indexes and index_tickers:
         print("=== 1b. Обновление индексов ===")
-        for idx_ticker in [t.strip() for t in index_tickers.split(",") if t.strip()]:
-            try:
-                moex.update_moex_index(idx_ticker)
-            except Exception as e:
-                print(f"[WARN] {idx_ticker}: не удалось обновить индекс — {e}")
+        try:
+            stocks.update_indexes([t.strip() for t in index_tickers.split(",") if t.strip()])
+        except Exception as e:
+            print(f"[WARN] Индексы: не удалось обновить — {e}")
     else:
         print("=== 1b. Индексы — пропуск (--no-index) ===")
 
@@ -123,7 +122,7 @@ def main(
     if do_key_rate:
         print("=== 1d. Ключевая ставка ЦБ ===")
         try:
-            moex.update_key_rate()
+            stocks.update_key_rate()
         except Exception as e:
             print(f"[WARN] Ключевая ставка: не удалось обновить — {e}")
     else:
@@ -135,39 +134,38 @@ def main(
     else:
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
 
-    if do_adj_close:
+    if do_adj_close and do_market_cap:
         if not div_ok:
-            print(f"[WARN] Папка дивидендов не найдена: {div_folder}. Adj close пропущен.")
+            print(f"[WARN] Папка дивидендов не найдена: {div_folder}. Пересчет adj_close пропущен.")
         else:
-            print("=== 2. Расчёт adjusted close (дивиденды) ===")
-            moex.add_adj_close_to_all_stocks(div_folder)
+            # Сверка: после обновления дивидендов, метаданных или реестра сплитов
+            # меняется история прошлых дат — пишутся только изменившиеся строки
+            print("=== 2. Пересчет adj_close и капитализации ===")
+            try:
+                stocks.recompute_stocks(div_folder=div_folder)
+            except Exception as e:
+                print(f"[WARN] Пересчет не выполнен — {e}")
     else:
-        print("=== 2. Adj close — пропуск (--no-adj) ===")
-
-    if do_market_cap:
-        print("=== 3. Расчёт капитализации (market_cap) ===")
-        moex.add_market_cap_to_all_stocks()
-    else:
-        print("=== 3. Market cap — пропуск (--no-cap) ===")
+        print("=== 2. Пересчет adj_close и капитализации — пропуск (--no-adj/--no-cap) ===")
 
     if do_check:
-        print(f"=== 4. Проверка данных (окно {check_days or 'вся история'} торг. дн., "
+        print(f"=== 3. Проверка данных (окно {check_days or 'вся история'} торг. дн., "
               f"дивиденды — {check_div_days or 'вся история'}) ===")
         try:
-            issues = moex.data_quality_report(days=check_days, div_folder=div_folder,
-                                              div_days=check_div_days, check_iss=check_iss)
-            for r in issues.head(60).itertuples(index=False):
-                print(f"  [{r.check}] {r.object}: {r.detail}")
-            if len(issues) > 60:
-                print(f"  ... и еще {len(issues) - 60}")
-            print(moex.quality_summary(issues))
+            issues = quality.data_quality_report(days=check_days, div_folder=div_folder,
+                                                 div_days=check_div_days, check_iss=check_iss)
+            for check, obj, detail in issues.head(60).iter_rows():
+                print(f"  [{check}] {obj}: {detail}")
+            if issues.height > 60:
+                print(f"  ... и еще {issues.height - 60}")
+            print(quality.quality_summary(issues))
         except Exception as e:
             print(f"[WARN] Проверка данных не выполнена — {e}")
     else:
-        print("=== 4. Проверка данных — пропуск (--no-check) ===")
+        print("=== 3. Проверка данных — пропуск (--no-check) ===")
 
     if do_maintenance:
-        print("=== 5. Обслуживание хранилища (слияние файлов, снимки старше "
+        print("=== 4. Обслуживание хранилища (слияние файлов, снимки старше "
               f"{lake.SNAPSHOT_RETENTION_DAYS} дней) ===")
         if _lake_tables() is not None:
             try:
@@ -175,7 +173,7 @@ def main(
             except Exception as e:
                 print(f"[WARN] Обслуживание хранилища не выполнено — {e}")
     else:
-        print("=== 5. Обслуживание хранилища — пропуск ===")
+        print("=== 4. Обслуживание хранилища — пропуск ===")
 
     print("\nГотово.")
 
@@ -193,8 +191,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-bonds", action="store_true", help="Не обновлять облигации")
     ap.add_argument("--no-key-rate", action="store_true", help="Не обновлять ключевую ставку ЦБ")
     ap.add_argument("--no-futures", action="store_true", help="Не обновлять фьючерсы")
-    ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close")
-    ap.add_argument("--no-cap", action="store_true", help="Не пересчитывать market_cap")
+    ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close и капитализацию (шаг 2)")
+    ap.add_argument("--no-cap", action="store_true", help="То же, что --no-adj")
     ap.add_argument("--no-check", action="store_true", help="Не выполнять проверку данных")
     ap.add_argument("--no-maintenance", action="store_true", help="Не обслуживать хранилище")
     ap.add_argument("--check", action="store_true",
@@ -214,7 +212,6 @@ if __name__ == "__main__":
                     help="Индексы через запятую (по умолчанию IMOEX,MCFTR,RGBITR)")
     ap.add_argument("--div-folder", type=str, default=None,
                     help="Папка CSV дивидендов (по умолчанию ../dividends/data)")
-    ap.add_argument("--data-folder", type=str, default=None, help="Папка акций")
     ap.add_argument("--metadata-file", type=str, default=None,
                     help="Excel с количеством акций (metadata/stock-index-base.xlsx)")
     args = ap.parse_args()
@@ -243,7 +240,6 @@ if __name__ == "__main__":
         history_start=start,
         rebuild=args.rebuild,
         div_folder=args.div_folder,
-        data_folder=args.data_folder,
         metadata_file=args.metadata_file,
         index_tickers=args.indexes,
         check_days=250 if args.check else 30,

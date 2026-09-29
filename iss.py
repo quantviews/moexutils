@@ -137,6 +137,48 @@ def history_day(market_path: str, date, session: requests.Session,
               .select(['date', *[c for c in df.columns if c != 'TRADEDATE']]))
 
 
+def security_history(market_path: str, secid: str, start, end=None,
+                     session: Optional[requests.Session] = None,
+                     columns: Optional[list[str]] = None, max_pages: int = 2000) -> pl.DataFrame:
+    """
+    История торгов одной бумаги за период (все режимы торгов, все страницы).
+    market_path — 'stock/markets/shares', 'stock/markets/index' и т.п.;
+    columns — поля ISS (меньше трафика). TRADEDATE -> колонка date (Date).
+    """
+    session = session or make_session()
+    url = f"{ISS_URL}/history/engines/{market_path}/securities/{secid}.json"
+    params = {'from': _day(start), 'till': _day(end) if end is not None else _day(_today())}
+    if columns:
+        params['history.columns'] = ','.join(dict.fromkeys(['TRADEDATE', *columns]))
+    pages, offset = [], 0
+    for _ in range(max_pages):
+        resp = session.get(url, params={**params, 'start': offset})
+        resp.raise_for_status()
+        data = resp.json()
+        page = to_frame(data.get('history'))
+        if page.is_empty():
+            break
+        pages.append(page)
+        offset += page.height
+        cursor = to_frame(data.get('history.cursor'))
+        if cursor.is_empty() or 'TOTAL' not in cursor.columns or offset >= int(cursor['TOTAL'][0]):
+            break
+    if not pages:
+        return pl.DataFrame()
+    df = pl.concat(pages, how='diagonal_relaxed')
+    return (df.with_columns(pl.col('TRADEDATE').str.to_date('%Y-%m-%d').alias('date'))
+              .drop('TRADEDATE'))
+
+
+def _day(value) -> str:
+    return value.strftime('%Y-%m-%d') if hasattr(value, 'strftime') else str(value)[:10]
+
+
+def _today():
+    import datetime as _dt
+    return _dt.date.today()
+
+
 def security_description(secid: str, session: Optional[requests.Session] = None) -> dict:
     """
     Карточка бумаги ISS (/iss/securities/<SECID>, блок description) как словарь

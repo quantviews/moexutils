@@ -14,7 +14,7 @@
 
 Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы пока не выгружаются.
 
-**Хранение.** Облигации и фьючерсы — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL. Акции и индексы пока в Parquet-файлах и pandas — идет поэтапная миграция всего проекта на polars и DuckLake.
+**Хранение.** Все рыночные данные — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL. Модель таблиц — [docs/data-model.md](docs/data-model.md), все поля биржи по рынкам — [docs/iss-columns.md](docs/iss-columns.md). marimo-ноутбуки пока работают через pandas-обертки `moex_utils` — их перевод на polars следующий.
 
 ## Установка
 
@@ -30,10 +30,11 @@ pip install -r requirements-notebooks.txt  # + marimo-ноутбуки
 ```python
 import moex_utils as moex
 
-# Акции и индексы (локальные файлы; при отсутствии — загрузка с MOEX)
-sber = moex.read_moex_stock('SBER')                  # close, adj_close, market_cap, ...
-imoex = moex.read_moex_index('IMOEX')
-stocks = moex.adjust_for_splits(moex.combine_moex_stocks())  # все тикеры, склейка переименований
+# Акции и индексы (polars)
+import stocks
+sber = stocks.read_stocks('SBER', start='2024-01-01')      # close, adj_close, market_cap, ...
+all_stocks = stocks.read_stocks(split_adjusted=True)        # все тикеры: склейка переименований + сплиты
+imoex = stocks.read_index('IMOEX')
 
 # Облигации (polars): весь рынок с 1997 года, все поля ISS
 ofz_corp = moex.read_bonds_market(boards=['TQOB', 'TQCB'], start='2026-01-01')
@@ -87,7 +88,9 @@ marimo edit marimo/bond-market.py
 
 ```
 moexutils/
-├── moex_utils.py        # основной интерфейс: акции, индексы, корп. события, качество данных
+├── moex_utils.py        # фасад прежнего интерфейса (+ временные pandas-обертки для ноутбуков)
+├── stocks.py            # акции и индексы: загрузка, сплиты, переименования, adj_close, капитализация, ставки
+├── quality.py           # проверка качества данных
 ├── lake.py              # хранилище DuckLake (каталог Postgres, результаты — polars)
 ├── history.py           # история рынков в хранилище: облигации, фьючерсы, реестры бумаг
 ├── iss.py               # доступ к MOEX ISS: HTTP-сессия, разбор ответов в polars
@@ -100,7 +103,7 @@ moexutils/
 ├── metadata/            # реестры: сплиты, переименования, снятые с торгов, ставка ЦБ
 └── logs/                # логи обновлений (не в git)
 
-F:\moex-data/           # данные (MOEX_DATA_ROOT), вне git и облака: lake/ (хранилище), data/ и indexes/ (акции, индексы)
+F:\moex-data/           # данные (MOEX_DATA_ROOT), вне git и облака: lake/ (хранилище)
 ```
 
 Рыночные данные лежат вне проекта, в папке из переменной окружения `MOEX_DATA_ROOT` (на рабочей машине `F:\moex-data`): облачная синхронизация частых перезаписей портила файлы. Без переменной данные ищутся в папке проекта.
@@ -109,8 +112,10 @@ F:\moex-data/           # данные (MOEX_DATA_ROOT), вне git и обла�
 
 ## Документация
 
-- [Справочник API](docs/api-reference.md) — функции `moex_utils`, хранилища истории, проверка качества, `update_data.py`, ночной запуск.
-- [Данные и файлы](docs/data-and-files.md) — каталоги, форматы Parquet, реестры, дивиденды.
+- [Модель данных](docs/data-model.md) — таблицы хранилища, ключи, колонки, связи, реестры, какие шаги что пишут.
+- [Колонки данных MOEX](docs/iss-columns.md) — все поля ISS по рынкам (акции, облигации, индексы, фьючерсы, опционы, валюта) и карточкам бумаг, с отметкой, что мы храним.
+- [Справочник API](docs/api-reference.md) — функции модулей, проверка качества, `update_data.py`, ночной запуск.
+- [Данные и файлы](docs/data-and-files.md) — каталоги, хранилище, логи.
 - [План развития](development-plan.md) — что сделано и что дальше.
 
 ## Тесты

@@ -1,5 +1,4 @@
 requests
-apimoex
 pandas
 pyarrow
 openpyxl

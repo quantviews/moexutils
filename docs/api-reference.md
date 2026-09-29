@@ -4,180 +4,122 @@
 
 | Модуль | Что в нем |
 |--------|-----------|
-| `moex_utils` | Прежний интерфейс: акции, индексы, корпоративные события, adj_close, капитализация, ставка ЦБ, проверка качества; облигации и фьючерсы — тонкие обертки над `history` |
-| `lake` | Хранилище DuckLake: подключение, SQL-запросы с результатом в polars, запись по ключу, обслуживание |
+| `stocks` | Акции и индексы в хранилище: загрузка из ISS, сплиты, переименования, снятые с торгов, `adj_close`, капитализация, ключевая ставка, безрисковая ставка |
 | `history` | История рынков «все инструменты за дату» (облигации, фьючерсы) в хранилище, реестр карточек бумаг |
+| `quality` | Проверка качества данных |
+| `lake` | Хранилище DuckLake: подключение, SQL-запросы с результатом в polars, запись по ключу, обслуживание |
 | `iss` | Доступ к ISS: HTTP-сессия, разбор ответов в polars |
+| `moex_utils` | Фасад прежнего интерфейса: реэкспорт функций модулей, обертки облигаций и фьючерсов, математика облигаций и **временные pandas-обертки** для marimo-ноутбуков |
 
-**Миграция на polars и DuckLake идет по частям.** Облигации и фьючерсы уже в хранилище и отдаются как polars DataFrame; акции и индексы пока в Parquet-файлах и pandas (переводятся следующей частью). Скрипт обновления — `update_data.py` (раздел в конце).
+Все функции модулей возвращают **polars**. Исключение — pandas-обертки `moex_utils` (`read_moex_stock`, `combine_moex_stocks`, `read_moex_index`, `adjust_for_splits`, `apply_renames`, `load_renames`, `load_key_rate`, `risk_free_monthly`): их используют ноутбуки до перевода на polars, в новом коде берите функции `stocks`. Модель таблиц — [data-model.md](data-model.md), все поля биржи — [iss-columns.md](iss-columns.md). Скрипт обновления — `update_data.py` (раздел в конце).
 
 ## Константы и инфраструктура
 
-Пути не зависят от текущего рабочего каталога — импорт из `nb/`, `scripts/`, `marimo/` работает одинаково. **Рыночные данные** лежат в корне `DATA_ROOT`: это переменная окружения `MOEX_DATA_ROOT` (на рабочей машине — `F:\moex-data`, вне папки Яндекс.Диска: синхронизация частых перезаписей портила файлы), а если она не задана — папка проекта. **Реестры** `metadata/` всегда в папке проекта (`BASE_DIR`) и в git. Переменная читается при импорте модуля: процессы, запущенные до ее установки (терминалы, VS Code, marimo), нужно перезапустить. Константы можно переопределить до вызова функций (`moex.DATA_FOLDER = ...`); дефолтные пути разрешаются в момент вызова.
+Пути не зависят от текущего рабочего каталога. **Рыночные данные** — в хранилище DuckLake: файлы в `<MOEX_DATA_ROOT>/lake` (переменная окружения `MOEX_DATA_ROOT`, на рабочей машине `F:\moex-data`; без нее — папка проекта), каталог — PostgreSQL. **Реестры** `metadata/` — в папке проекта и в git. Переменная читается при импорте модулей: процессы, запущенные до ее установки, нужно перезапустить.
 
-| Константа | По умолчанию | Описание |
-|-----------|--------------|----------|
-| `DATA_ROOT` | `MOEX_DATA_ROOT` или `<проект>` | Корень рыночных данных |
-| `DATA_FOLDER` | `<DATA_ROOT>/data` | Акции: `<TICKER>/<TICKER>.parquet` |
-| `INDEXES_FOLDER` | `<DATA_ROOT>/indexes` | Кэш индексов: `<TICKER>.parquet` |
-| `lake.LAKE_DATA_PATH` | `<DATA_ROOT>/lake` | Файлы данных хранилища DuckLake (облигации, фьючерсы) |
-| `METADATA_FILE` | `<проект>/metadata/stock-index-base.xlsx` | Количество акций по датам (для капитализации) |
-| `SPLITS_FILE` | `<проект>/metadata/splits.csv` | Реестр сплитов: `ticker, date, ratio, kind` |
-| `EXTERNAL_SPLITS_FILE` | `<проект>/../dividends/metadata/splits.json` | Внешний реестр сплитов проекта dividends |
-| `RENAMES_FILE` | `<проект>/metadata/renames.csv` | Реестр переименований тикеров |
-| `DELISTED_FILE` | `<проект>/metadata/delisted.csv` | Снятые с торгов тикеры (не обновляются) |
-| `KEY_RATE_FILE` | `<проект>/metadata/key_rate.csv` | История ключевой ставки ЦБ |
-| `DIVIDENDS_FOLDER` | `<проект>/../dividends/data` | CSV дивидендов соседнего проекта dividends |
-| `ISS_TIMEOUT` | `(10, 60)` | Таймаут запроса к ISS: соединение, ответ (сек) |
+| Константа | Значение | Описание |
+|-----------|----------|----------|
+| `lake.LAKE_DATA_PATH` | `<MOEX_DATA_ROOT>/lake` | Файлы данных хранилища |
+| `lake.PG_DATABASE`, `lake.PG_USER` | `moex_lake`, `moex` | Каталог хранилища (переопределяются `MOEX_PG_*`) |
+| `stocks.METADATA_FILE` | `<проект>/metadata/stock-index-base.xlsx` | Срезы числа акций |
+| `stocks.SPLITS_FILE` | `<проект>/metadata/splits.csv` | Реестр сплитов |
+| `stocks.EXTERNAL_SPLITS_FILE` | `<проект>/../dividends/metadata/splits.json` | Внешний реестр сплитов проекта dividends |
+| `stocks.RENAMES_FILE` | `<проект>/metadata/renames.csv` | Реестр переименований |
+| `stocks.DELISTED_FILE` | `<проект>/metadata/delisted.csv` | Снятые с торгов |
+| `stocks.KEY_RATE_FILE` | `<проект>/metadata/key_rate.csv` | Ключевая ставка ЦБ |
+| `stocks.DIVIDENDS_FOLDER` | `<проект>/../dividends/data` | CSV дивидендов |
+| `iss.ISS_TIMEOUT` | `(10, 60)` | Таймаут запроса к ISS: соединение, ответ (сек) |
+| `moex_utils.DATA_FOLDER`, `INDEXES_FOLDER` | `<MOEX_DATA_ROOT>/data`, `/indexes` | Прежние Parquet-файлы акций и индексов — заморожены (ноутбуки перебирают по ним тикеры) |
 
-**HTTP.** Все загрузчики ходят в ISS через `make_session()` — `requests.Session` с таймаутом `ISS_TIMEOUT` и повторами на сетевых сбоях, 429 и 5xx (зависший запрос не останавливает прогон). Историю ISS отдает страницами по 100 строк (больше не разрешает), загрузчики листают все страницы.
-
-**Запись файлов.** Parquet пишется атомарно (`.tmp` + `os.replace`); если целевой файл занят другим процессом (чтение из ноутбука, облачная синхронизация, антивирус), замена повторяется до 10 раз с паузой. Неизменившиеся файлы не перезаписываются.
+**HTTP.** Все загрузчики ходят в ISS через `iss.make_session()` — `requests.Session` с таймаутом и повторами на сетевых сбоях, 429 и 5xx. Историю ISS отдает страницами по 100 строк, загрузчики листают все страницы. Типы колонок ответа берутся из метаданных ISS.
 
 **Логи.** Сообщения идут через логгер `moex_utils` (по умолчанию — в stdout). Приглушить: `logging.getLogger("moex_utils").setLevel(logging.WARNING)`.
 
 ---
 
-## Акции
-
-### get_moex_stock
+## Акции (`stocks`)
 
 ```python
-get_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24) -> pd.DataFrame
+stocks.read_stocks(tickers=None, start=None, end=None, merge_renames=True, split_adjusted=False,
+                   columns=None) -> pl.DataFrame
+stocks.list_tickers(include_delisted=True) -> list[str]
+stocks.update_stocks(tickers=None, include_delisted=False, div_folder=None, rebuild=False,
+                     session=None) -> int
+stocks.recompute_stocks(tickers=None, div_folder=None, dry_run=False) -> pl.DataFrame
+stocks.add_stock(ticker, start='2002-01-01', div_folder=None, session=None) -> int
+stocks.fetch_stock(ticker, start, end=None, session=None) -> pl.DataFrame
 ```
 
-Котировки бумаги. `frequency`: 1 / 10 / 60 минут, **24** — день, 7 — неделя, 31 — месяц, 4 — квартал.
+- **`read_stocks`** — дневные данные из `lake.stocks`. `merge_renames` склеивает истории переименованных тикеров (исходный тикер строки — `source_ticker`); `split_adjusted` приводит цены к пост-сплитовой базе (после склейки: реестр сплитов записан на текущий тикер). Результат отсортирован по `ticker, date`.
+- **`update_stocks`** — дозагрузка из ISS с последней даты тикера (она перекачивается) до сегодня; `rebuild` — вся история с 2002 года. Для каждого тикера сразу пересчитываются `adj_close` и капитализация по всей истории; в хранилище пишутся только новые и изменившиеся строки — одной транзакцией. Снятые с торгов (`metadata/delisted.csv`) пропускаются (`include_delisted=True` — опросить и их). Шаг 1 `update_data.py`.
+- **`recompute_stocks`** — пересчет `adj_close` и капитализации после изменения дивидендов, срезов числа акций или реестра сплитов; пишет только изменившиеся строки, `dry_run` — только вернуть их. Шаг 2 `update_data.py`.
+- **`add_stock`** — новый тикер: вся история с `start`, сразу с расчетными колонками.
+- **`fetch_stock`** — дневные данные из истории торгов ISS: на дату — строка режима с максимальным оборотом (главная доска), `close` — закрытие основной сессии (та же методика, что у индексов).
 
-**Методика:** дневные данные берутся из официальной истории торгов (`/history`): `close` — закрытие **основной сессии**, только завершенные дни — та же методика, что у индексов. На каждую дату остается строка главной доски (с максимальным оборотом). Остальные частоты — свечи ISS (включают вечернюю сессию и текущий незавершенный период).
+Колонки и их смысл — [data-model.md → lake.stocks](data-model.md#lakestocks--акции). Внутридневные свечи не поддерживаются (не используются проектом).
 
-**Возвращает:** индекс `date`; `open`, `low`, `high`, `close`, `waprice` (средневзвешенная, только дневные), `volume`, `value_rub` (оборот, руб. — не цена), `ticker`. Ошибки API и разбора оборачиваются в `RuntimeError` (пустой ответ — `RuntimeError(... empty ...)`).
-
-### save_moex_stock / read_moex_stock
+## Индексы (`stocks`)
 
 ```python
-save_moex_stock(ticker, start='2023-01-01', end=None, session=None, frequency=24,
-                out_dir=None, calculate_market_cap_flag=True, metadata_file=None) -> Optional[str]
-read_moex_stock(ticker, start='2023-01-01', end=None, session=None) -> pd.DataFrame
+stocks.read_index(ticker='IMOEX', start=None, end=None) -> pl.DataFrame
+stocks.update_indexes(tickers=('IMOEX', 'MCFTR', 'RGBITR'), session=None) -> int
+stocks.fetch_index(ticker, start, end=None, session=None) -> pl.DataFrame
 ```
 
-`save_moex_stock` скачивает историю и сохраняет в `out_dir/<TICKER>/<TICKER>.parquet` (тикер приводится к верхнему регистру), при `calculate_market_cap_flag=True` добавляет `shares` и `market_cap`; при ошибке возвращает `None` и пишет в лог. `read_moex_stock` читает локальный файл, а если его нет — сначала скачивает.
+История индексов в `lake.indexes`: `date, ticker, BOARDID, close, value_rub` (оборот), `volume`. `update_indexes` дозагружает с последней даты (без истории — с 2000 года) и пишет только новые и изменившиеся строки; шаг 1b. Даты IMOEX служат торговым календарем для проверок и докачки пропусков.
 
-### update_moex_stock
+## Корпоративные события (`stocks`)
 
 ```python
-update_moex_stock(ticker, session=None, calculate_market_cap_flag=True,
-                  metadata_file=None, frequency=24, div_folder=None) -> None
+stocks.load_splits(splits_file=None, external_file=None) -> pl.DataFrame
+stocks.adjust_for_splits(df, splits=None) -> pl.DataFrame
+stocks.price_jump_matches(dates, prices, date, divisor) -> bool
+stocks.load_renames(renames_file=None) -> pl.DataFrame
+stocks.apply_renames(df, renames=None) -> pl.DataFrame
+stocks.load_delisted(delisted_file=None) -> pl.DataFrame
+stocks.is_traded(ticker, session=None) -> Optional[bool]
 ```
 
-Дозагрузка с последней даты файла. Последняя дата перекачивается: сырые колонки берутся из ответа ISS, а уже посчитанные (`adj_close`, `shares`, `market_cap`) сохраняются из файла. Если передан `div_folder`, `adj_close` пересчитывается сразу (одна запись файла за прогон вместо нескольких). Если данные не изменились, файл не перезаписывается. `frequency` должна совпадать с частотой, с которой файл сохранялся.
+**Сплиты.** Реестр `metadata/splits.csv` (`ticker, date, ratio, kind`) плюс внешний `../dividends/metadata/splits.json` (записи получают `kind=auto`; явная запись `splits.csv` в пределах 45 дней приоритетнее):
 
-### update_all_stocks
+- **`price`** — в истории цен разрыв на дату: `adjust_for_splits` делит цены (`close`, `open`, `high`, `low`, `waprice`) до даты на `ratio`, объем умножает; `adj_close`, `value_rub`, `market_cap` не трогаются.
+- **`shares`** — биржа пересчитала цены, но число акций в старых срезах метаданных в старой базе: число акций до даты делится на `ratio` (капитализация).
+- **`auto`** — вид по данным (`price_jump_matches`): есть ценовой разрыв, соответствующий сплиту (допуск 2,5×) — ценовая поправка, нет — поправка числа акций.
+
+`ratio` в ценовой семантике: дробление 1:10 → `10`, консолидация 100:1 → `0.01`.
+
+**Переименования.** `metadata/renames.csv` (`old, new, date` — первый день нового тикера): `apply_renames` дает строкам старого тикера новый тикер, исходный — в `source_ticker`; строки старого тикера с даты переименования отбрасываются с предупреждением; цепочки A→B→C поддерживаются. Конвертации с коэффициентом ≠ 1:1 в реестр не входят.
+
+**Снятые с торгов.** `metadata/delisted.csv` (`ticker, last_date, note`): история хранится, но не обновляется. `is_traded` — торгуется ли акция хоть на одной доске рынка shares (флаг ISS `is_traded`; `None` — ISS бумагу не знает).
+
+## Дивиденды, `adj_close`, капитализация (`stocks`)
 
 ```python
-update_all_stocks(calculate_market_cap_flag=True, rebuild=False, div_folder=None,
-                  include_delisted=False) -> None
+stocks.load_dividends(ticker, div_folder=None) -> pl.DataFrame
+stocks.ex_dividend_pos(dates, record_date) -> int
+stocks.adj_close(df, dividends=None, splits=None) -> tuple[pl.DataFrame, list]
+stocks.load_shares(metadata_file=None) -> pl.DataFrame
+stocks.market_cap(df, shares=None, splits=None) -> pl.DataFrame
+stocks.enrich(df, div_folder=None, shares=None, splits=None) -> tuple[pl.DataFrame, list]
 ```
 
-Обновляет все тикеры, для которых есть файл в `DATA_FOLDER`, одной HTTP-сессией. Тикеры из `metadata/delisted.csv` пропускаются (`include_delisted=True` — опросить и их). `rebuild=True` перескачивает историю каждого тикера с 2002 года (после смены методики данных).
+- **`adj_close`** (одна бумага) — цена с поправкой на дивиденды и сплиты в текущей базе. Методика и экс-дата (T+1 с 31.07.2023, раньше T+2) — [data-model.md → lake.stocks](data-model.md#lakestocks--акции). Возвращает также список отброшенных дивидендов `[(дата, сумма)]` — их показывает проверка данных.
+- **`load_dividends`** — CSV проекта dividends: `closing_date`, `dividend_value` (> 0).
+- **`load_shares`** — срезы числа акций из Excel (`ticker, date, shares`), кэш до изменения файла; читается через openpyxl.
+- **`market_cap`** — `shares` (между срезами — последний, до первого — первый, с поправками сплитов) и `market_cap = close × shares`; нет данных — пустые колонки.
+- **`enrich`** — `adj_close` и капитализация вместе.
 
-### combine_moex_stocks
+Перенос логики с pandas на polars проверен сверкой: пересчет по всем 311 тыс. строкам дал нулевое расхождение с прежними значениями.
+
+## Ставки (`stocks`)
 
 ```python
-combine_moex_stocks(data_folder=None, merge_renames=True) -> pd.DataFrame
+stocks.load_key_rate(key_rate_file=None) -> pl.DataFrame
+stocks.update_key_rate(key_rate_file=None, session=None) -> int
+stocks.risk_free_monthly(dates, key_rate_file=None) -> pl.DataFrame
 ```
 
-Все тикеры одним DataFrame. При `merge_renames=True` истории переименованных бумаг склеиваются (см. `apply_renames`), исходный тикер строки — в колонке `source_ticker`.
-
----
-
-## Индексы
-
-```python
-get_moex_index(ticker, start='2023-01-01', end=None, session=None) -> pd.DataFrame
-save_moex_index(ticker='IMOEX', start='2010-01-01', end=None, session=None) -> Optional[str]
-read_moex_index(ticker='IMOEX') -> pd.DataFrame
-update_moex_index(ticker='IMOEX', session=None) -> None
-```
-
-История индекса (IMOEX, MCFTR, RGBITR и др.): индекс `date`, колонки `volume`, `close`, `ticker`. Локальный кэш — `INDEXES_FOLDER/<TICKER>.parquet`; `update_moex_index` дозагружает с последней даты (без файла — история с 2010 года) и не переписывает файл, если новых данных нет. Шаг 1b `update_data.py` обновляет IMOEX, MCFTR, RGBITR. Даты IMOEX служат торговым календарем для проверок и докачки пропусков.
-
----
-
-## Корпоративные события
-
-### Сплиты: load_splits / adjust_for_splits
-
-```python
-load_splits(splits_file=None, external_file=None) -> pd.DataFrame
-adjust_for_splits(df, splits_file=None) -> pd.DataFrame
-```
-
-Реестр `metadata/splits.csv` (`ticker, date, ratio, kind`):
-
-- **`price`** — в скачанной истории цен есть разрыв на дату события. `adjust_for_splits` делит ценовые колонки (`close`, `open`, `high`, `low`, `waprice`) до даты на `ratio`, объем умножает. `adj_close`, `value_rub`, `market_cap` не трогаются.
-- **`shares`** — ISS уже рестейтнул цены, но число акций в листах метаданных за старые даты в старой базе; `calculate_market_cap` делит число акций до даты на `ratio`.
-- **`auto`** — тип определяется по данным: есть ценовой разрыв, соответствующий сплиту, — ценовая поправка, нет — поправка числа акций.
-
-`ratio` для price/auto — в ценовой семантике: дробление 1:10 → `10`, консолидация 100:1 → `0.01`. Дополнительно подхватывается внешний реестр `../dividends/metadata/splits.json` (записи получают `kind=auto`); при дубликатах в пределах 45 дней приоритет у `splits.csv`. Перед расчетом доходностей: `moex.adjust_for_splits(moex.combine_moex_stocks())`.
-
-### Переименования: load_renames / apply_renames
-
-```python
-load_renames(renames_file=None) -> pd.DataFrame
-apply_renames(df, renames_file=None) -> pd.DataFrame
-```
-
-ISS `/history` отдает данные только по текущему коду, поэтому на дате переименования история рвется (TCSG→T, YNDX→YDEX, HHRU→HEAD, MAIL→VKCO, EONR→UPRO, MRKH→RSTI). Реестр `metadata/renames.csv` (`old, new, date` — первый день нового тикера) склеивает истории: строки старого тикера получают `ticker=new`, исходный тикер — в `source_ticker`; строки старого тикера с даты переименования отбрасываются с предупреждением. Цепочки A→B→C поддерживаются. Конвертации с коэффициентом ≠ 1:1 — не переименования и в реестр не входят.
-
-### Снятые с торгов: load_delisted / iss_is_traded
-
-```python
-load_delisted(delisted_file=None) -> pd.DataFrame
-iss_is_traded(ticker, session=None) -> Optional[bool]
-```
-
-Реестр `metadata/delisted.csv` (`ticker, last_date, note`): история этих бумаг остается в `data/` и участвует в анализе, но `update_all_stocks` их не опрашивает. `iss_is_traded` — торгуется ли акция хоть на одной доске рынка shares (флаг ISS `is_traded`; `None` — ISS бумагу не знает). Кандидатов в реестр показывает проверка данных (`stock_stale`).
-
----
-
-## Дивиденды и скорректированная цена
-
-### calculate_adj_close / add_adj_close_to_all_stocks
-
-```python
-calculate_adj_close(df, div_folder) -> pd.DataFrame
-add_adj_close_to_all_stocks(div_folder) -> None
-```
-
-`adj_close` — цена, скорректированная **на дивиденды и сплиты**, в текущей (пост-сплитовой) базе. База — сплит-скорректированный `close`; дивидендный фактор — `1 − дивиденд / цена` на последнее закрытие с дивидендом. Дивиденд в CSV может быть в валюте своей даты или рестейтнут в текущую базу (ВТБ после консолидации) — берется база с правдоподобной доходностью (0–50%), иначе дивиденд пропускается с предупреждением, а список пропущенных попадает в `df.attrs['skipped_dividends']`.
-
-**Экс-дата.** В CSV хранится дата закрытия реестра R. Экс-дата (первый день без дивиденда, день гэпа цены) выводится из режима расчетов: с 31.07.2023 (T+1) — сам R или последний торговый день перед ним, если R выходной; раньше (T+2) — торговый день перед R. Корректируются все цены строго до экс-даты. Объявленный дивиденд с отсечкой позже последней даты данных историю не корректирует.
-
-Источник дивидендов — CSV соседнего проекта `../dividends` (`<TICKER>.csv`, колонки `closing_date`, `dividend_value`; сайт закрытияреестров.рф, значения приведены к текущей акции). Публичного эндпоинта дивидендов в ISS больше нет. `add_adj_close_to_all_stocks` пересчитывает все тикеры и пишет только изменившиеся файлы.
-
----
-
-## Капитализация
-
-```python
-load_shares_data(metadata_file=None) -> pd.DataFrame
-calculate_market_cap(df, ticker, metadata_file=None) -> pd.DataFrame
-add_market_cap_to_all_stocks(metadata_file=None) -> None
-```
-
-`load_shares_data` читает количество акций из Excel (листы с датами `DD.MM.YYYY`, колонки `Code`, `Number of issued shares`) и кэширует результат до изменения файла. `calculate_market_cap` добавляет `shares` (между срезами — ffill, до первого — bfill, с поправками `kind=shares/auto` из реестра сплитов) и `market_cap = close × shares`. `add_market_cap_to_all_stocks` пишет только изменившиеся файлы.
-
----
-
-## Безрисковая ставка
-
-```python
-load_key_rate(key_rate_file=None) -> pd.DataFrame
-risk_free_monthly(dates, key_rate_file=None) -> pd.Series
-update_key_rate(key_rate_file=None, session=None) -> int
-```
-
-История ключевой ставки ЦБ в `metadata/key_rate.csv` (`date` — дата изменения, `rate` — % годовых; до 13.09.2013 — ставка рефинансирования как прокси). `risk_free_monthly` — месячная ставка в долях на заданные даты (для Sharpe по избыточной доходности). `update_key_rate` дописывает решения ЦБ после последней записи (источник — таблица ставки на cbr.ru, в файл попадают только даты изменения); шаг 1d `update_data.py`.
+Ключевая ставка ЦБ в `metadata/key_rate.csv` (`date` — дата изменения, `rate` — % годовых; до 13.09.2013 — ставка рефинансирования). `update_key_rate` дописывает решения ЦБ после последней записи (таблица ставки на cbr.ru, разбор HTML через lxml; в файл — только даты изменения); шаг 1d. `risk_free_monthly` — месячная ставка в долях на даты (`date, rf`; порядок входа сохраняется, до первой записи — первое значение).
 
 ---
 
@@ -199,7 +141,7 @@ lake.maintenance(retention_days=30) -> None
 - **`maintenance`** — слияние мелких файлов ежедневных дозаписей, удаление снимков старше 30 дней (окно для отката) и неиспользуемых файлов; шаг 5 `update_data.py`.
 - **Тесты и работа без Postgres:** переменная `MOEX_LAKE_CATALOG` задает другой каталог, например файловый `ducklake:C:/tmp/catalog.ducklake`.
 
-Таблицы и ключи: `bonds`, `futures` — `date, SECID, BOARDID`; `bonds_securities` — `SECID`; `empty_dates` — `dataset, date`; `stocks`, `indexes` — `date, ticker` (копия на 28.09.2026, рабочий источник акций и индексов пока — Parquet-файлы).
+Таблицы и ключи: `bonds`, `futures` — `date, SECID, BOARDID`; `bonds_securities` — `SECID`; `empty_dates` — `dataset, date`; `stocks`, `indexes` — `date, ticker`. Подробно — [data-model.md](data-model.md).
 
 Пример SQL поверх хранилища:
 
@@ -280,21 +222,21 @@ read_futures_history(start=None, end=None, assets=None, columns=None) -> pl.Data
 
 ---
 
-## Проверка качества данных
+## Проверка качества данных (`quality`)
 
 ```python
-data_quality_report(days=30, div_folder=None, div_days=120, adj_jump=0.25,
-                    check_iss=False, session=None) -> pd.DataFrame
-quality_summary(issues) -> str
-find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
-                             market_returns=None, window_days=5) -> pd.DataFrame
+quality.data_quality_report(days=30, div_folder=None, div_days=120, adj_jump=0.25,
+                            check_iss=False, session=None) -> pl.DataFrame
+quality.quality_summary(issues) -> str
+quality.find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
+                                     market_returns=None, window_days=5, splits=None) -> pl.DataFrame
 ```
 
-`data_quality_report` проверяет локальные данные по торговому календарю IMOEX и возвращает замечания (`check`, `object`, `detail`); пустой результат — замечаний нет. Окно — последние `days` торговых дней (`None` — вся история), для дивидендов — `div_days`.
+`data_quality_report` проверяет данные хранилища по торговому календарю IMOEX и возвращает замечания (`check`, `object`, `detail`); пустой результат — замечаний нет. Окно — последние `days` торговых дней (`None` — вся история), для дивидендов — `div_days`.
 
 | check | Что значит |
 |-------|------------|
-| `index_stale` | индекс (MCFTR, RGBITR) отстает от IMOEX |
+| `index_stale` | индекс отстает от IMOEX |
 | `stock_stale` | акция отстает от календаря; 20+ торговых дней без данных — кандидат в `metadata/delisted.csv` (с `check_iss=True` — со статусом ISS) |
 | `stock_gaps` | пропущенные торговые даты в окне (бывают законные паузы торгов — сплит, редомициляция) |
 | `adj_missing` | пустые `adj_close` / `market_cap` в окне |
@@ -302,10 +244,10 @@ find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
 | `price_spike` | скачок цены больше `adj_jump` с разворотом на следующий день — возможна сбойная цена |
 | `dividend_skipped` | дивиденд из CSV отброшен как неправдоподобный |
 | `dividend_gap` | гэп открытия хуже −4%, не объясненный IMOEX, сплитом или дивидендом из CSV в пределах 5 дней, — кандидат в пропущенный дивиденд. Гэп в тот же день у 3+ бумаг помечается как возможное отраслевое движение |
-| `bonds_stale` / `bonds_gaps` | история облигаций в хранилище отстает от IMOEX или с пропусками в окне |
+| `bonds_stale` / `bonds_gaps` | история облигаций отстает от IMOEX или с пропусками в окне |
 | `futures_stale` / `futures_gaps` | история фьючерсов отстает от IMOEX или с пропусками в окне |
 
-При кандидатах `dividend_gap` обновите проект дивидендов (`python parse_all_dividends.py` в `../dividends`) и пересчитайте `adj_close`. Если выплаты нет и в источнике (закрытияреестров.рф), кандидат останется в отчете. `quality_summary` — одна строка итога для лога.
+При кандидатах `dividend_gap` обновите проект дивидендов (`python parse_all_dividends.py` в `../dividends`); `adj_close` пересчитается ночным шагом 2. Если выплаты нет и в источнике (закрытияреестров.рф), кандидат останется в отчете. `quality_summary` — одна строка итога для лога. Перенос на polars проверен сверкой: на реальных данных отчет совпал с прежним построчно.
 
 ---
 
@@ -315,17 +257,16 @@ find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
 
 | Шаг | Что делает | Отключить |
 |-----|-----------|-----------|
-| 1 | Акции: дозагрузка, сразу adj_close и market_cap (снятые с торгов пропускаются) | `--no-update` |
+| 1 | Акции: дозагрузка, сразу `adj_close` и капитализация, только изменившиеся строки (снятые с торгов пропускаются) | `--no-update` |
 | 1b | Индексы IMOEX, MCFTR, RGBITR | `--no-index` |
-| 1c | Облигации: хвост и пропуски истории в хранилище, новые выпуски в реестр (до 500) | `--no-bonds` |
+| 1c | Облигации: хвост и пропуски истории, новые выпуски в реестр карточек (до 500) | `--no-bonds` |
 | 1d | Ключевая ставка ЦБ | `--no-key-rate` |
-| 1e | Фьючерсы: хвост и пропуски истории в хранилище | `--no-futures` |
-| 2 | Сверка adj_close по дивидендам (пишет только изменившиеся файлы) | `--no-adj` |
-| 3 | Сверка market_cap | `--no-cap` |
-| 4 | Проверка данных: замечания и строка итога | `--no-check` |
-| 5 | Обслуживание хранилища: слияние файлов, снимки старше 30 дней | `--no-maintenance` |
+| 1e | Фьючерсы: хвост и пропуски истории | `--no-futures` |
+| 2 | Пересчет `adj_close` и капитализации по всей истории (после изменений дивидендов, срезов, реестра сплитов) — только изменившиеся строки | `--no-adj` / `--no-cap` |
+| 3 | Проверка данных: замечания и строка итога | `--no-check` |
+| 4 | Обслуживание хранилища: слияние файлов, снимки старше 30 дней | `--no-maintenance` |
 
-Облигации и фьючерсы ночью только дообновляются: если набора в хранилище нет, шаг подсказывает команду первичной выгрузки и ничего не качает. Если хранилище недоступно (Postgres не запущен), шаги 1c, 1e и 5 пишут предупреждение, остальное обновление идет как обычно.
+Облигации и фьючерсы ночью только дообновляются: если набора в хранилище нет, шаг подсказывает команду первичной выгрузки и ничего не качает. Если хранилище недоступно (Postgres не запущен), шаги пишут предупреждение, а прогон продолжается.
 
 Прочие опции:
 
@@ -337,7 +278,6 @@ find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
 | `--rebuild` | Перескачать историю всех акций целиком |
 | `--indexes` | Индексы через запятую (по умолчанию `IMOEX,MCFTR,RGBITR`) |
 | `--div-folder` | Папка CSV дивидендов (по умолчанию `../dividends/data`) |
-| `--data-folder` | Папка акций |
 | `--metadata-file` | Excel с количеством акций |
 
 Прежние флаги `--bonds-market-init` и `--futures-init` работают как синонимы `--history-init bonds` / `futures`.
@@ -345,11 +285,11 @@ find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04,
 Первичные выгрузки (многочасовые, запускать в фоне):
 
 ```bash
-python update_data.py --history-init bonds,futures --no-update --no-index --no-key-rate --no-adj --no-cap --no-check
+python update_data.py --history-init bonds,futures --no-update --no-index --no-key-rate --no-adj --no-check
 ```
 
-Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_adj_close`, `do_market_cap`, `do_check`, `do_maintenance`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `data_folder`, `metadata_file`, `index_tickers`).
+Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_adj_close`, `do_market_cap`, `do_check`, `do_maintenance`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `metadata_file`, `index_tickers`).
 
 ### Ночной запуск
 
-`update_data.bat` выбирает интерпретатор (`MOEX_PYTHON` → `H:\conda\envs\py312` → `python` из PATH) и проверяет наличие `apimoex`; пауза в конце отключается переменной `MOEX_NO_PAUSE`. `scheduled_update.cmd` — обертка для планировщика: без паузы, вывод дописывается в `logs/update.log` (ротация после 5 МБ в `update.old.log`), код выхода передается планировщику. Задача Windows `MOEX data nightly` запускает ее вт–сб в 00:30: лимит 25 минут, пониженный приоритет, пропущенный запуск не догоняется (следующий докачает все сам).
+`update_data.bat` выбирает интерпретатор (`MOEX_PYTHON` → `H:\conda\envs\py312` → `python` из PATH) и проверяет, что в нем есть `polars` и `duckdb`; пауза в конце отключается переменной `MOEX_NO_PAUSE`. `scheduled_update.cmd` — обертка для планировщика: без паузы, вывод дописывается в `logs/update.log` (ротация после 5 МБ в `update.old.log`), код выхода передается планировщику. Задача Windows `MOEX data nightly` запускает ее вт–сб в 00:30: лимит 25 минут, пониженный приоритет, пропущенный запуск не догоняется (следующий докачает все сам).
