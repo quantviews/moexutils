@@ -12,6 +12,8 @@
 | `INDEXES_FOLDER` | `<корень проекта>/indexes` | Локальный кэш индексов (`<TICKER>.parquet`) |
 | `SPLITS_FILE` | `<корень проекта>/metadata/splits.csv` | Реестр сплитов акций (ticker, date, ratio) |
 | `KEY_RATE_FILE` | `<корень проекта>/metadata/key_rate.csv` | История ключевой ставки ЦБ (для безрисковой ставки) |
+| `DELISTED_FILE` | `<корень проекта>/metadata/delisted.csv` | Реестр снятых с торгов тикеров (не обновляются) |
+| `DIVIDENDS_FOLDER` | `<корень проекта>/../dividends/data` | CSV дивидендов соседнего проекта dividends |
 
 Все загрузчики ходят в ISS через `make_session()` — `requests.Session` с таймаутом по умолчанию (`ISS_TIMEOUT` = 10 с на соединение, 60 с на ответ) и повторами на сетевых сбоях, 429 и 5xx. Parquet пишется атомарно (через `.tmp`), а шаги adj_close/market_cap не перезаписывают неизменившиеся файлы — папка проекта синхронизируется облаком, и массовая перезапись порождает конфликтные копии.
 
@@ -98,7 +100,7 @@ update_moex_stock(ticker, session=None, calculate_market_cap_flag=True,
 update_all_stocks(calculate_market_cap_flag=True) -> None
 ```
 
-Обновляет все тикеры, для которых есть `data/<TICKER>/<TICKER>.parquet`. Использует одну HTTP-сессию на весь прогон. При `calculate_market_cap_flag=False` пропускает пересчёт капитализации (так делает `update_data.py`, когда пересчёт всё равно выполняется отдельным шагом).
+Обновляет все тикеры, для которых есть `data/<TICKER>/<TICKER>.parquet`, кроме снятых с торгов из `metadata/delisted.csv` (`include_delisted=True` — опросить и их; см. `load_delisted`, `iss_is_traded`). Использует одну HTTP-сессию на весь прогон. При `calculate_market_cap_flag=False` пропускает пересчёт капитализации (так делает `update_data.py`, когда пересчёт всё равно выполняется отдельным шагом).
 
 ---
 
@@ -337,9 +339,35 @@ add_bond_metrics(df, params) -> pd.DataFrame
 
 ---
 
+## Проверка качества данных
+
+```python
+data_quality_report(days=30, div_folder=None, div_days=120, adj_jump=0.25, check_iss=False, session=None) -> pd.DataFrame
+quality_summary(issues) -> str
+find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.04, market_returns=None, window_days=5) -> pd.DataFrame
+```
+
+`data_quality_report` проверяет локальные данные по торговому календарю IMOEX и возвращает замечания (`check`, `object`, `detail`); пустой результат — замечаний нет. Окно — последние `days` торговых дней (`None` — вся история), для дивидендов — `div_days`. Проверки:
+
+| check | Что значит |
+|-------|------------|
+| `index_stale` | индекс (MCFTR, RGBITR) отстает от IMOEX |
+| `stock_stale` | акция отстает от календаря; 20+ торговых дней без данных — кандидат в `metadata/delisted.csv` (с `check_iss=True` — со статусом ISS) |
+| `stock_gaps` | пропущенные торговые даты в окне (бывают и законные паузы торгов — сплит, редомициляция) |
+| `adj_missing` | пустые `adj_close` / `market_cap` в окне |
+| `adj_jump` | дневное изменение `adj_close` больше `adj_jump` и расходится с изменением сплит-скорректированной цены больше чем на 5 п.п. — артефакт корректировки. Сильные движения самой цены не считаются ошибкой |
+| `price_spike` | скачок цены больше `adj_jump` с разворотом на следующий день — возможна сбойная цена |
+| `dividend_skipped` | дивиденд из CSV отброшен `calculate_adj_close` как неправдоподобный (`df.attrs['skipped_dividends']`) |
+| `dividend_gap` | гэп открытия хуже −4%, не объясненный IMOEX, сплитом или дивидендом из CSV в пределах 5 дней, — кандидат в пропущенный дивиденд. Если гэп в тот же день у 3+ бумаг, помечается как возможное отраслевое движение |
+| `bonds_stale` / `bonds_gaps` | мониторинг облигаций отстает от IMOEX или с пропусками в окне |
+
+Публичного эндпоинта дивидендов в ISS больше нет (`/iss/securities/<SECID>/dividends.json` отдает только описание бумаги), поэтому сверка дивидендов — по ценовым гэпам. Источник дивидендов — соседний проект `../dividends`; при кандидатах `dividend_gap` его нужно обновить (`python parse_all_dividends.py` в папке проекта) и пересчитать `adj_close`.
+
+`quality_summary` — одна строка итога для лога. Проверка выполняется шагом 4 `update_data.py`; `python update_data.py --check` — только проверка, без обновления, окно — год, со статусом ISS для отстающих бумаг.
+
 ## Скрипт update_data.py
 
-Выполняет по порядку: 1 котировки акций → 1b индексы → 1c облигации (выпуски + мониторинг досок) → 1d ключевая ставка ЦБ → 2 adj_close → 3 market_cap.
+Выполняет по порядку: 1 котировки акций → 1b индексы → 1c облигации (выпуски + мониторинг досок) → 1d ключевая ставка ЦБ → 2 adj_close → 3 market_cap → 4 проверка данных (итог одной строкой в логе).
 
 **Командная строка:**
 
@@ -357,6 +385,8 @@ python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate] [-
 | `--rebuild` | Перескачать историю всех тикеров целиком (после смены методики данных) |
 | `--no-bonds` | Не обновлять облигации |
 | `--no-key-rate` | Не обновлять ключевую ставку ЦБ |
+| `--no-check` | Не выполнять проверку данных в конце |
+| `--check` | Только проверка данных: без обновления, окно — год, статус ISS |
 | `--bonds-init` | Первичная выгрузка вселенной облигаций доски (например `TQOB`) |
 | `--bonds-min-issue` | Мин. объем выпуска в млрд руб при `--bonds-init` (для TQCB рекомендуется 10) |
 | `--bonds-market-init` | Инициализация мониторинга всех выпусков досок через запятую (например `TQOB,TQCB`) |

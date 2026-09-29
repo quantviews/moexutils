@@ -24,6 +24,10 @@ RENAMES_FILE = os.path.join(BASE_DIR, "metadata", "renames.csv")
 KEY_RATE_FILE = os.path.join(BASE_DIR, "metadata", "key_rate.csv")
 # Внешний реестр сплитов соседнего проекта dividends (если проекты лежат рядом)
 EXTERNAL_SPLITS_FILE = os.path.join(BASE_DIR, "..", "dividends", "metadata", "splits.json")
+# Реестр снятых с торгов тикеров: история хранится, но не обновляется
+DELISTED_FILE = os.path.join(BASE_DIR, "metadata", "delisted.csv")
+# CSV дивидендов соседнего проекта dividends (закрытияреестров.рф, в текущей базе акций)
+DIVIDENDS_FOLDER = os.path.join(BASE_DIR, "..", "dividends", "data")
 
 logger = logging.getLogger("moex_utils")
 # Если логирование в приложении не настроено — выводим сообщения в stdout,
@@ -1000,6 +1004,38 @@ def apply_renames(df: pd.DataFrame, renames_file: Optional[str] = None) -> pd.Da
     return df
 
 
+def load_delisted(delisted_file: Optional[str] = None) -> pd.DataFrame:
+    """
+    Реестр снятых с торгов тикеров metadata/delisted.csv (колонки: ticker,
+    last_date — последняя дата торгов в данных, note). Их история остается в
+    data/ и участвует в анализе, но update_all_stocks их не опрашивает.
+    Кандидатов на внесение показывает data_quality_report (stock_stale).
+    """
+    if delisted_file is None:
+        delisted_file = DELISTED_FILE
+    if not os.path.exists(delisted_file):
+        return pd.DataFrame(columns=['ticker', 'last_date', 'note'])
+    return pd.read_csv(delisted_file, parse_dates=['last_date'])
+
+
+def iss_is_traded(ticker: str, session: Optional[requests.Session] = None) -> Optional[bool]:
+    """
+    Торгуется ли акция сейчас хоть на одной доске рынка shares (флаг is_traded ISS).
+    None — ISS не знает бумагу.
+    """
+    if session is None:
+        session = make_session()
+    resp = session.get(f"https://iss.moex.com/iss/securities/{ticker}.json",
+                       params={'iss.only': 'boards'})
+    resp.raise_for_status()
+    boards = _parse_iss_table(resp.json().get('boards'))
+    if boards.empty or 'is_traded' not in boards.columns:
+        return None
+    if 'market' in boards.columns:
+        boards = boards[boards['market'] == 'shares']
+    return bool((boards['is_traded'] == 1).any())
+
+
 def load_key_rate(key_rate_file: Optional[str] = None) -> pd.DataFrame:
     """
     Загружает историю ключевой ставки ЦБ из metadata/key_rate.csv
@@ -1084,7 +1120,7 @@ def risk_free_monthly(dates, key_rate_file: Optional[str] = None) -> pd.Series:
 
 
 def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = False,
-                      div_folder: Optional[str] = None):
+                      div_folder: Optional[str] = None, include_delisted: bool = False):
     """
     Updates data for all stocks that have existing parquet files.
 
@@ -1095,8 +1131,16 @@ def update_all_stocks(calculate_market_cap_flag: bool = True, rebuild: bool = Fa
         (нужно после смены источника данных, чтобы вся история была в единой методике).
     div_folder (str | None): папка CSV дивидендов — adj_close считается сразу
         при обновлении тикера (одна запись файла вместо нескольких).
+    include_delisted (bool): опрашивать и тикеры из metadata/delisted.csv
+        (по умолчанию пропускаются: торгов по ним нет, история сохраняется).
     """
     ticker_dirs = _local_tickers()
+    if not include_delisted:
+        delisted = set(load_delisted()['ticker'])
+        skipped = [t for t in ticker_dirs if t in delisted]
+        ticker_dirs = [t for t in ticker_dirs if t not in delisted]
+        if skipped:
+            logger.info(f"Пропущено снятых с торгов (metadata/delisted.csv): {len(skipped)}")
     logger.info(f"Found {len(ticker_dirs)} stocks to update")
 
     # Одна HTTP-сессия на весь прогон: keep-alive вместо нового TLS-соединения на тикер
@@ -1206,11 +1250,18 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
     # где доходность правдоподобна (0..50%); приоритет у сырой.
     closes = df['close'].astype(float)
     adj = split_adj_close.copy()
+    # Отброшенные дивиденды (неправдоподобная доходность) — для отчета о качестве
+    skipped = []
 
     # Идём от последних дивидендов к ранним
     for row in div_df.iloc[::-1].itertuples(index=False):
         ex_dividend_date = row.closing_date
         dividend_value = float(row.dividend_value)
+
+        # Объявленный, но еще не наступивший дивиденд: отсечка позже последней
+        # даты данных, экс-даты в ряду еще нет — история не корректируется
+        if pd.Timestamp(ex_dividend_date) > adj.index[-1]:
+            continue
 
         # pos — позиция экс-даты (первого дня без дивиденда); корректируется
         # всё строго ДО нее, база доходности — последнее закрытие с дивидендом
@@ -1227,6 +1278,7 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
 
         dividend_yield = next((y for y in yield_candidates if 0 < y < 0.5), None)
         if dividend_yield is None:
+            skipped.append((pd.Timestamp(ex_dividend_date), dividend_value))
             logger.warning(
                 f"[WARN] {ticker}: дивиденд {dividend_value} на "
                 f"{pd.Timestamp(ex_dividend_date).strftime('%Y-%m-%d')} не согласуется "
@@ -1237,6 +1289,7 @@ def calculate_adj_close(df: pd.DataFrame, div_folder: str) -> pd.DataFrame:
         adj.iloc[:pos] = adj.iloc[:pos] * (1.0 - dividend_yield)
 
     df['adj_close'] = adj
+    df.attrs['skipped_dividends'] = skipped
     return df
 
 def add_adj_close_to_all_stocks(div_folder: str) -> None:
@@ -2078,3 +2131,225 @@ def add_bond_metrics(df: pd.DataFrame, params: pd.Series) -> pd.DataFrame:
         df.at[idx, 'convexity'] = convexity
 
     return df
+
+# ---------------------------------------------------------------- проверка качества данных
+
+def _trading_calendar() -> pd.DatetimeIndex:
+    """Торговый календарь — будни, по которым есть IMOEX в локальном кэше индексов."""
+    cal = pd.DatetimeIndex(read_moex_index('IMOEX').index).normalize()
+    return cal[cal.weekday < 5].unique().sort_values()
+
+
+def find_dividend_gap_candidates(df: pd.DataFrame, div_folder: Optional[str] = None,
+                                 since=None, min_gap: float = 0.04,
+                                 market_returns: Optional[pd.Series] = None,
+                                 window_days: int = 5) -> pd.DataFrame:
+    """
+    Кандидаты в пропущенные дивиденды: гэп открытия (open_t / close_{t-1} - 1)
+    хуже -min_gap, не объясненный рынком (гэп минус дневное изменение IMOEX тоже
+    хуже -min_gap), сплитом из реестра или дивидендом из CSV в пределах
+    window_days от экс-даты. Так выглядит экс-дивидендная дата, которой нет в
+    CSV соседнего проекта dividends; крупные новостные падения тоже попадут —
+    это кандидаты для ручной проверки, а не факты.
+
+    df — данные одной бумаги (ticker, open, close; индекс — даты).
+    Returns: DataFrame с колонками date, gap, market.
+    """
+    empty = pd.DataFrame(columns=['date', 'gap', 'market'])
+    if df.empty or not {'ticker', 'open', 'close'}.issubset(df.columns):
+        return empty
+    if div_folder is None:
+        div_folder = DIVIDENDS_FOLDER
+    ticker = df['ticker'].iloc[0]
+
+    px = adjust_for_splits(df[['ticker', 'open', 'close']].dropna()).sort_index()
+    gap = px['open'] / px['close'].shift(1) - 1
+    if market_returns is None:
+        try:
+            market_returns = read_moex_index('IMOEX')['close'].astype(float).pct_change()
+        except FileNotFoundError:
+            market_returns = pd.Series(dtype=float)
+    market = market_returns.reindex(gap.index).fillna(0.0)
+    mask = (gap < -min_gap) & ((gap - market) < -min_gap)
+    if since is not None:
+        mask &= gap.index >= pd.Timestamp(since)
+    if not mask.any():
+        return empty
+
+    # Объясненные даты: экс-даты дивидендов из CSV и даты сплитов из реестра
+    explained = []
+    div_file = os.path.join(div_folder, f"{ticker}.csv")
+    if os.path.exists(div_file):
+        divs = pd.read_csv(div_file, parse_dates=['closing_date']).dropna(subset=['closing_date'])
+        for rec in divs.loc[divs['dividend_value'] > 0, 'closing_date']:
+            pos = _ex_dividend_pos(px.index, rec)
+            explained.append(px.index[pos] if 0 <= pos < len(px) else pd.Timestamp(rec))
+    splits = load_splits()
+    if not splits.empty:
+        explained += list(pd.to_datetime(splits.loc[splits['ticker'] == ticker, 'date']))
+
+    rows = []
+    for d in gap.index[mask]:
+        if any(abs((d - e).days) <= window_days for e in explained):
+            continue
+        rows.append({'date': d, 'gap': float(gap[d]), 'market': float(market[d])})
+    return pd.DataFrame(rows, columns=['date', 'gap', 'market']) if rows else empty
+
+
+def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = None,
+                        div_days: Optional[int] = 120, adj_jump: float = 0.25,
+                        check_iss: bool = False,
+                        session: Optional[requests.Session] = None) -> pd.DataFrame:
+    """
+    Проверка локальных данных после обновления. Окно — последние `days`
+    торговых дней (None — вся история), для дивидендов — `div_days`.
+
+    Проверки (колонка check):
+    - index_stale — индекс отстает от IMOEX;
+    - stock_stale — акция отстает от календаря (20+ торговых дней без данных —
+      кандидат в metadata/delisted.csv; с check_iss — со статусом ISS);
+    - stock_gaps — пропущенные торговые даты в окне;
+    - adj_missing — пустые adj_close/market_cap в окне;
+    - adj_jump — дневное изменение adj_close больше adj_jump без сплита в реестре;
+    - dividend_skipped — дивиденд из CSV отброшен как неправдоподобный;
+    - dividend_gap — гэп открытия, похожий на экс-дивидендную дату, без дивиденда
+      в CSV (см. find_dividend_gap_candidates);
+    - bonds_stale / bonds_gaps — мониторинг облигаций отстает или с пропусками.
+
+    Returns: DataFrame (check, object, detail); пустой — замечаний нет.
+    """
+    issues = []
+
+    def add(check, obj, detail):
+        issues.append({'check': check, 'object': obj, 'detail': detail})
+
+    if div_folder is None:
+        div_folder = DIVIDENDS_FOLDER
+    try:
+        cal = _trading_calendar()
+    except FileNotFoundError:
+        add('calendar', 'IMOEX', 'нет кэша IMOEX — проверки по календарю невозможны')
+        return pd.DataFrame(issues, columns=['check', 'object', 'detail'])
+    last_day = cal[-1]
+    win_start = cal[-days] if days is not None and len(cal) >= days else cal[0]
+    div_start = cal[-div_days] if div_days is not None and len(cal) >= div_days else cal[0]
+    market_returns = read_moex_index('IMOEX')['close'].astype(float).pct_change()
+
+    for idx in ('MCFTR', 'RGBITR'):
+        try:
+            last = pd.Timestamp(read_moex_index(idx).index.max())
+        except FileNotFoundError:
+            continue
+        if last < last_day:
+            add('index_stale', idx, f"последняя дата {last:%Y-%m-%d}, IMOEX — {last_day:%Y-%m-%d}")
+
+    delisted = set(load_delisted()['ticker'])
+    splits = load_splits()
+    has_divs = os.path.isdir(div_folder)
+    if not has_divs:
+        add('dividends', div_folder, 'папка дивидендов не найдена — проверки дивидендов пропущены')
+
+    # Сообщения calculate_adj_close здесь не нужны: отброшенные дивиденды
+    # попадают в отчет отдельной строкой
+    prev_level = logger.level
+    logger.setLevel(logging.ERROR)
+    try:
+        for t in _local_tickers():
+            if t in delisted:
+                continue
+            df = pd.read_parquet(os.path.join(DATA_FOLDER, t, f"{t}.parquet")).sort_index()
+            if df.empty:
+                continue
+            last = df.index.max()
+            lag = int((cal > last).sum())
+            if lag >= 20:
+                detail = (f"нет данных {lag} торговых дней (последняя дата {last:%Y-%m-%d}); "
+                          f"если бумага снята с торгов — внесите в metadata/delisted.csv")
+                if check_iss:
+                    try:
+                        traded = iss_is_traded(t, session=session)
+                        detail += f"; ISS is_traded={traded}"
+                    except Exception as e:
+                        detail += f"; ISS недоступен ({e})"
+                add('stock_stale', t, detail)
+                continue
+            if lag > 0:
+                add('stock_stale', t, f"отстает на {lag} торг. дн. (последняя дата {last:%Y-%m-%d})")
+
+            wcal = cal[(cal >= max(win_start, df.index.min())) & (cal <= last)]
+            missing = wcal.difference(df.index)
+            if len(missing):
+                add('stock_gaps', t, f"{len(missing)} пропущенных торговых дат в окне, "
+                                     f"первая {missing[0]:%Y-%m-%d}")
+
+            w = df[df.index >= win_start]
+            for col in ('adj_close', 'market_cap'):
+                if col in df.columns and w[col].isna().any():
+                    add('adj_missing', t, f"{col}: {int(w[col].isna().sum())} пустых значений в окне")
+
+            # Сильные движения самой цены — рынок, а не ошибка; ошибкой считаем
+            # (а) скачок adj_close, которого нет в сплит-скорректированной цене —
+            # артефакт корректировки, (б) скачок цены с разворотом на следующий день
+            px = adjust_for_splits(df[['ticker', 'close']])['close'].astype(float)
+            px_ret = px.pct_change()
+            if 'adj_close' in df.columns:
+                adj_ret = df['adj_close'].astype(float).pct_change()
+                bad = ((adj_ret.abs() > adj_jump) & ((adj_ret - px_ret).abs() > 0.05)
+                       & (adj_ret.index >= win_start))
+                for d in adj_ret.index[bad]:
+                    add('adj_jump', t, f"{d:%Y-%m-%d}: adj_close {adj_ret[d]:+.1%} за день "
+                                       f"при цене {px_ret[d]:+.1%} — артефакт корректировки")
+            nxt = px_ret.shift(-1)
+            spike = ((px_ret.abs() > adj_jump) & (nxt * px_ret < 0)
+                     & (nxt.abs() > 0.8 * px_ret.abs() / (1 + px_ret))
+                     & (px_ret.index >= win_start))
+            for d in px_ret.index[spike]:
+                add('price_spike', t, f"{d:%Y-%m-%d}: цена {px_ret[d]:+.1%} и {nxt[d]:+.1%} на "
+                                      f"следующий день — возможна сбойная цена")
+
+            if has_divs:
+                res = calculate_adj_close(df[['ticker', 'close']].copy(), div_folder)
+                for d, v in res.attrs.get('skipped_dividends', []):
+                    if d >= div_start:
+                        add('dividend_skipped', t, f"{d:%Y-%m-%d}: дивиденд {v} не согласуется с ценой — пропущен")
+                cands = find_dividend_gap_candidates(df, div_folder, since=div_start,
+                                                     market_returns=market_returns)
+                # Разворот после сбойной цены выглядит как гэп — это не дивиденд
+                reversal_days = set(px_ret.index[spike.shift(1, fill_value=False)])
+                for c in cands.itertuples(index=False):
+                    if c.date in reversal_days:
+                        continue
+                    add('dividend_gap', t, f"{c.date:%Y-%m-%d}: гэп открытия {c.gap:+.1%} при IMOEX "
+                                           f"{c.market:+.1%}, дивиденда в {t}.csv рядом нет")
+    finally:
+        logger.setLevel(prev_level)
+
+    # Гэпы у многих бумаг в один день — скорее отраслевое/рыночное движение
+    gap_days = pd.Series([i['detail'][:10] for i in issues if i['check'] == 'dividend_gap'])
+    crowded = set(gap_days.value_counts()[lambda c: c >= 3].index)
+    for i in issues:
+        if i['check'] == 'dividend_gap' and i['detail'][:10] in crowded:
+            n = int((gap_days == i['detail'][:10]).sum())
+            i['detail'] += f" (гэп у {n} бумаг в этот день — возможно отраслевое движение)"
+
+    for seg in _market_segments():
+        _migrate_market_legacy(seg)
+        have = _market_dates(seg)
+        if not len(have):
+            continue
+        if have.max() < last_day:
+            add('bonds_stale', seg, f"последняя дата {have.max():%Y-%m-%d}, IMOEX — {last_day:%Y-%m-%d}")
+        missing = cal[(cal >= max(win_start, have.min())) & (cal <= have.max())].difference(have)
+        if len(missing):
+            add('bonds_gaps', seg, f"{len(missing)} пропущенных торговых дат в окне, первая {missing[0]:%Y-%m-%d}")
+
+    return pd.DataFrame(issues, columns=['check', 'object', 'detail'])
+
+
+def quality_summary(issues: pd.DataFrame) -> str:
+    """Одна строка для лога: итог data_quality_report."""
+    if issues is None or issues.empty:
+        return "Проверка данных: замечаний нет"
+    counts = issues['check'].value_counts()
+    return (f"Проверка данных: замечаний {len(issues)} ("
+            + ", ".join(f"{k}: {v}" for k, v in counts.items()) + ")")

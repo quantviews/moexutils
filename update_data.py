@@ -2,8 +2,10 @@
 Обновление данных: загрузка с MOEX, расчёт adj_close и капитализации (market_cap).
 Использует moex_utils.
 
-Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 2 adj_close → 3 market_cap.
-Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate] [--no-adj] [--no-cap]
+Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 2 adj_close → 3 market_cap
+→ 4 проверка данных (одна строка итога в логе + замечания).
+Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate] [--no-adj] [--no-cap] [--no-check]
+Только проверка (без обновления, окно — год, со статусом ISS): python update_data.py --check
 """
 from __future__ import annotations
 
@@ -31,6 +33,10 @@ def main(
     data_folder: Optional[str] = None,
     metadata_file: Optional[str] = None,
     index_tickers: Optional[str] = "IMOEX,MCFTR,RGBITR",
+    do_check: bool = True,
+    check_days: Optional[int] = 30,
+    check_div_days: Optional[int] = 120,
+    check_iss: bool = False,
 ) -> None:
     if data_folder is not None:
         moex.DATA_FOLDER = data_folder
@@ -105,6 +111,22 @@ def main(
     else:
         print("=== 3. Market cap — пропуск (--no-cap) ===")
 
+    if do_check:
+        print(f"=== 4. Проверка данных (окно {check_days or 'вся история'} торг. дн., "
+              f"дивиденды — {check_div_days or 'вся история'}) ===")
+        try:
+            issues = moex.data_quality_report(days=check_days, div_folder=div_folder,
+                                              div_days=check_div_days, check_iss=check_iss)
+            for r in issues.head(60).itertuples(index=False):
+                print(f"  [{r.check}] {r.object}: {r.detail}")
+            if len(issues) > 60:
+                print(f"  ... и еще {len(issues) - 60}")
+            print(moex.quality_summary(issues))
+        except Exception as e:
+            print(f"[WARN] Проверка данных не выполнена — {e}")
+    else:
+        print("=== 4. Проверка данных — пропуск (--no-check) ===")
+
     print("\nГотово.")
 
 
@@ -137,7 +159,13 @@ if __name__ == "__main__":
     ap.add_argument("--div-folder", type=str, default=None, help="Папка с CSV дивидендов (по умолчанию ../dividends/data)")
     ap.add_argument("--data-folder", type=str, default=None, help="Папка с parquet (по умолчанию data)")
     ap.add_argument("--metadata-file", type=str, default=None, help="Путь к Excel с метаданными (metadata/stock-index-base.xlsx)")
+    ap.add_argument("--no-check", action="store_true", help="Не выполнять проверку данных в конце")
+    ap.add_argument("--check", action="store_true",
+                    help="Только проверка данных: без обновления, окно — год, статус ISS для отстающих бумаг")
     args = ap.parse_args()
+    if args.check:
+        args.no_update = args.no_index = args.no_bonds = args.no_key_rate = True
+        args.no_adj = args.no_cap = True
 
     main(
         do_update=not args.no_update,
@@ -155,4 +183,8 @@ if __name__ == "__main__":
         data_folder=args.data_folder,
         metadata_file=args.metadata_file,
         index_tickers=args.indexes,
+        do_check=not args.no_check,
+        check_days=250 if args.check else 30,
+        check_div_days=250 if args.check else 120,
+        check_iss=args.check,
     )

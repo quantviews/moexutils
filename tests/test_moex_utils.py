@@ -1532,3 +1532,180 @@ class TestKeyRateUpdate:
         # повторный запуск — дубликатов нет
         assert mu.update_key_rate(str(f), session=self._session(self.HTML)) == 0
         assert len(mu.load_key_rate(str(f))) == 3
+
+
+# ---------------------------------------------------------------- delisted, quality report
+
+class TestDelisted:
+    def test_update_all_skips_delisted(self, tmp_data_folder, tmp_path, monkeypatch):
+        for ticker in ('LIVE', 'GONE'):
+            write_stock_parquet(tmp_data_folder, ticker, make_stock_df(['2025-01-01'], [1], ticker))
+        reg = tmp_path / 'delisted.csv'
+        reg.write_text('ticker,last_date,note\nGONE,2025-01-01,test\n', encoding='utf-8')
+        monkeypatch.setattr(mu, 'DELISTED_FILE', str(reg))
+        updated = []
+        monkeypatch.setattr(mu, 'update_moex_stock', lambda t, **k: updated.append(t))
+
+        mu.update_all_stocks()
+        assert updated == ['LIVE']
+        updated.clear()
+        mu.update_all_stocks(include_delisted=True)
+        assert sorted(updated) == ['GONE', 'LIVE']
+
+    def test_load_delisted_missing_file(self, tmp_path):
+        assert mu.load_delisted(str(tmp_path / 'nope.csv')).empty
+
+    def test_iss_is_traded(self):
+        class _Resp:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {'boards': {'columns': ['boardid', 'market', 'is_traded'], 'data': self._rows}}
+
+        class _Session:
+            def __init__(self, rows):
+                self.rows = rows
+
+            def get(self, url, **kw):
+                return _Resp(self.rows)
+
+        assert mu.iss_is_traded('X', session=_Session([['TQBR', 'shares', 1]])) is True
+        # торгуется только на внебиржевой доске другого рынка — не считается
+        assert mu.iss_is_traded('X', session=_Session([['TQBR', 'shares', 0],
+                                                      ['XXXX', 'ndm', 1]])) is False
+        assert mu.iss_is_traded('X', session=_Session([])) is None
+
+
+class TestAdjCloseEdgeCases:
+    @staticmethod
+    def write_dividends(folder, ticker, rows):
+        pd.DataFrame(rows, columns=['closing_date', 'dividend_value']).to_csv(
+            os.path.join(str(folder), f"{ticker}.csv"), index=False)
+
+    def test_future_record_date_ignored(self, tmp_path):
+        """Объявленный дивиденд с отсечкой после последней даты данных не корректирует историю."""
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03'], [100, 100, 100])
+        self.write_dividends(tmp_path, 'TEST', [('2025-01-20', 10.0)])
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+        assert result['adj_close'].tolist() == [100.0, 100.0, 100.0]
+
+    def test_skipped_dividends_reported(self, tmp_path):
+        df = make_stock_df(['2025-01-01', '2025-01-02', '2025-01-03'], [100, 100, 100])
+        self.write_dividends(tmp_path, 'TEST', [('2025-01-02', 80.0)])  # 80% — неправдоподобно
+        result = mu.calculate_adj_close(df, div_folder=str(tmp_path))
+        assert result.attrs['skipped_dividends'] == [(pd.Timestamp('2025-01-02'), 80.0)]
+        assert result['adj_close'].tolist() == [100.0, 100.0, 100.0]
+
+
+def _gap_df(ticker='TEST'):
+    """Бумага с гэпом открытия -10% 2025-01-06 (понедельник)."""
+    dates = pd.to_datetime(['2025-01-02', '2025-01-03', '2025-01-06', '2025-01-07'])
+    df = pd.DataFrame({'open': [100.0, 100.0, 90.0, 90.0], 'close': [100.0, 100.0, 90.0, 90.0],
+                       'volume': 1.0, 'ticker': ticker}, index=pd.Index(dates, name='date'))
+    return df
+
+
+class TestDividendGapCandidates:
+    @pytest.fixture(autouse=True)
+    def no_splits(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(tmp_path / 'no_splits.csv'))
+        monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'no_ext.json'))
+
+    def test_unexplained_gap_is_candidate(self, tmp_path):
+        flat = pd.Series(0.0, index=_gap_df().index)
+        res = mu.find_dividend_gap_candidates(_gap_df(), str(tmp_path), market_returns=flat)
+        assert list(res['date']) == [pd.Timestamp('2025-01-06')]
+        assert res['gap'].iloc[0] == pytest.approx(-0.10)
+
+    def test_gap_explained_by_dividend(self, tmp_path):
+        pd.DataFrame({'closing_date': ['2025-01-06'], 'dividend_value': [10.0]}).to_csv(
+            tmp_path / 'TEST.csv', index=False)
+        flat = pd.Series(0.0, index=_gap_df().index)
+        assert mu.find_dividend_gap_candidates(_gap_df(), str(tmp_path), market_returns=flat).empty
+
+    def test_gap_explained_by_market(self, tmp_path):
+        market = pd.Series([0.0, 0.0, -0.09, 0.0], index=_gap_df().index)
+        assert mu.find_dividend_gap_candidates(_gap_df(), str(tmp_path), market_returns=market).empty
+
+
+class TestQualityReport:
+    @pytest.fixture
+    def env(self, tmp_path, monkeypatch):
+        data = tmp_path / 'data'
+        data.mkdir()
+        idx = tmp_path / 'indexes'
+        idx.mkdir()
+        bonds = tmp_path / 'bonds'
+        bonds.mkdir()
+        divs = tmp_path / 'divs'
+        divs.mkdir()
+        for name, val in (('DATA_FOLDER', data), ('INDEXES_FOLDER', idx), ('BONDS_FOLDER', bonds)):
+            monkeypatch.setattr(mu, name, str(val))
+        monkeypatch.setattr(mu, 'DELISTED_FILE', str(tmp_path / 'delisted.csv'))
+        monkeypatch.setattr(mu, 'SPLITS_FILE', str(tmp_path / 'no_splits.csv'))
+        monkeypatch.setattr(mu, 'EXTERNAL_SPLITS_FILE', str(tmp_path / 'no_ext.json'))
+        cal = pd.bdate_range('2025-01-01', periods=60)
+        pd.DataFrame({'close': 1000.0, 'ticker': 'IMOEX'},
+                     index=pd.Index(cal, name='date')).to_parquet(idx / 'IMOEX.parquet')
+        return {'data': str(data), 'cal': cal, 'divs': str(divs), 'bonds': str(bonds)}
+
+    @staticmethod
+    def stock(folder, ticker, dates, closes, adj=None):
+        df = pd.DataFrame({'open': closes, 'close': closes, 'volume': 1.0, 'ticker': ticker},
+                          index=pd.Index(pd.DatetimeIndex(dates), name='date'))
+        df['adj_close'] = adj if adj is not None else df['close']
+        df['market_cap'] = df['close'] * 10
+        write_stock_parquet(folder, ticker, df)
+
+    def test_clean_data_has_no_issues(self, env):
+        self.stock(env['data'], 'OK', env['cal'], [100.0] * 60)
+        issues = mu.data_quality_report(days=30, div_folder=env['divs'])
+        assert issues.empty
+        assert mu.quality_summary(issues) == 'Проверка данных: замечаний нет'
+
+    def test_detects_stale_gaps_and_adj_artefact(self, env):
+        cal = env['cal']
+        self.stock(env['data'], 'LAG', cal[:-3], [100.0] * 57)            # отстает на 3 дня
+        self.stock(env['data'], 'OLD', cal[:30], [100.0] * 30)            # 30 дней без данных
+        self.stock(env['data'], 'HOLE', cal.delete([50, 51]), [100.0] * 58)
+        adj = [100.0] * 60
+        adj[55] = 150.0                                                    # скачок только в adj_close
+        self.stock(env['data'], 'ADJ', cal, [100.0] * 60, adj=adj)
+
+        issues = mu.data_quality_report(days=30, div_folder=env['divs'])
+        got = {(r.check, r.object) for r in issues.itertuples()}
+        assert ('stock_stale', 'LAG') in got
+        assert ('stock_stale', 'OLD') in got and 'delisted.csv' in issues.loc[
+            issues['object'] == 'OLD', 'detail'].iloc[0]
+        assert ('stock_gaps', 'HOLE') in got
+        assert ('adj_jump', 'ADJ') in got
+        assert 'замечаний' in mu.quality_summary(issues)
+
+    def test_delisted_and_real_moves_not_reported(self, env, tmp_path):
+        cal = env['cal']
+        self.stock(env['data'], 'GONE', cal[:10], [100.0] * 10)
+        (tmp_path / 'delisted.csv').write_text('ticker,last_date,note\nGONE,2025-01-14,x\n',
+                                               encoding='utf-8')
+        closes = [100.0] * 50 + [150.0] * 10                              # реальный рост +50%, без разворота
+        self.stock(env['data'], 'MOVE', cal, closes)
+        assert mu.data_quality_report(days=30, div_folder=env['divs']).empty
+
+    def test_price_spike_detected(self, env):
+        closes = [100.0] * 60
+        closes[55] = 200.0                                                 # +100% и обратно
+        self.stock(env['data'], 'SPIKE', env['cal'], closes)
+        issues = mu.data_quality_report(days=30, div_folder=env['divs'])
+        assert list(issues['check']) == ['price_spike']
+
+    def test_bonds_stale(self, env):
+        self.stock(env['data'], 'OK', env['cal'], [100.0] * 60)
+        folder = os.path.join(env['bonds'], 'market_TQOB')
+        os.makedirs(folder)
+        pd.DataFrame({'date': env['cal'][:-2], 'SECID': 'B1', 'segment': 'TQOB'}).to_parquet(
+            os.path.join(folder, '2025.parquet'))
+        issues = mu.data_quality_report(days=30, div_folder=env['divs'])
+        assert list(issues['check']) == ['bonds_stale']
