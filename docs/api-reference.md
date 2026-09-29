@@ -264,8 +264,11 @@ quality.find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.
 | 2 | Пересчет `adj_close` и капитализации по всей истории (после изменений дивидендов, срезов, реестра сплитов) — только изменившиеся строки | `--no-adj` / `--no-cap` |
 | 3 | Проверка данных: замечания и строка итога | `--no-check` |
 | 4 | Обслуживание хранилища: слияние файлов, снимки старше 30 дней | `--no-maintenance` |
+| 5 | Копия каталога хранилища (`backup.backup_catalog`) | `--no-backup` |
 
-Облигации и фьючерсы ночью только дообновляются: если набора в хранилище нет, шаг подсказывает команду первичной выгрузки и ничего не качает. Если хранилище недоступно (Postgres не запущен), шаги пишут предупреждение, а прогон продолжается.
+**Итог прогона.** После шагов итог пишется в `lake.update_runs`, замечания проверки — в `lake.quality_log` (модель — [data-model.md](data-model.md#lakeupdate_runs-lakequality_log--история-прогонов)). Сбой любого шага (исключение, недоступное хранилище, нет папки дивидендов) — строка `[WARN]` в логе, в конце «Готово со сбоями: N», код выхода 1 и уведомление Windows. Новые замечания проверки — те, которых (по паре `check`, `object`) не было в прошлом прогоне того же режима, — тоже уведомление; повторяющиеся не напоминают о себе каждую ночь. Падение вне шагов — уведомление «обновление упало» и трассировка в логе. `MOEX_NO_NOTIFY=1` отключает уведомления; в режиме `--check` их нет.
+
+Облигации и фьючерсы ночью только дообновляются: если набора в хранилище нет, шаг подсказывает команду первичной выгрузки и ничего не качает. Если хранилище недоступно (Postgres не запущен), шаги пишут предупреждение, а прогон продолжается (и завершается с кодом 1).
 
 Прочие опции:
 
@@ -287,7 +290,30 @@ quality.find_dividend_gap_candidates(df, div_folder=None, since=None, min_gap=0.
 python update_data.py --history-init bonds,futures --no-update --no-index --no-key-rate --no-adj --no-check
 ```
 
-Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_adj_close`, `do_market_cap`, `do_check`, `do_maintenance`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `metadata_file`, `index_tickers`).
+Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_adj_close`, `do_market_cap`, `do_check`, `do_maintenance`, `do_backup`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `metadata_file`, `index_tickers`, `mode`, `notify_on`); возвращает код выхода.
+
+### Резервная копия каталога (`backup`)
+
+```python
+backup.backup_catalog(folder=None, keep=14) -> str   # путь к новой копии
+backup.list_backups(folder=None) -> list[str]         # от старых к новым
+backup.verify(path) -> int                            # число таблиц с данными в копии
+```
+
+Каталог (база PostgreSQL `moex_lake`) — схема таблиц, снимки и список файлов данных: без него Parquet-файлы хранилища не собрать в таблицы. Шаг 5 делает `pg_dump -Fc` в `<MOEX_DATA_ROOT>/backups/catalog/moex_lake-ГГГГММДД-ччммсс.dump` (папка — `MOEX_BACKUP_DIR`), проверяет копию `pg_restore --list` и хранит 14 последних. Копия делается после обслуживания, поэтому ссылается на файлы, которые остаются на диске. `pg_dump` ищется в `MOEX_PG_BIN`, PATH, затем в `C:\Program Files\PostgreSQL\<версия>\bin`; пароль он берет из `pgpass.conf` (`-w` — без запроса).
+
+Восстановление (Postgres запущен, файлы `<MOEX_DATA_ROOT>/lake` на месте; берите последнюю копию — более старые могут ссылаться на файлы, уже удаленные обслуживанием):
+
+```bat
+rem база цела, каталог поврежден — перезаписать объекты каталога
+pg_restore -h localhost -U moex -d moex_lake --clean --if-exists --no-owner F:\moex-data\backups\catalog\moex_lake-<дата>.dump
+rem база потеряна (новая установка Postgres) — сначала роль и база от суперпользователя
+psql -U postgres -c "CREATE ROLE moex LOGIN PASSWORD '...'"
+createdb -U postgres -O moex moex_lake
+pg_restore -h localhost -U moex -d moex_lake --no-owner F:\moex-data\backups\catalog\moex_lake-<дата>.dump
+```
+
+Проверка после восстановления: `python update_data.py --check`.
 
 ### Ночной запуск
 

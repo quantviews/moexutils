@@ -49,6 +49,8 @@ TABLE_KEYS = {
     'futures': ['date', 'SECID', 'BOARDID'],
     'bonds_securities': ['SECID'],
     'empty_dates': ['dataset', 'date'],
+    'update_runs': ['run_id'],
+    'quality_log': ['run_id', 'check', 'object', 'detail'],
 }
 # Таблицы, разбитые по годам (дозапись трогает только текущий год)
 PARTITIONED_BY_YEAR = ('bonds', 'futures')

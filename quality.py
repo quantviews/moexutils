@@ -235,3 +235,53 @@ def quality_summary(issues: pl.DataFrame) -> str:
     counts = issues['check'].value_counts(sort=True)
     return (f"Проверка данных: замечаний {issues.height} ("
             + ", ".join(f"{k}: {v}" for k, v in counts.iter_rows()) + ")")
+
+
+# ---------------------------------------------------------------- история прогонов
+#
+# lake.update_runs — итог каждого прогона update_data.py (режим, статус, число
+# сбоев шагов и замечаний); lake.quality_log — замечания проверки по прогонам.
+# По ним видно, когда проблема появилась, а оповещение идет только о новых.
+
+RUN_SCHEMA = {'run_id': pl.Datetime('us'), 'finished': pl.Datetime('us'), 'mode': pl.Utf8,
+              'status': pl.Utf8, 'warnings': pl.Int64, 'issues': pl.Int64,
+              'new_issues': pl.Int64, 'messages': pl.Utf8}
+
+
+def previous_issues(mode: str, before: dt.datetime) -> Optional[pl.DataFrame]:
+    """Замечания (check, object) последнего прогона режима mode до before; None — прогонов не было."""
+    if 'update_runs' not in lake.tables():
+        return None
+    last = lake.query("SELECT max(run_id) AS r FROM lake.update_runs WHERE mode = ? AND run_id < ?",
+                      [mode, before])['r'][0]
+    if last is None:
+        return None
+    if 'quality_log' not in lake.tables():
+        return pl.DataFrame(schema={'check': pl.Utf8, 'object': pl.Utf8})
+    return lake.query('SELECT DISTINCT "check", object FROM lake.quality_log WHERE run_id = ?', [last])
+
+
+def new_issues(issues: pl.DataFrame, previous: Optional[pl.DataFrame]) -> pl.DataFrame:
+    """
+    Замечания, которых не было в прошлом прогоне. Сравнение по (check, object):
+    detail меняется день ото дня (даты, проценты) у одной и той же проблемы.
+    Прошлого прогона нет — новые все.
+    """
+    if previous is None or issues.is_empty():
+        return issues
+    return issues.join(previous.select('check', 'object').unique(), on=['check', 'object'], how='anti')
+
+
+def record_run(run_id: dt.datetime, mode: str, warnings: list[str],
+               issues: Optional[pl.DataFrame], n_new: int) -> None:
+    """Запись итога прогона и его замечаний в хранилище."""
+    n_issues = 0 if issues is None else issues.height
+    status = 'error' if warnings else ('issues' if n_issues else 'ok')
+    lake.write('update_runs', pl.DataFrame([{
+        'run_id': run_id, 'finished': dt.datetime.now(), 'mode': mode, 'status': status,
+        'warnings': len(warnings), 'issues': n_issues, 'new_issues': n_new,
+        'messages': "\n".join(warnings) or None}], schema=RUN_SCHEMA))
+    if n_issues:
+        lake.write('quality_log', issues.unique(maintain_order=True).with_columns(
+            run_id=pl.lit(run_id, dtype=pl.Datetime('us')), mode=pl.lit(mode)
+        ).select('run_id', 'mode', 'check', 'object', 'detail'))
