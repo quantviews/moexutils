@@ -198,10 +198,10 @@ def _(combined_df, np, pl, stocks):
                                 aggregate_function='last', sort_columns=True).sort('date')
     _tk = [_c for _c in _wide_r.columns if _c != 'date']
     _wide_1y = _wide_r.filter(pl.col('date') >= _start_1y)
-    # Доходности по сетке всех торговых дат: пропуски заполняются предыдущей ценой
-    # (дни без торгов дают нулевую доходность, как было в прежней версии)
-    _ff = _wide_1y.select('date', pl.col(_tk).forward_fill())
-    _rets = _ff.select('date', pl.col(_tk) / pl.col(_tk).shift(1) - 1)
+    # Дневные доходности по сетке торговых дат рынка — только когда бумага торговалась
+    # в оба соседних дня: дни без сделок и период после снятия с торгов не дают
+    # нулевых доходностей, занижающих волатильность и бету
+    _rets = _wide_1y.select('date', pl.col(_tk) / pl.col(_tk).shift(1) - 1)
 
     _rets_long = _rets.unpivot(index='date', variable_name='ticker', value_name='ret')
     _px_long = _wide_1y.unpivot(index='date', variable_name='ticker', value_name='close')
@@ -287,8 +287,8 @@ def _(min_market_cap, perf_df, pl, sort_by):
 
     # Сортировка
     if sort_by.value in filtered_df.columns:
-        ascending = sort_by.value != "ticker"
-        filtered_df = filtered_df.sort(sort_by.value, descending=not ascending,
+        # числа — от больших к меньшим, тикеры — по алфавиту
+        filtered_df = filtered_df.sort(sort_by.value, descending=sort_by.value != "ticker",
                                        nulls_last=True, maintain_order=True)
     elif sort_by.value == "ticker":
         filtered_df = filtered_df.sort('ticker')

@@ -340,6 +340,7 @@ def _(
     pf_tickers,
     prices_wide,
     pypfopt_available,
+    risk_free_rate_slider,
 ):
     # Расчёт эффективной границы и оптимального (max Sharpe) портфеля
     ef_curve_vol, ef_curve_ret, weights_max_sharpe, perf_max_sharpe, mu_series, S_df = [], [], {}, None, None, None
@@ -371,11 +372,18 @@ def _(
                 ef_curve_vol.append(v_eff)
             except Exception:
                 pass
+        # Sharpe считается сверх безрисковой ставки из ползунка
+        _rf = risk_free_rate_slider.value / 100.0
         ef_max_sharpe = EfficientFrontier(mu_series, S_df, weight_bounds=weight_bounds)
-        weights_max_sharpe = ef_max_sharpe.max_sharpe()
-        # Ключи весов — номера столбцов; переводим в тикеры
-        weights_max_sharpe = {pf_tickers[k]: v for k, v in weights_max_sharpe.items() if v > 1e-6}
-        perf_max_sharpe = ef_max_sharpe.portfolio_performance()
+        try:
+            weights_max_sharpe = ef_max_sharpe.max_sharpe(risk_free_rate=_rf)
+            # Ключи весов — номера столбцов; переводим в тикеры
+            weights_max_sharpe = {pf_tickers[k]: v for k, v in weights_max_sharpe.items() if v > 1e-6}
+            perf_max_sharpe = ef_max_sharpe.portfolio_performance(risk_free_rate=_rf)
+        except ValueError:
+            # max_sharpe требует, чтобы хоть одна бумага была доходнее безрисковой ставки
+            weights_max_sharpe = {}
+            print(f"⚠️ Ни одна бумага не доходнее безрисковой ставки {_rf:.1%} — max Sharpe не определен")
     else:
         if not pypfopt_available:
             print("⚠️ PyPortfolioOpt не установлен: pip install PyPortfolioOpt")
@@ -452,7 +460,7 @@ def _(
 @app.cell(hide_code=True)
 def _(np, pf_tickers, plt, prices_wide, weights_max_sharpe):
     # График весов в эффективном портфеле (max Sharpe): сверху вниз от макс к мин, все тикеры датасета
-    if weights_max_sharpe is not None and prices_wide is not None and len(pf_tickers) > 0:
+    if weights_max_sharpe and prices_wide is not None and len(pf_tickers) > 0:
         try:
             plt.close(3)
         except Exception:
@@ -543,6 +551,7 @@ def _(
     pf_tickers,
     prices_wide,
     pypfopt_available,
+    risk_free_rate_slider,
 ):
     # Портфель минимальной волатильности (для сравнения с max Sharpe)
     weights_min_vol, perf_min_vol = {}, None
@@ -554,7 +563,7 @@ def _(
         ef_minv = EfficientFrontier(mu_mv, S_mv, weight_bounds=weight_bounds_mv)
         weights_min_vol = ef_minv.min_volatility()
         weights_min_vol = {pf_tickers[k]: v for k, v in weights_min_vol.items() if v > 1e-6}
-        perf_min_vol = ef_minv.portfolio_performance()
+        perf_min_vol = ef_minv.portfolio_performance(risk_free_rate=risk_free_rate_slider.value / 100.0)
     return perf_min_vol, weights_min_vol
 
 
