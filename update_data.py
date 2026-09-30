@@ -4,6 +4,7 @@ adj_close и капитализация, проверка качества и о
 
 Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы →
 1f прочие рынки (все акции и фонды, все индексы, валюта, фиксинги) →
+1g ставки и облигации (RUONIA, КБД, денежные потоки облигаций) →
 2 пересчет adj_close и капитализации → 2b копии для SQL (реестры, stocks_adjusted,
 представления) → 3 проверка данных → 4 обслуживание хранилища →
 5 копия каталога. Все данные — в хранилище DuckLake (lake.py). Облигации и фьючерсы
@@ -29,7 +30,7 @@ from typing import Optional
 
 import polars as pl
 
-from moexutils import backup, history, lake, notify, quality, stocks
+from moexutils import backup, cashflows, contracts, history, lake, notify, quality, rates, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -99,6 +100,7 @@ def main(
     do_backup: bool = True,
     do_derived: bool = True,
     do_markets: bool = True,
+    do_rates: bool = True,
     history_init: Optional[str] = None,
     history_start: Optional[str] = None,
     rebuild: bool = False,
@@ -129,6 +131,12 @@ def main(
         # Первичная (многочасовая) выгрузка истории наборов в хранилище
         for dataset in [d.strip().lower() for d in history_init.split(",") if d.strip()]:
             print(f"=== Первичная выгрузка истории: {dataset} с {history_start or 'начала истории ISS'} ===")
+            if dataset == 'zcyc':
+                rates.update_zcyc(start=history_start or rates.ZCYC_START.isoformat())
+                continue
+            if dataset == 'cashflows':
+                cashflows.update_cashflows('full')
+                continue
             n = history.update(dataset, start=history_start, max_days=20000)
             print(f"{dataset}: +{n} строк")
             if dataset in ('bonds', 'shares'):
@@ -176,6 +184,14 @@ def main(
     if do_futures:
         print("=== 1e. Фьючерсы FORTS ===")
         _update_dataset('futures', 'Фьючерсы', warnings)
+        if 'futures' in (_lake_tables(warnings) or []):
+            try:
+                # реестр контрактов, коды после повторного листинга, непрерывные ряды
+                contracts.update_contracts()
+                contracts.remap_futures_secids()
+                contracts.update_continuous()
+            except Exception as e:
+                _warn(warnings, f"Реестр и непрерывные ряды фьючерсов не обновлены — {e}")
     else:
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
 
@@ -190,6 +206,21 @@ def main(
                 _warn(warnings, f"Реестр бумаг рынка акций: не удалось обновить — {e}")
     else:
         print("=== 1f. Прочие рынки — пропуск (--no-markets) ===")
+
+    if do_rates:
+        print("=== 1g. RUONIA, КБД, денежные потоки облигаций ===")
+        if _lake_tables(warnings) is not None:
+            for title, step in (("RUONIA", rates.update_ruonia),
+                                ("КБД", rates.update_zcyc),
+                                # по субботам — все будущие потоки, в остальные ночи — окно ±дни
+                                ("Денежные потоки облигаций", lambda: cashflows.update_cashflows(
+                                    'future' if dt.date.today().weekday() == 5 else 'window'))):
+                try:
+                    step()
+                except Exception as e:
+                    _warn(warnings, f"{title}: не удалось обновить — {e}")
+    else:
+        print("=== 1g. RUONIA, КБД, денежные потоки — пропуск (--no-rates) ===")
 
     if do_adj_close and do_market_cap:
         if not div_ok:
@@ -276,6 +307,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-bonds", action="store_true", help="Не обновлять облигации")
     ap.add_argument("--no-key-rate", action="store_true", help="Не обновлять ключевую ставку ЦБ")
     ap.add_argument("--no-futures", action="store_true", help="Не обновлять фьючерсы")
+    ap.add_argument("--no-rates", action="store_true",
+                    help="Не обновлять RUONIA, КБД и денежные потоки облигаций")
     ap.add_argument("--no-markets", action="store_true",
                     help="Не обновлять прочие рынки (все акции, все индексы, валюта, фиксинги)")
     ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close и капитализацию (шаг 2)")
@@ -288,7 +321,7 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
-                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings")
+                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows")
     ap.add_argument("--history-start", type=str, default=None,
                     help="Начальная дата первичной выгрузки (по умолчанию — начало истории ISS)")
     # синонимы прежних флагов первичной выгрузки
@@ -314,7 +347,7 @@ if __name__ == "__main__":
     start = args.history_start or args.bonds_market_start or args.futures_start
     if args.check:
         args.no_update = args.no_index = args.no_bonds = args.no_key_rate = args.no_futures = True
-        args.no_markets = True
+        args.no_markets = args.no_rates = True
         args.no_adj = args.no_cap = args.no_maintenance = args.no_backup = args.no_derived = True
 
     try:
@@ -331,6 +364,7 @@ if __name__ == "__main__":
             do_backup=not args.no_backup,
             do_derived=not args.no_derived,
             do_markets=not args.no_markets,
+            do_rates=not args.no_rates,
             history_init=",".join(init) or None,
             history_start=start,
             rebuild=args.rebuild,

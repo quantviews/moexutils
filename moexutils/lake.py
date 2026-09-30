@@ -56,6 +56,15 @@ TABLE_KEYS = {
     'empty_dates': ['dataset', 'date'],
     'update_runs': ['run_id'],
     'quality_log': ['run_id', 'check', 'object', 'detail'],
+    'ruonia': ['date'],
+    'futures_contracts': ['secid'],
+    'futures_continuous': ['date', 'asset'],
+    'bond_coupons': ['secid', 'coupondate'],
+    'bond_amortizations': ['secid', 'amortdate', 'data_source'],
+    'bond_offers': ['secid', 'offer_date'],
+    'zcyc_params': ['date'],
+    'zcyc_yields': ['date', 'period'],
+    'zcyc_bonds': ['date', 'secid'],
     # производная таблица: акции со склейкой переименований и поправкой на сплиты
     'stocks_adjusted': ['date', 'ticker'],
     # реестры metadata/ — копии для SQL-потребителей
