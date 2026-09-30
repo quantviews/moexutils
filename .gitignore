@@ -20,3 +20,7 @@ __marimo__/
 logs/
 bonds/
 futures/
+
+# сборка пакета
+*.egg-info/
+build/
