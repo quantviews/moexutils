@@ -37,7 +37,7 @@ pip install -e ".[dev]"          # + pytest и ruff
 
 ```python
 import polars as pl
-from moexutils import stocks, history, rates, cashflows, contracts, lake, quality
+from moexutils import stocks, history, rates, refdata, cashflows, contracts, lake, quality
 
 # Акции и индексы
 sber = stocks.read_stocks('SBER', start='2024-01-01')      # close, adj_close, market_cap, ...
@@ -60,6 +60,9 @@ ruonia = rates.read_ruonia(start='2025-01-01')
 curve = rates.read_zcyc('yields', start='2026-09-01')
 coupons = cashflows.read_cashflows('coupons', secids='SU26238RMFS4')
 
+# Параметры бумаг на дату (объем выпуска, листинг) — с 01.04.2024
+sber_issue = refdata.refdata_at('2025-06-30', secids='SBER')
+
 # SQL поверх хранилища; as_of — данные на момент снимка
 zspread = lake.query("SELECT date, median(ZSPREAD) AS z FROM lake.bonds_corporate "
                      "WHERE BOARDID = 'TQCB' GROUP BY date ORDER BY date")
@@ -72,7 +75,7 @@ print(quality.quality_summary(quality.data_quality_report()))
 ## Обновление данных
 
 ```bash
-python update_data.py          # полный цикл: акции → индексы → облигации → ставка ЦБ → фьючерсы → прочие рынки → RUONIA, КБД, потоки → пересчет → копии для SQL → проверка → обслуживание → копия каталога
+python update_data.py          # полный цикл: акции → индексы → облигации → ставка ЦБ → фьючерсы → прочие рынки → RUONIA, КБД, параметры бумаг, потоки → пересчет → копии для SQL → проверка → обслуживание → копия каталога
 python update_data.py --check  # только проверка данных за год
 ```
 
@@ -83,7 +86,7 @@ Start-ScheduledTask -TaskName 'MOEX data nightly'     # запустить вр�
 Get-ScheduledTaskInfo -TaskName 'MOEX data nightly'   # последний запуск и результат
 ```
 
-Первичные многочасовые выгрузки (`--history-init bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows`) и все опции — в [справочнике API](docs/api-reference.md#скрипт-update_datapy).
+Первичные многочасовые выгрузки (`--history-init bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata`) и все опции — в [справочнике API](docs/api-reference.md#скрипт-update_datapy).
 
 ## Ноутбук (marimo)
 
@@ -124,7 +127,8 @@ moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
 ├── metadata/                # реестры: сплиты, переименования, снятые с торгов, ставка ЦБ, сектора, число акций
 └── logs/                    # логи обновлений (не в git)
 
-F:\moex-data/                # данные (MOEX_DATA_ROOT), вне git и облака: lake/ (хранилище), backups/catalog/ (копии каталога)
+F:\moex-data/                # данные (MOEX_DATA_ROOT), вне git и облака: lake/ (хранилище), backups/catalog/ (копии каталога);
+                             # прежние data/, indexes/, bonds/, futures/ не используются — можно удалить
 ```
 
 Рыночные данные лежат вне проекта, в папке из переменной окружения `MOEX_DATA_ROOT` (на рабочей машине `F:\moex-data`): облачная синхронизация частых перезаписей портила файлы. Без переменной данные ищутся в папке проекта.
@@ -148,7 +152,7 @@ ruff check .
 pytest -q
 ```
 
-Тесты полностью офлайновые (ISS и cbr.ru замоканы): разбор ответов ISS; хранилище на временном файловом каталоге DuckLake (Postgres не нужен) — дозапись по ключу, удаление, синхронизация, снимки, представления; сплиты, переименования, дивиденды и экс-даты, капитализация, реестры `ref_*` и `stocks_adjusted`; рынки «все инструменты за дату» (пагинация, бэкфилл, досчет пропусков); RUONIA, КБД, денежные потоки облигаций, реестр фьючерсов, перекодировка контрактов, непрерывные ряды; проверка качества данных, история прогонов, копия каталога и уведомления, метрики облигаций. CI (GitHub Actions, Python 3.11 и 3.12): `pip install -e ".[dev]"`, `ruff check .`, `pytest -q`.
+Тесты полностью офлайновые (ISS и cbr.ru замоканы): разбор ответов ISS; хранилище на временном файловом каталоге DuckLake (Postgres не нужен) — дозапись по ключу, удаление, синхронизация, снимки, представления; сплиты, переименования, дивиденды и экс-даты, капитализация, реестры `ref_*` и `stocks_adjusted`; рынки «все инструменты за дату» (пагинация, бэкфилл, досчет пропусков); RUONIA, КБД, параметры бумаг по датам, денежные потоки облигаций, реестр фьючерсов, перекодировка контрактов, непрерывные ряды; проверка качества данных, история прогонов, копия каталога и уведомления, метрики облигаций. CI (GitHub Actions, Python 3.11 и 3.12): `pip install -e ".[dev]"`, `ruff check .`, `pytest -q`.
 
 ## Принципы
 

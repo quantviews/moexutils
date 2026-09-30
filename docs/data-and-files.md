@@ -6,8 +6,8 @@
 
 ```
 moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
-├── moexutils/               # пакет (pip install -e .): stocks, history, rates, cashflows, contracts,
-│                            # quality, lake, iss, bondmath, backup, notify (docs/README.md)
+├── moexutils/               # пакет (pip install -e .): stocks, history, rates, refdata, cashflows,
+│                            # contracts, quality, lake, iss, bondmath, backup, notify (docs/README.md)
 ├── pyproject.toml           # пакет, зависимости, extras notebooks/dev, настройки pytest и ruff
 ├── update_data.py           # пайплайн обновления (CLI)
 ├── update_data.bat          # запуск на Windows (выбор интерпретатора)
@@ -33,11 +33,12 @@ moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не
 │   └── main/<таблица>/...   # stocks, stocks_adjusted, indexes, indexes_all, shares, shares_securities,
 │                            # bonds, bonds_securities, bond_coupons, bond_amortizations, bond_offers,
 │                            # futures, futures_contracts, futures_continuous, currency, currency_fixings,
-│                            # ruonia, zcyc_params, zcyc_yields, zcyc_bonds, ref_splits, ref_renames,
-│                            # ref_delisted, ref_key_rate, ref_sectors, empty_dates, update_runs, quality_log
+│                            # ruonia, zcyc_params, zcyc_yields, zcyc_bonds, stock_refdata, ref_splits,
+│                            # ref_renames, ref_delisted, ref_key_rate, ref_sectors, empty_dates, load_state,
+│                            # update_runs, quality_log
 ├── backups/catalog/         # копии каталога хранилища moex_lake-ГГГГММДД-ччммсс.dump (pg_dump), 14 последних
-├── data/, indexes/, bonds/, futures/  # прежние Parquet-файлы — пакетом не используются; удалить после
-│                            # перевода проекта vectorbt на пакет (он еще читает их)
+├── data/, indexes/, bonds/, futures/  # прежние Parquet-файлы — никем не читаются (vectorbt переведен
+│                            # на пакет), можно удалить вручную
 dividends/                   # соседний проект: F:\Yandex.Disk\FINANCE\dividends
 ├── data/<TICKER>.csv        # приведены к текущей акции — их читает moexutils
 ├── data/raw/<TICKER>.csv    # сырые значения с сайта
@@ -48,7 +49,7 @@ dividends/                   # соседний проект: F:\Yandex.Disk\FIN
 
 Без `MOEX_DATA_ROOT` данные ищутся в папке проекта. Переменная задана для пользователя Windows постоянно; ее видят новые процессы, включая ночную задачу.
 
-**Хранилище DuckLake.** Все рыночные данные — акции, индексы, облигации и их денежные потоки, фьючерсы, валюта, ставки, кривая ОФЗ — живут в таблицах DuckLake: каталог — база `moex_lake` в локальном PostgreSQL 17 (служба `postgresql-x64-17`), файлы данных — Parquet (zstd) в `F:\moex-data\lake`. Файлы хранилища вручную не трогать: какие из них актуальны, знает только каталог. Читать — через `lake.query(...)` или функции пакета (`stocks`, `history`, `rates`, `cashflows`, `contracts`), другим проектам — под ролью `moex_reader` ([контракт данных](data-contract.md)); снимки старше 30 дней удаляются ночным обслуживанием, более свежие позволяют откатиться (`SELECT ... FROM lake.bonds AT (VERSION => n)`).
+**Хранилище DuckLake.** Все рыночные данные — акции, индексы, облигации и их денежные потоки, фьючерсы, валюта, ставки, кривая ОФЗ, параметры бумаг по датам — живут в таблицах DuckLake: каталог — база `moex_lake` в локальном PostgreSQL 17 (служба `postgresql-x64-17`), файлы данных — Parquet (zstd) в `F:\moex-data\lake`. Файлы хранилища вручную не трогать: какие из них актуальны, знает только каталог. Читать — через `lake.query(...)` или функции пакета (`stocks`, `history`, `rates`, `refdata`, `cashflows`, `contracts`), другим проектам — под ролью `moex_reader` ([контракт данных](data-contract.md)); снимки старше 30 дней и файлы-сироты (от оборванной или отклоненной записи) удаляются ночным обслуживанием, более свежие снимки позволяют откатиться (`SELECT ... FROM lake.bonds AT (VERSION => n)`).
 
 ---
 

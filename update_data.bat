@@ -1,5 +1,6 @@
 @echo off
-rem Update local MOEX data: stocks, indexes, bonds, futures, other markets, rates, cash flows, quality, backup.
+rem Update local MOEX data: stocks, indexes, bonds, futures, other markets, rates, cash flows,
+rem security parameters, quality, backup.
 rem Run by double click. Flags are passed to update_data.py,
 rem e.g.: update_data.bat --no-adj --no-cap
 rem Interpreter: MOEX_PYTHON env var, else conda env py312, else python from PATH

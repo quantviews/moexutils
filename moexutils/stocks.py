@@ -4,14 +4,17 @@
 Таблицы:
 - lake.stocks  — дневные данные акций: date, ticker, open, low, high, close,
   waprice, volume, value_rub, adj_close, shares, market_cap (ключ date + ticker);
-- lake.indexes — индексы: date, ticker, BOARDID, close, value_rub, volume.
+- lake.indexes — индексы: date, ticker, BOARDID, close, value_rub, volume;
+- lake.stocks_adjusted — read_stocks(split_adjusted=True): склейка переименований
+  и цены в пост-сплитовой базе (update_adjusted);
+- lake.ref_* — копии реестров metadata/ для SQL-потребителей (sync_registries).
 
 Дневные данные — из официальной истории торгов ISS (/history): close —
 закрытие основной сессии, на дату — строка главного режима (максимальный
 оборот). Та же методика, что у индексов.
 
 Реестры (в metadata/, в git): сплиты, переименования, снятые с торгов,
-ключевая ставка; количество акций — Excel metadata/stock-index-base.xlsx;
+ключевая ставка, сектора; количество акций — Excel metadata/stock-index-base.xlsx;
 дивиденды — CSV соседнего проекта ../dividends/data.
 """
 from __future__ import annotations

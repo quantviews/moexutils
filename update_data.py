@@ -1,14 +1,16 @@
 """
 Обновление данных MOEX: акции, индексы, облигации, ключевая ставка ЦБ, фьючерсы,
-adj_close и капитализация, проверка качества и обслуживание хранилища.
+прочие рынки, ставки, КБД, денежные потоки облигаций, параметры бумаг,
+adj_close и капитализация, проверка качества, обслуживание и копия хранилища.
 
 Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы →
 1f прочие рынки (все акции и фонды, все индексы, валюта, фиксинги) →
 1g ставки и справочники (RUONIA, КБД, денежные потоки облигаций, параметры бумаг) →
 2 пересчет adj_close и капитализации → 2b копии для SQL (реестры, stocks_adjusted,
 представления) → 3 проверка данных → 4 обслуживание хранилища →
-5 копия каталога. Все данные — в хранилище DuckLake (lake.py). Облигации и фьючерсы
-ночью только дообновляются — первичная выгрузка запускается явно (--history-init).
+5 копия каталога. Все данные — в хранилище DuckLake (lake.py). Наборы истории
+(облигации, фьючерсы, прочие рынки) ночью только дообновляются — первичная
+выгрузка запускается явно (--history-init).
 
 Итог прогона и замечания проверки пишутся в lake.update_runs / lake.quality_log.
 Сбой шага или новые замечания (которых не было в прошлом прогоне) — уведомление
@@ -18,7 +20,7 @@ Windows (notify.py); сбой шага — код выхода 1.
         [--no-futures] [--no-adj] [--no-cap] [--no-check] [--no-maintenance] [--no-backup]
         [--no-derived] [--no-markets] [--no-rates]
 Первичная выгрузка: python update_data.py --history-init bonds,futures,shares,indexes_all,currency,
-        currency_fixings,zcyc,cashflows --history-start <начало> (многочасовая)
+        currency_fixings,zcyc,cashflows,refdata [--history-start <начало>] (многочасовая)
 Только проверка (без обновления, окно — год, со статусом ISS): python update_data.py --check
 """
 from __future__ import annotations
@@ -273,7 +275,7 @@ def main(
         print("=== 3. Проверка данных — пропуск (--no-check) ===")
 
     if do_maintenance:
-        print("=== 4. Обслуживание хранилища (слияние файлов, снимки старше "
+        print("=== 4. Обслуживание хранилища (слияние файлов, файлы-сироты, снимки старше "
               f"{lake.SNAPSHOT_RETENTION_DAYS} дней) ===")
         if _lake_tables(warnings) is not None:
             try:
@@ -313,7 +315,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-key-rate", action="store_true", help="Не обновлять ключевую ставку ЦБ")
     ap.add_argument("--no-futures", action="store_true", help="Не обновлять фьючерсы")
     ap.add_argument("--no-rates", action="store_true",
-                    help="Не обновлять RUONIA, КБД и денежные потоки облигаций")
+                    help="Не обновлять RUONIA, КБД, денежные потоки облигаций и параметры бумаг")
     ap.add_argument("--no-markets", action="store_true",
                     help="Не обновлять прочие рынки (все акции, все индексы, валюта, фиксинги)")
     ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close и капитализацию (шаг 2)")

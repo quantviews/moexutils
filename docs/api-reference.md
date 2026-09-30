@@ -242,6 +242,24 @@ history.read_securities(dataset='bonds', as_of=None) -> pl.DataFrame
 
 **Прочие рынки** (`shares`, `indexes_all`, `currency`, `currency_fixings`) — шаг 1f; реестр `shares_securities` дополняется там же. Особенности данных — [data-model.md](data-model.md#рынки-все-инструменты-за-дату-shares-indexes_all-currency-currency_fixings).
 
+### Доступ к ISS (`iss`)
+
+```python
+iss.make_session() -> requests.Session
+iss.history_day(market_path, date, session, max_pages=1000) -> pl.DataFrame
+iss.security_history(market_path, secid, start, end=None, session=None, columns=None,
+                     max_pages=2000) -> pl.DataFrame
+iss.security_description(secid, session=None) -> dict
+iss.to_frame(block) -> pl.DataFrame
+iss.records_to_frame(records) -> pl.DataFrame
+```
+
+- **`make_session`** — `requests.Session` с таймаутом `ISS_TIMEOUT` и тремя повторами GET на сетевых сбоях, 429 и 5xx.
+- **`history_day`** — история торгов всех инструментов рынка за дату (`market_path` — `stock/markets/bonds`, `futures/markets/forts` и т.п.), все страницы по 100 строк; `TRADEDATE` → `date`. На ней построен `history`.
+- **`security_history`** — история одной бумаги за период (все режимы, все страницы); `columns` — только нужные поля ISS. На ней построены `stocks.fetch_stock` и `fetch_index`.
+- **`security_description`** — карточка `/iss/securities/<SECID>` (блок `description`) как словарь `{поле: значение}`, в том числе для погашенных и снятых с торгов бумаг; `{}` — ISS бумагу не знает.
+- **`to_frame` / `records_to_frame`** — блок ответа ISS / список словарей → polars: числовые по метаданным ISS (без них — если все непустые значения числа) колонки — Float64, остальные — строки.
+
 ### Метрики облигаций (`bondmath`)
 
 ```python
@@ -263,7 +281,7 @@ refdata.read_refdata(secids=None, as_of=None) -> pl.DataFrame
 refdata.fetch_snapshot(date, session=None, max_pages=100) -> pl.DataFrame
 ```
 
-Ежедневные срезы `/iss/referencedata/engines/stock/markets/all/securities?date=` (около 5,4 тыс. бумаг фондового рынка, страницы по 1000) с 01.04.2024 (`START`). `update_refdata` идет по будням от последнего обработанного дня (`lake.load_state`) по вчерашний и пишет в `lake.stock_refdata` только бумаги, у которых параметры изменились (сравнение без `updatetime`); на сбое останавливается, записанное сохраняется. `refdata_at` — состояние на дату (последняя строка бумаги не позже нее), `read_refdata` — вся история изменений. Не хранятся НКД и «мигающие» флаги `hasprospectus`, `hastechnicaldefault`. Первичная выгрузка — `update_data.py --history-init refdata` (около 650 дней × 6 страниц).
+Ежедневные срезы `/iss/referencedata/engines/stock/markets/all/securities?date=` (около 5,4 тыс. бумаг фондового рынка, страницы по 1000) с 01.04.2024 (`START`). `update_refdata` идет по будням от последнего обработанного дня (`lake.load_state`) по вчерашний и пишет в `lake.stock_refdata` только бумаги, у которых параметры изменились (сравнение без `updatetime`); на сбое останавливается, записанное сохраняется. `refdata_at` — состояние на дату (последняя строка бумаги не позже нее), `read_refdata` — вся история изменений. Не хранятся НКД и «мигающие» флаги `hasprospectus`, `hastechnicaldefault`. Ночью — шаг 1g `update_data.py`; первичная выгрузка — `update_data.py --history-init refdata` (около 650 дней × 6 страниц).
 
 ## Ставки и кривая (`rates`)
 
@@ -365,11 +383,11 @@ quality.record_run(run_id, mode, warnings, issues, n_new) -> None
 | 1d | Ключевая ставка ЦБ | `--no-key-rate` |
 | 1e | Фьючерсы: хвост и пропуски истории; затем реестр контрактов, перекодировка после повторного листинга, непрерывные ряды | `--no-futures` |
 | 1f | Прочие рынки: `shares`, `indexes_all`, `currency`, `currency_fixings` (хвост и пропуски), новые бумаги в `shares_securities` (до 500) | `--no-markets` |
-| 1g | RUONIA, КБД, денежные потоки облигаций (по субботам — все будущие потоки, в остальные ночи — окно −10…+60 дней) | `--no-rates` |
+| 1g | RUONIA, КБД, параметры бумаг по датам (`refdata`), денежные потоки облигаций (по субботам — все будущие потоки, в остальные ночи — окно −10…+60 дней) | `--no-rates` |
 | 2 | Пересчет `adj_close` и капитализации по всей истории (после изменений дивидендов, срезов, реестра сплитов) — только изменившиеся строки | `--no-adj` / `--no-cap` |
 | 2b | Копии для SQL: реестры `ref_*`, `stocks_adjusted`, недостающие представления | `--no-derived` |
 | 3 | Проверка данных: замечания и строка итога | `--no-check` |
-| 4 | Обслуживание хранилища: слияние файлов, снимки старше 30 дней | `--no-maintenance` |
+| 4 | Обслуживание хранилища: слияние файлов, удаление снимков старше 30 дней, неиспользуемых файлов и файлов-сирот | `--no-maintenance` |
 | 5 | Копия каталога хранилища (`backup.backup_catalog`) | `--no-backup` |
 
 **Итог прогона.** После шагов (если проверка не отключена) итог пишется в `lake.update_runs`, замечания проверки — в `lake.quality_log` (модель — [data-model.md](data-model.md#lakeupdate_runs-lakequality_log--история-прогонов)). Сбой любого шага (исключение, недоступное хранилище, нет папки дивидендов) — строка `[WARN]` в логе, в конце «Готово со сбоями: N», код выхода 1 и уведомление Windows. Новые замечания проверки — те, которых (по паре `check`, `object`) не было в прошлом прогоне того же режима, — тоже уведомление; повторяющиеся не напоминают о себе каждую ночь. Падение вне шагов — уведомление «обновление упало» и трассировка в логе. `MOEX_NO_NOTIFY=1` отключает уведомления; в режиме `--check` их нет.
@@ -381,8 +399,8 @@ quality.record_run(run_id, mode, warnings, issues, n_new) -> None
 | Опция | Описание |
 |-------|----------|
 | `--check` | Только проверка данных: без обновления (все шаги 1–2b, 4, 5 отключены), окно — год, статус ISS для отстающих бумаг |
-| `--history-init` | Первичная выгрузка через запятую: наборы `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings` (`history.update` без лимита дат; для `bonds` и `shares` следом наполняется реестр карточек), `zcyc` (КБД), `cashflows` (полная выгрузка потоков). Выполняется до шага 1 |
-| `--history-start` | Начальная дата первичной выгрузки (по умолчанию — начало истории набора, для `zcyc` — 06.01.2014; на `cashflows` не влияет) |
+| `--history-init` | Первичная выгрузка через запятую: наборы `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings` (`history.update` без лимита дат; для `bonds` и `shares` следом наполняется реестр карточек), `zcyc` (КБД), `cashflows` (полная выгрузка потоков), `refdata` (параметры бумаг по датам). Выполняется до шага 1 |
+| `--history-start` | Начальная дата первичной выгрузки (по умолчанию — начало истории набора, для `zcyc` — 06.01.2014, для `refdata` — 01.04.2024 и только если срезов еще нет; на `cashflows` не влияет) |
 | `--rebuild` | Перескачать историю всех акций целиком |
 | `--indexes` | Рабочие индексы через запятую (по умолчанию `IMOEX,MCFTR,RGBITR`) |
 | `--div-folder` | Папка CSV дивидендов (по умолчанию `../dividends/data`) |
@@ -394,7 +412,7 @@ quality.record_run(run_id, mode, warnings, issues, n_new) -> None
 
 ```bash
 python update_data.py --history-init bonds,futures --no-update --no-index --no-key-rate --no-markets --no-rates --no-adj --no-check
-python update_data.py --history-init shares,indexes_all,currency,currency_fixings,zcyc,cashflows --no-update --no-index --no-bonds --no-key-rate --no-futures --no-adj --no-check
+python update_data.py --history-init shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata --no-update --no-index --no-bonds --no-key-rate --no-futures --no-adj --no-check
 ```
 
 Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` (из папки проекта) — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_markets`, `do_rates`, `do_adj_close`, `do_market_cap`, `do_derived`, `do_check`, `do_maintenance`, `do_backup`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `metadata_file`, `index_tickers`, `mode`, `notify_on`); возвращает код выхода.

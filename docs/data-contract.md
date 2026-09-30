@@ -6,17 +6,17 @@
 
 | Способ | Для чего |
 |--------|----------|
-| Пакет `moexutils` (`pip install -e <папка moexutils>`) | `stocks.read_stocks`, `stocks.read_index`, `history.read`, `history.read_securities`, `rates.read_ruonia`, `rates.read_zcyc`, `refdata.refdata_at`, `refdata.read_refdata`, `cashflows.read_cashflows`, `contracts.read_contracts`, `contracts.read_continuous`, `lake.query` — результат polars ([справочник API](api-reference.md)) |
+| Пакет `moexutils` (`pip install -e <папка moexutils>`) | `stocks.read_stocks`, `stocks.list_tickers`, `stocks.read_index`, `history.read`, `history.read_securities`, `rates.read_ruonia`, `rates.read_zcyc`, `refdata.refdata_at`, `refdata.read_refdata`, `cashflows.read_cashflows`, `contracts.read_contracts`, `contracts.read_continuous`, `lake.query` — результат polars ([справочник API](api-reference.md)) |
 | SQL через DuckDB | подключение к хранилищу (`lake.connect(read_only=True)` или свой `ATTACH 'ducklake:postgres:dbname=moex_lake'`) и запросы к `lake.<таблица>` |
 
-Роль PostgreSQL для чтения — `moex_reader` (создается один раз от суперпользователя `postgres` скриптом `scripts/reader_role.sql`, пароль — `\password moex_reader`; у потребителя `MOEX_PG_USER=moex_reader` и строка в `pgpass.conf`). Писать в хранилище может только роль `moex` — ночное обновление и ручные выгрузки moexutils.
+Роль PostgreSQL для чтения — `moex_reader` (создана скриптом `scripts/reader_role.sql` от суперпользователя `postgres`, пароль задан `\password moex_reader`; после новой установки Postgres скрипт выполняется заново). У потребителя — `MOEX_PG_USER=moex_reader` и строка `localhost:5432:moex_lake:moex_reader:<пароль>` в `pgpass.conf`; запись под этой ролью отклоняется. Писать в хранилище может только роль `moex` — ночное обновление и ручные выгрузки moexutils.
 
 ## Уровни стабильности
 
 | Уровень | Таблицы и представления | Гарантия |
 |---------|-------------------------|----------|
 | **Стабильные** | `stocks`, `stocks_adjusted`, `indexes`, `ruonia`, `futures_continuous`, `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors` | Ключ, имена, типы и смысл колонок из модели данных не меняются без смены старшей версии пакета |
-| **Поля биржи** | `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, представления `bonds_ofz`, `bonds_corporate`, `stock_refdata` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
+| **Поля биржи** | `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `stock_refdata`, представления `bonds_ofz`, `bonds_corporate` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
 | **Служебные** | `update_runs`, `quality_log`, `empty_dates`, `load_state` | Для мониторинга; состав колонок может меняться в младших версиях |
 
 ## Что гарантируется для данных
@@ -24,7 +24,7 @@
 - **Уникальность ключа** каждой таблицы.
 - **Даты** — торговые дни; колонка `date` типа DATE. Цены в рублях, если в модели данных не сказано иное.
 - **Без молчаливых пропусков:** загрузчик на сбое останавливается и докачивает в следующем прогоне; пропуски внутри истории наборов «все инструменты за дату» (`bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`) докачиваются по календарю IMOEX, дни, за которые биржа подтвержденно пуста, записаны в `empty_dates`.
-- **Свежесть:** обновление каждую ночь вт–сб в 00:30 — данные по предыдущий торговый день включительно (КБД — по вчерашний день, RUONIA — по последнюю опубликованную ЦБ дату). Итог каждого прогона — в `update_runs` (`status`: `ok`, `issues`, `error`); замечания проверки качества — в `quality_log`.
+- **Свежесть:** обновление каждую ночь вт–сб в 00:30 — данные по предыдущий торговый день включительно (КБД и `stock_refdata` — по вчерашний день, RUONIA — по последнюю опубликованную ЦБ дату). Итог каждого прогона — в `update_runs` (`status`: `ok`, `issues`, `error`); замечания проверки качества — в `quality_log`.
 - **Пересчитываемые колонки.** `adj_close`, `shares`, `market_cap` и вся таблица `stocks_adjusted` пересчитываются по всей истории при изменении дивидендов, реестров сплитов и переименований, числа акций — прошлые значения могут измениться. Для воспроизводимого расчета фиксируйте момент данных (`as_of`, см. ниже).
 - **Реестры `ref_*`** — копии файлов `metadata/` на момент последнего обновления.
 - **Коды фьючерсов.** При повторном листинге кода (раз в 10 лет) ISS задним числом переименовывает старый контракт (`SiZ5` 2015 года → `SiZ5_2015`); ночной шаг переводит уже сохраненные строки `futures` на новый код. Поэтому `SECID` старого контракта в `futures` может смениться — связывайте историю с реестром `futures_contracts` по текущему `secid` (или по `base_secid` и датам обращения), а не по кодам, сохраненным у себя.

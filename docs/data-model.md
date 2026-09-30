@@ -10,9 +10,9 @@
 | **Копии каталога** | `<MOEX_DATA_ROOT>/backups/catalog` | `pg_dump` базы `moex_lake`, 14 последних (шаг 5 обновления) | нет |
 | **Реестры** | `metadata/` в проекте | корпоративные события и справочники: сплиты, переименования, снятые с торгов, ключевая ставка, сектора, число акций | да |
 | **Дивиденды** | соседний проект `../dividends/data/<TICKER>.csv` | история выплат с закрытияреестров.рф | в своем репозитории |
-| **Прежние файлы** | `F:\moex-data\data`, `indexes`, `bonds`, `futures` | не используются кодом пакета; проект vectorbt еще читает их — удалить после его перевода на пакет (см. [план](../development-plan.md)) | нет |
+| **Прежние файлы** | `F:\moex-data\data`, `indexes`, `bonds`, `futures` | никем не читаются (проект vectorbt переведен на пакет) — можно удалить вручную (см. [план](../development-plan.md)) | нет |
 
-Источники: MOEX ISS (история торгов `/history`, карточки `/securities`, КБД `/engines/stock/zcyc`, денежные потоки облигаций `bondization`, реестр фьючерсов `series`), cbr.ru (ключевая ставка, RUONIA). Хранилище читается функциями пакета (`stocks`, `history`, `rates`, `cashflows`, `contracts` — результат polars) или SQL через `lake.query(...)`.
+Источники: MOEX ISS (история торгов `/history`, карточки `/securities`, КБД `/engines/stock/zcyc`, денежные потоки облигаций `bondization`, реестр фьючерсов `series`, параметры бумаг по датам `referencedata`), cbr.ru (ключевая ставка, RUONIA). Хранилище читается функциями пакета (`stocks`, `history`, `rates`, `refdata`, `cashflows`, `contracts` — результат polars) или SQL через `lake.query(...)`.
 
 ## Таблицы кратко
 
@@ -257,7 +257,7 @@ erDiagram
 
 ### `lake.shares_securities` — карточки бумаг рынка акций
 
-Как `bonds_securities`, для бумаг из `lake.shares`: строка на `SECID`, все поля карточки ISS (`ISIN`, `NAME`, `SHORTNAME`, `REGNUMBER`, `ISSUESIZE`, `FACEVALUE`, `FACEUNIT`, `ISSUEDATE`, `LISTLEVEL`, `TYPE`/`TYPENAME` — `common_share`, `preferred_share`, `depositary_receipt`, `exchange_ppif`, `etf_ppif`, ...; `GROUP`, `EMITTER_ID`, `ISQUALIFIEDINVESTORS`, `HASDEFAULT` и др.) плюс `FETCHED`. Пишет шаг 1f (`history.update_securities('shares')`, до 500 новых бумаг за ночь). `ISSUESIZE` — текущий объем выпуска на дату запроса, а не история (исторический объем ISS отдает только с 01.04.2024 — см. [план](../development-plan.md)).
+Как `bonds_securities`, для бумаг из `lake.shares`: строка на `SECID`, все поля карточки ISS (`ISIN`, `NAME`, `SHORTNAME`, `REGNUMBER`, `ISSUESIZE`, `FACEVALUE`, `FACEUNIT`, `ISSUEDATE`, `LISTLEVEL`, `TYPE`/`TYPENAME` — `common_share`, `preferred_share`, `depositary_receipt`, `exchange_ppif`, `etf_ppif`, ...; `GROUP`, `EMITTER_ID`, `ISQUALIFIEDINVESTORS`, `HASDEFAULT` и др.) плюс `FETCHED`. Пишет шаг 1f (`history.update_securities('shares')`, до 500 новых бумаг за ночь). `ISSUESIZE` — текущий объем выпуска на дату запроса, а не история; объем выпуска по датам (ISS отдает его только с 01.04.2024) — в [`lake.stock_refdata`](#lakestock_refdata--параметры-бумаг-по-датам).
 
 ### `lake.ruonia` — ставка RUONIA
 
@@ -350,14 +350,14 @@ erDiagram
 | 1d — ключевая ставка | `metadata/key_rate.csv` | новые решения ЦБ |
 | 1e — фьючерсы | `futures`, `empty_dates`, `futures_contracts`, `futures_continuous` | хвост истории, докачка пропусков; реестр контрактов, перекодировка строк после повторного листинга, пересчет непрерывных рядов |
 | 1f — прочие рынки | `shares`, `indexes_all`, `currency`, `currency_fixings`, `shares_securities`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек бумаг рынка акций |
-| 1g — ставки, потоки, параметры бумаг | `ruonia`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `stock_refdata`, `load_state` | RUONIA — вся история, записываются изменения; КБД — по вчерашний день; потоки — окно −10…+60 дней, по субботам все будущие |
+| 1g — ставки, потоки, параметры бумаг | `ruonia`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `stock_refdata`, `load_state` | RUONIA — вся история, записываются изменения; КБД и параметры бумаг — по вчерашний день (параметры — только изменения, последний обработанный день — в `load_state`); потоки — окно −10…+60 дней, по субботам все будущие |
 | 2 — пересчет | `stocks` | `adj_close` и капитализация после изменений дивидендов, срезов или реестра сплитов — только изменившиеся строки |
 | 2b — копии для SQL | `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors`, `stocks_adjusted`, представления `bonds_ofz`, `bonds_corporate` | синхронизация с файлами и `stocks`; недостающие представления |
 | 3 — проверка | `update_runs`, `quality_log` | отчет о качестве в лог; итог прогона и замечания — в конце прогона |
-| 4 — обслуживание | файлы хранилища | слияние мелких файлов, удаление снимков старше 30 дней |
+| 4 — обслуживание | файлы хранилища | слияние мелких файлов, удаление снимков старше 30 дней, неиспользуемых файлов и файлов-сирот |
 | 5 — копия каталога | `<MOEX_DATA_ROOT>/backups/catalog` | `pg_dump` каталога, 14 последних копий |
 
-Первичные выгрузки полной истории — `update_data.py --history-init bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows` (многочасовые; реестры `bonds_securities` и `shares_securities` наполняются следом).
+Первичные выгрузки полной истории — `update_data.py --history-init bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata` (многочасовые; реестры `bonds_securities` и `shares_securities` наполняются следом).
 
 ## Примеры доступа
 
