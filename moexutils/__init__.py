@@ -20,7 +20,7 @@ moexutils — данные Московской биржи: акции, инде
 import logging
 import sys
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 _logger = logging.getLogger("moexutils")
 # Если логирование в приложении не настроено — сообщения в stdout (прогресс в

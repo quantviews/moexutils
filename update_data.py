@@ -218,6 +218,7 @@ def main(
         if _lake_tables(warnings) is not None:
             for title, step in (("RUONIA", rates.update_ruonia),
                                 ("КБД", rates.update_zcyc),
+                ("КБД: пропуски", rates.repair_zcyc),
                 ("Параметры бумаг (объем выпуска, листинг)", refdata.update_refdata),
                                 # по субботам — все будущие потоки, в остальные ночи — окно ±дни
                                 ("Денежные потоки облигаций", lambda: cashflows.update_cashflows(

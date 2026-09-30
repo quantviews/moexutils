@@ -33,7 +33,7 @@ def _returns(values: np.ndarray) -> np.ndarray:
 
 
 def trading_calendar() -> list[dt.date]:
-    """Торговый календарь: будни, по которым есть IMOEX в хранилище."""
+    """Торговый календарь: даты, по которым есть IMOEX в хранилище (включая рабочие субботы)."""
     return history.trading_calendar()
 
 

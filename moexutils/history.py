@@ -36,6 +36,7 @@ class Dataset(NamedTuple):
     start: str                       # начало истории в ISS
     label: str                       # подпись для логов
     keep: Optional[pl.Expr] = None   # какие строки ответа хранить (None — все)
+    weekends: bool = False           # запрашивать и выходные (часть индексов публикуется по воскресеньям)
 
 
 # Набор данных = таблица хранилища (ключ date + SECID + BOARDID)
@@ -43,7 +44,8 @@ DATASETS = {
     'bonds': Dataset('stock/markets/bonds', '1997-01-01', 'облигации (весь рынок)'),
     'futures': Dataset('futures/markets/forts', '2002-01-01', 'фьючерсы FORTS'),
     'shares': Dataset('stock/markets/shares', '1997-03-24', 'акции и фонды (весь рынок)'),
-    'indexes_all': Dataset('stock/markets/index', '1995-09-01', 'индексы (все)'),
+    # сельскохозяйственные индексы (доска AGRO) публикуются по воскресеньям
+    'indexes_all': Dataset('stock/markets/index', '1995-09-01', 'индексы (все)', weekends=True),
     # у валютного рынка много строк-заглушек без сделок (NUMTRADES = 0, цены 0)
     'currency': Dataset('currency/markets/selt', '1997-06-02', 'валютный рынок',
                         keep=pl.col('NUMTRADES') > 0),
@@ -62,6 +64,10 @@ def _as_date(value) -> dt.date:
     if isinstance(value, dt.date):
         return value
     return dt.date.fromisoformat(str(value)[:10])
+
+
+def _all_days(start: dt.date, end: dt.date) -> list[dt.date]:
+    return [start + dt.timedelta(days=i) for i in range((end - start).days + 1)]
 
 
 def _weekdays(start: dt.date, end: dt.date) -> list[dt.date]:
@@ -86,11 +92,13 @@ def empty_dates(dataset: str) -> set[dt.date]:
 
 
 def trading_calendar() -> list[dt.date]:
-    """Торговый календарь: будни, по которым есть IMOEX в lake.indexes."""
+    """
+    Торговый календарь: даты, по которым есть IMOEX в lake.indexes, включая
+    рабочие субботы (перенесенные рабочие дни — 50 дат с 1995 года).
+    """
     if 'indexes' not in lake.tables():
         return []
-    dates = lake.query("SELECT DISTINCT date FROM lake.indexes WHERE ticker = 'IMOEX' ORDER BY date")['date']
-    return [d for d in dates.to_list() if d.weekday() < 5]
+    return lake.query("SELECT DISTINCT date FROM lake.indexes WHERE ticker = 'IMOEX' ORDER BY date")['date'].to_list()
 
 
 def _fetch(dataset: str, date: dt.date, session: requests.Session) -> pl.DataFrame:
@@ -114,6 +122,7 @@ def update(dataset: str, start: Optional[str] = None, max_days: int = 3000,
     session = session or iss.make_session()
     today = dt.date.today()
     first = _as_date(start or DATASETS[dataset][1])
+    days = _all_days if DATASETS[dataset].weekends else _weekdays
 
     bounds = (lake.query(f"SELECT min(date) AS lo, max(date) AS hi FROM lake.{dataset}")
               if dataset in lake.tables() else None)
@@ -123,10 +132,10 @@ def update(dataset: str, start: Optional[str] = None, max_days: int = 3000,
         # запуск заново опрашивал бы пустые даты до первых торгов в ISS.
         # Зазор в начале до 10 дней считаем закрытым (праздники)
         head = ([] if start is None or (lo - first).days <= 10
-                else _weekdays(first, lo - dt.timedelta(days=1))[::-1])
-        dates = (head + _weekdays(hi + dt.timedelta(days=1), today))[:max_days]
+                else days(first, lo - dt.timedelta(days=1))[::-1])
+        dates = (head + days(hi + dt.timedelta(days=1), today))[:max_days]
     else:
-        dates = _weekdays(first, today)[:max_days]
+        dates = days(first, today)[:max_days]
     if not dates:
         logger.info(f"[INFO] {label}: история актуальна")
         return 0
@@ -159,7 +168,7 @@ def repair(dataset: str, session: Optional[requests.Session] = None,
            calendar: Optional[Iterable] = None) -> int:
     """
     Докачивает пропущенные торговые даты внутри сохраненной истории (дыры от
-    сбоев прошлых прогонов). Календарь — будни IMOEX, если не передан.
+    сбоев прошлых прогонов). Календарь — даты торгов IMOEX (с рабочими субботами), если не передан.
 
     Returns: число записанных строк.
     """
@@ -170,8 +179,8 @@ def repair(dataset: str, session: Optional[requests.Session] = None,
         return 0
     cal = [_as_date(d) for d in (calendar if calendar is not None else trading_calendar())]
     have_set, skip = set(have), empty_dates(dataset)
-    missing = [d for d in cal if have[0] <= d <= have[-1] and d.weekday() < 5
-               and d not in have_set and d not in skip]
+    # календарь — даты торгов (в том числе рабочие субботы), выходные из него не отбрасываются
+    missing = [d for d in cal if have[0] <= d <= have[-1] and d not in have_set and d not in skip]
     if not missing:
         return 0
 

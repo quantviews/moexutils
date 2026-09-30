@@ -18,7 +18,7 @@ from typing import Optional
 import polars as pl
 import requests
 
-from moexutils import iss, lake
+from moexutils import history, iss, lake
 from moexutils.stocks import _html_table_rows
 
 logger = logging.getLogger("moexutils")
@@ -122,8 +122,11 @@ def fetch_zcyc(date, session: Optional[requests.Session] = None) -> dict[str, pl
 
 
 def _weekdays(start: dt.date, end: dt.date) -> list[dt.date]:
-    return [start + dt.timedelta(days=i) for i in range((end - start).days + 1)
-            if (start + dt.timedelta(days=i)).weekday() < 5]
+    """Будни и рабочие субботы из торгового календаря (кривая публикуется и в них)."""
+    extra = {d for d in history.trading_calendar() if d.weekday() >= 5 and start <= d <= end}
+    days = {start + dt.timedelta(days=i) for i in range((end - start).days + 1)
+            if (start + dt.timedelta(days=i)).weekday() < 5}
+    return sorted(days | extra)
 
 
 def update_zcyc(start=None, max_days: int = 5000, session: Optional[requests.Session] = None,
@@ -179,6 +182,37 @@ def update_zcyc(start=None, max_days: int = 5000, session: Optional[requests.Ses
     flush()
     logger.info(f"[OK] КБД: +{written} дат" if written else "[INFO] КБД: новых дат нет")
     return written
+
+
+def repair_zcyc(session: Optional[requests.Session] = None) -> int:
+    """Докачивает даты торгового календаря внутри истории кривой, которых нет (рабочие субботы, сбои)."""
+    if 'zcyc_params' not in lake.tables():
+        return 0
+    have = set(lake.query("SELECT date FROM lake.zcyc_params")['date'].to_list())
+    lo, hi = min(have), max(have)
+    skip = history.empty_dates('zcyc')
+    missing = [d for d in history.trading_calendar() if lo <= d <= hi and d not in have and d not in skip]
+    if not missing:
+        return 0
+    session = session or iss.make_session()
+    frames, empty = {b: [] for b in ZCYC_TABLES}, []
+    for day in missing:
+        blocks = fetch_zcyc(day, session)
+        if blocks['params'].is_empty():
+            empty.append(day)   # ISS подтвержденно без кривой — больше не запрашивать
+        for block, df in blocks.items():
+            if df.height:
+                frames[block].append(df)
+    if empty:
+        lake.write('empty_dates', pl.DataFrame({'dataset': ['zcyc'] * len(empty), 'date': empty}))
+    n = 0
+    for block, table in ZCYC_TABLES.items():
+        if frames[block]:
+            df = pl.concat(frames[block], how='diagonal_relaxed').unique(lake.TABLE_KEYS[table], keep='last')
+            lake.write(table, df)
+            n = df.height if block == 'params' else n
+    logger.info(f"[OK] КБД: докачано дат {n} из {len(missing)} пропущенных")
+    return n
 
 
 def read_zcyc(kind: str = 'params', start=None, end=None, as_of: lake.AsOf = None) -> pl.DataFrame:

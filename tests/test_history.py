@@ -163,3 +163,39 @@ def test_nightly_update_without_start_skips_backfill(lake_env):
     fake = FakeISS(two_bonds)
     history.update('bonds', session=fake)          # как ночью: без start
     assert all(d > dt.date.fromisoformat(recent) for d in fake.days)
+
+
+def test_weekend_dataset_queries_saturdays_and_sundays(lake_env):
+    # индексы AGRO публикуются по воскресеньям: indexes_all запрашивает и выходные
+    start = dt.date.today() - dt.timedelta(days=9)
+
+    def one_index(day):
+        return [['AGRO', day, 'SGCFOOTC', 48794.0, None]] if dt.date.fromisoformat(day).weekday() == 6 else []
+    fake = FakeISS(one_index)
+    history.update('indexes_all', start=start.isoformat(), session=fake)
+    assert any(d.weekday() >= 5 for d in fake.days)
+    assert len(fake.days) == (dt.date.today() - start).days + 1
+    stored = history.read('indexes_all')['date'].to_list()
+    assert stored and all(d.weekday() == 6 for d in stored)
+    # repair по календарю выходных: для такого набора выходные не отбрасываются
+    fake2 = FakeISS(one_index)
+    sat = [d for d in fake.days if d.weekday() == 5]
+    history.repair('indexes_all', calendar=sat, session=fake2)
+    assert fake2.days == [] or all(d.weekday() == 5 for d in fake2.days)
+    # облигации по-прежнему только будни
+    fake3 = FakeISS(two_bonds)
+    history.update('bonds', start=start.isoformat(), session=fake3)
+    assert all(d.weekday() < 5 for d in fake3.days)
+
+
+def test_working_saturday_in_calendar_is_repaired(lake_env):
+    # перенесенный рабочий день: IMOEX торговался в субботу 01.11.2025
+    days = [dt.date(2025, 10, 31), dt.date(2025, 11, 1), dt.date(2025, 11, 3)]
+    lake.write('indexes', pl.DataFrame({'date': days, 'ticker': ['IMOEX'] * 3, 'BOARDID': ['SNDX'] * 3,
+                                        'close': [2800.0] * 3, 'value_rub': [1.0] * 3, 'volume': [1.0] * 3}))
+    assert dt.date(2025, 11, 1) in history.trading_calendar()
+    history.update('bonds', start='2025-10-31', session=FakeISS(two_bonds))   # по будням: субботы нет
+    assert dt.date(2025, 11, 1) not in history.dataset_dates('bonds')
+    fake = FakeISS(two_bonds)
+    assert history.repair('bonds', session=fake) == 3 and fake.days == [dt.date(2025, 11, 1)]
+    assert dt.date(2025, 11, 1) in history.dataset_dates('bonds')

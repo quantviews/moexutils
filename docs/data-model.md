@@ -84,7 +84,7 @@ erDiagram
     empty_dates { string dataset PK; date date PK }
 ```
 
-- **Календарь торгов** — будни, по которым есть `IMOEX` в `lake.indexes`. По нему проверяются пропуски и отставание всех наборов «все инструменты за дату».
+- **Календарь торгов** — даты, по которым есть `IMOEX` в `lake.indexes`, включая рабочие субботы (перенесенные рабочие дни: 50 дат с 1995 года, последняя — 01.11.2025; загрузка по датам идет по будням, такие субботы докачивает `repair`). По нему проверяются пропуски и отставание всех наборов «все инструменты за дату».
 - **Акции ↔ реестры** — по тикеру: переименования склеивают истории, сплиты приводят цены к одной базе, снятые с торгов не обновляются, дивиденды и число акций дают `adj_close` и капитализацию. `stocks.ticker` — это `SECID` бумаги на рынке shares.
 - **Облигации ↔ карточки ↔ потоки** — по `SECID` (в потоках и КБД — `secid` в нижнем регистре): история торгов (`bonds`), параметры выпуска (`bonds_securities`), купоны, амортизации и оферты, участие в кривой ОФЗ.
 - **Фьючерсы ↔ реестр** — `futures.SECID = futures_contracts.secid`: после перекодировки (шаг 1e) код в истории однозначно определяет контракт, дата экспирации и базовый актив — в реестре.
@@ -247,7 +247,7 @@ erDiagram
 | Таблица | Рынок ISS | Начало в ISS | Что и основные колонки |
 |---------|-----------|--------------|------------------------|
 | `shares` | `stock/markets/shares` | 24.03.1997 | Все бумаги рынка акций: акции, депозитарные расписки, паи ПИФ и ETF по всем доскам (`TQBR` — акции, `TQTF` — фонды, `TQIF`, `SMAL`, `TQTD`, `TQPI`, `SPEQ`, ...). `SHORTNAME`, `OPEN`, `LOW`, `HIGH`, `CLOSE`, `LEGALCLOSEPRICE`, `WAPRICE`, `VOLUME`, `VALUE`, `NUMTRADES`, `MARKETPRICE2`, `MARKETPRICE3`, `ADMITTEDQUOTE`, `CURRENCYID`, `TRADINGSESSION`. Разбита по годам |
-| `indexes_all` | `stock/markets/index` | 01.09.1995 | Все индексы MOEX: акций, облигаций (`RGBI`, ...), денежного рынка (`RUSFAR`), iNAV фондов (доска `INAV`) и др. `SHORTNAME`, `NAME`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VALUE`, `VOLUME`, `CAPITALIZATION`, `DIVISOR`, `DURATION`, `YIELD` (для облигационных), `CURRENCYID`. Разбита по годам |
+| `indexes_all` | `stock/markets/index` | 01.09.1995 | Все индексы MOEX: акций, облигаций (`RGBI`, ...), денежного рынка (`RUSFAR`), iNAV фондов (доска `INAV`), сельскохозяйственные (доска `AGRO`, часть публикуется **по воскресеньям** — набор запрашивается и в выходные) и др. `SHORTNAME`, `NAME`, `OPEN`, `HIGH`, `LOW`, `CLOSE`, `VALUE`, `VOLUME`, `CAPITALIZATION`, `DIVISOR`, `DURATION`, `YIELD` (для облигационных), `CURRENCYID`. Разбита по годам |
 | `currency` | `currency/markets/selt` | 02.06.1997 | Валютный рынок: пары и инструменты (`CNYRUB_TOM`, `USD000UTSTOM`, свопы) по доскам (`CETS` — основная, `CNGD`, `LICU` и др.). `SHORTNAME`, `OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE`, `NUMTRADES`. Хранятся **только строки со сделками** (`NUMTRADES > 0`): ISS отдает множество строк-заглушек с нулевыми ценами. Разбита по годам |
 | `currency_fixings` | `currency/markets/index` | 01.08.2019 | Валютные фиксинги MOEX (доска `FIXI`): `USDFIXME`, `EURFIXME`, `CNYFIXME`, `CNYFIX`, `EURUSDFIXME`, `USDCNYFIXME`, фиксинги драгметаллов (`SILVFIXME`, `PLATFIXME`, `PALADFIXME`), других валют (`BYNFIXME`, `TRYFIXME`, ...). `OPEN`, `LOW`, `HIGH`, `CLOSE` |
 
@@ -279,7 +279,7 @@ erDiagram
 
 ### `lake.zcyc_params`, `lake.zcyc_yields`, `lake.zcyc_bonds` — кривая бескупонной доходности
 
-Кривая бескупонной доходности ОФЗ MOEX (КБД) с 06.01.2014. Источник — ISS `/iss/engines/stock/zcyc` на каждую дату. Грузится **по вчерашний день**: за сегодня ISS отдает промежуточную кривую. Пишет шаг 1g (`rates.update_zcyc`); первичная выгрузка — `--history-init zcyc`. Колонки — как в ISS, `tradedate` → `date`, `tradetime` — время расчета.
+Кривая бескупонной доходности ОФЗ MOEX (КБД) с 06.01.2014. Источник — ISS `/iss/engines/stock/zcyc` на каждую дату. Грузится **по вчерашний день**: за сегодня ISS отдает промежуточную кривую. Даты — будни и рабочие субботы торгового календаря; пропуски внутри истории докачивает `rates.repair_zcyc` (дни, за которые ISS кривую не отдает, — в `empty_dates`, набор `zcyc`). Пишет шаг 1g (`rates.update_zcyc`, `rates.repair_zcyc`); первичная выгрузка — `--history-init zcyc`. Колонки — как в ISS, `tradedate` → `date`, `tradetime` — время расчета.
 
 | Таблица | Ключ | Колонки |
 |---------|------|---------|

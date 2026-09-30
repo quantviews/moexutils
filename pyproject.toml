@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moexutils"
-version = "1.0.0"
+version = "1.0.1"
 description = "Данные Московской биржи: акции, индексы, облигации, фьючерсы, валюта, ставки — хранилище DuckLake, polars"
 readme = "README.md"
 license = { text = "MIT" }

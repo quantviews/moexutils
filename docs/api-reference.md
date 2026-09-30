@@ -212,7 +212,7 @@ history.update_securities(dataset='bonds', max_new=500, session=None, flush_ever
 history.read_securities(dataset='bonds', as_of=None) -> pl.DataFrame
 ```
 
-Наборы `history.DATASETS` — словарь `имя → Dataset(path, start, label, keep)`: путь рынка в ISS, начало истории, подпись для логов и выражение polars — какие строки ответа хранить (`None` — все). Имя набора = таблица хранилища, ключ `date + SECID + BOARDID`.
+Наборы `history.DATASETS` — словарь `имя → Dataset(path, start, label, keep, weekends)`: путь рынка в ISS, начало истории, подпись для логов, выражение polars — какие строки ответа хранить (`None` — все) и `weekends` — запрашивать ли выходные (у `indexes_all`: индексы доски AGRO публикуются по воскресеньям; остальные рынки в выходные пусты). `repair` для такого набора принимает и выходные даты календаря. Имя набора = таблица хранилища, ключ `date + SECID + BOARDID`.
 
 | Набор | Рынок ISS | Начало | Что |
 |-------|-----------|--------|-----|
@@ -229,7 +229,7 @@ history.read_securities(dataset='bonds', as_of=None) -> pl.DataFrame
 - **Бэкфилл** — только при явно заданном `start` раньше истории: даты от истории назад (при обрыве скачанное примыкает к истории); зазор в начале до 10 дней считается закрытым (праздники). Без истории — с `start` или начала набора.
 - **Без дыр** — на сбое даты прогон останавливается, следующий запуск продолжит с нее.
 - **Прогресс** — запись порциями по `flush_every` дат (многочасовая выгрузка не теряет результат); `max_days` ограничивает число дат за прогон.
-- **`repair`** — докачка пропусков внутри истории по будням IMOEX (`trading_calendar`); даты, за которые ISS подтвержденно пуст, запоминаются в `lake.empty_dates` (`empty_dates`) и больше не запрашиваются.
+- **`repair`** — докачка пропусков внутри истории по датам торгов IMOEX (`trading_calendar`, включая рабочие субботы — перенесенные рабочие дни); даты, за которые ISS подтвержденно пуст, запоминаются в `lake.empty_dates` (`empty_dates`) и больше не запрашиваются.
 - **Параллельная работа** — ночное обновление и идущая выгрузка могут писать одновременно: запись идемпотентна (MERGE по ключу), конфликты транзакций разрешает каталог.
 
 `read` возвращает историю за период (`start`/`end` включительно); `secids` / `boards` — код или список кодов бумаг / режимов торгов; `columns` ускоряет чтение полной истории. Нет таблицы набора — `FileNotFoundError` с командой первичной выгрузки. `dataset_dates` — все сохраненные даты набора.
@@ -292,10 +292,11 @@ rates.fetch_ruonia(start=None, end=None, session=None) -> pl.DataFrame
 rates.update_zcyc(start=None, max_days=5000, session=None, flush_every=50) -> int
 rates.read_zcyc(kind='params', start=None, end=None, as_of=None) -> pl.DataFrame
 rates.fetch_zcyc(date, session=None) -> dict[str, pl.DataFrame]
+rates.repair_zcyc(session=None) -> int
 ```
 
 - **RUONIA** — с cbr.ru (`RUONIA_URL`), с 11.01.2010 (`RUONIA_START`); в ISS RUONIA нет (RUSFAR — в `indexes_all`). `update_ruonia` берет всю историю одним запросом и пишет в `lake.ruonia` новые и пересмотренные строки (ЦБ может уточнить последние значения); пустой ответ — ошибка. `fetch_ruonia` — таблица с сайта без записи.
-- **КБД** — кривая бескупонной доходности MOEX (`/iss/engines/stock/zcyc`) с 06.01.2014 (`ZCYC_START`). `update_zcyc` докачивает **по вчерашний день** (за сегодня ISS отдает промежуточную кривую): хвост после последней даты и, если `start` раньше истории, начало (назад); на сбое останавливается, скачанное сохраняется. Returns — число записанных дат. `fetch_zcyc` — кривая на дату: `{'params', 'yearyields', 'securities'}` (выходной — пустые таблицы). `read_zcyc(kind)`: `'params'` → `zcyc_params`, `'yields'` → `zcyc_yields`, `'bonds'` → `zcyc_bonds`.
+- **КБД** — кривая бескупонной доходности MOEX (`/iss/engines/stock/zcyc`) с 06.01.2014 (`ZCYC_START`). `update_zcyc` докачивает **по вчерашний день** (за сегодня ISS отдает промежуточную кривую): хвост после последней даты и, если `start` раньше истории, начало (назад); на сбое останавливается, скачанное сохраняется. Returns — число записанных дат. `update_zcyc` берет будни и рабочие субботы из торгового календаря. `repair_zcyc` докачивает даты календаря внутри истории, которых нет (сбои, рабочие субботы); даты, за которые ISS кривую не отдает, записываются в `empty_dates` (набор `zcyc`) и больше не запрашиваются — ночной шаг 1g. `fetch_zcyc` — кривая на дату: `{'params', 'yearyields', 'securities'}` (выходной — пустые таблицы). `read_zcyc(kind)`: `'params'` → `zcyc_params`, `'yields'` → `zcyc_yields`, `'bonds'` → `zcyc_bonds`.
 
 Шаг 1g `update_data.py`; первичная выгрузка КБД — `--history-init zcyc`.
 

@@ -254,3 +254,28 @@ class TestRefdata:
         assert refdata.refdata_at(days[-1])['issuesize'].to_list() == [2000.0, 1000.0]
         s.calls.clear()
         assert refdata.update_refdata(session=s) == 0 and s.calls == []   # по вчерашний день актуально
+
+
+class TestZcycWorkingSaturday:
+    def test_repair_fills_calendar_days_and_remembers_empty(self, lake_env):
+        sat, empty_day = dt.date(2025, 11, 1), dt.date(2025, 11, 5)
+        cal = [dt.date(2025, 10, 31), sat, dt.date(2025, 11, 3), empty_day, dt.date(2025, 11, 6)]
+        lake.write('indexes', pl.DataFrame({'date': cal, 'ticker': ['IMOEX'] * 5, 'BOARDID': ['SNDX'] * 5,
+                                            'close': [1.0] * 5, 'value_rub': [1.0] * 5, 'volume': [1.0] * 5}))
+
+        def payload(day):
+            if day == empty_day:
+                return {b: block(['tradedate'], []) for b in ('params', 'yearyields', 'securities')}
+            p = zcyc_payload(dt.date(2025, 11, 3))          # будний шаблон с датой day
+            for b in p.values():
+                for row in b['data']:
+                    row[0] = day.isoformat()
+            return p
+        s = FakeSession(lambda url, p: Resp(payload(dt.date.fromisoformat(p['date']))))
+        for d in (cal[0], cal[2], cal[4]):
+            lake.write('zcyc_params', rates.fetch_zcyc(d, s)['params'])
+        s.calls.clear()
+        assert rates.repair_zcyc(session=s) == 1                       # суббота докачана
+        assert sat in rates.read_zcyc('params')['date'].to_list()
+        s.calls.clear()
+        assert rates.repair_zcyc(session=s) == 0 and s.calls == []     # пустой день больше не запрашивается
