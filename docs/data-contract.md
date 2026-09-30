@@ -16,7 +16,7 @@
 | Уровень | Таблицы и представления | Гарантия |
 |---------|-------------------------|----------|
 | **Стабильные** | `stocks`, `stocks_adjusted`, `indexes`, `ruonia`, `futures_continuous`, `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors` | Ключ, имена, типы и смысл колонок из модели данных не меняются без смены старшей версии пакета |
-| **Поля биржи** | `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `stock_refdata`, представления `bonds_ofz`, `bonds_corporate` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
+| **Поля биржи** | `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `stock_refdata`, `index_weights`, представления `bonds_ofz`, `bonds_corporate`, `futures_swaprates` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
 | **Служебные** | `update_runs`, `quality_log`, `empty_dates`, `load_state` | Для мониторинга; состав колонок может меняться в младших версиях |
 
 ## Что гарантируется для данных

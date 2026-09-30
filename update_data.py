@@ -33,7 +33,7 @@ from typing import Optional
 
 import polars as pl
 
-from moexutils import backup, cashflows, contracts, history, lake, notify, quality, rates, refdata, stocks
+from moexutils import backup, cashflows, contracts, history, indices, lake, notify, quality, rates, refdata, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -143,6 +143,9 @@ def main(
             if dataset == 'refdata':
                 refdata.update_refdata(start=history_start)
                 continue
+            if dataset == 'index_weights':
+                indices.update_index_weights(start=history_start, max_days=None)
+                continue
             n = history.update(dataset, start=history_start, max_days=20000)
             print(f"{dataset}: +{n} строк")
             if dataset in ('bonds', 'shares'):
@@ -220,6 +223,7 @@ def main(
                                 ("КБД", rates.update_zcyc),
                 ("КБД: пропуски", rates.repair_zcyc),
                 ("Параметры бумаг (объем выпуска, листинг)", refdata.update_refdata),
+                ("Состав и веса индексов", indices.update_index_weights),
                                 # по субботам — все будущие потоки, в остальные ночи — окно ±дни
                                 ("Денежные потоки облигаций", lambda: cashflows.update_cashflows(
                                     'future' if dt.date.today().weekday() == 5 else 'window'))):
@@ -316,7 +320,7 @@ if __name__ == "__main__":
     ap.add_argument("--no-key-rate", action="store_true", help="Не обновлять ключевую ставку ЦБ")
     ap.add_argument("--no-futures", action="store_true", help="Не обновлять фьючерсы")
     ap.add_argument("--no-rates", action="store_true",
-                    help="Не обновлять RUONIA, КБД, денежные потоки облигаций и параметры бумаг")
+                    help="Не обновлять RUONIA, КБД, денежные потоки облигаций, параметры бумаг и состав индексов")
     ap.add_argument("--no-markets", action="store_true",
                     help="Не обновлять прочие рынки (все акции, все индексы, валюта, фиксинги)")
     ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close и капитализацию (шаг 2)")
@@ -329,7 +333,7 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
-                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata")
+                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata,index_weights")
     ap.add_argument("--history-start", type=str, default=None,
                     help="Начальная дата первичной выгрузки (по умолчанию — начало истории ISS)")
     # синонимы прежних флагов первичной выгрузки

@@ -58,6 +58,7 @@ TABLE_KEYS = {
     'quality_log': ['run_id', 'check', 'object', 'detail'],
     'ruonia': ['date'],
     'stock_refdata': ['secid', 'date'],
+    'index_weights': ['date', 'indexid', 'ticker'],
     # служебная: до какой даты обработан набор, если по данным этого не видно
     'load_state': ['name'],
     'futures_contracts': ['secid'],
@@ -88,6 +89,15 @@ VIEWS = {
         "SELECT b.* FROM lake.bonds b WHERE b.SECID IN "
         "(SELECT SECID FROM lake.bonds_securities WHERE TYPE IN ('corporate_bond', 'exchange_bond'))",
         ('bonds', 'bonds_securities')),
+    # фандинг вечных фьючерсов (экспирация 2100-01-01): SWAPRATE — руб., SWAPRATE_CURR — в валюте;
+    # те же ставки, что на рынке ISS swaprates (доски FUSR / FUSC)
+    'futures_swaprates': (
+        "SELECT f.date, f.SECID, c.asset_code, c.underlying_asset, f.SWAPRATE AS swaprate_rub, "
+        "f.SWAPRATE_CURR AS swaprate_curr, f.SETTLEPRICE, f.CLOSE, f.OPENPOSITION, f.VALUE "
+        "FROM lake.futures f JOIN lake.futures_contracts c ON c.secid = f.SECID "
+        "WHERE c.expiration_date = DATE '2100-01-01' "
+        "AND (f.SWAPRATE IS NOT NULL OR f.SWAPRATE_CURR IS NOT NULL)",
+        ('futures', 'futures_contracts')),
 }
 # Таблицы, разбитые по годам (дозапись трогает только текущий год)
 PARTITIONED_BY_YEAR = ('bonds', 'futures', 'shares', 'indexes_all', 'currency')

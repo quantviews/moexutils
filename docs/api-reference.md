@@ -8,6 +8,7 @@
 | `history` | Рынки «все инструменты за дату» (облигации, фьючерсы, все акции, все индексы, валюта, фиксинги), реестры карточек бумаг |
 | `rates` | RUONIA, кривая бескупонной доходности (КБД) |
 | `refdata` | Параметры бумаг по датам (объем выпуска, листинг, номинал, купон) с 01.04.2024 |
+| `indices` | Состав и веса индексов по датам |
 | `cashflows` | Денежные потоки облигаций: купоны, амортизации, оферты |
 | `contracts` | Реестр фьючерсных контрактов, перекодировка после повторного листинга, непрерывные ряды |
 | `quality` | Проверка качества данных, история прогонов |
@@ -271,6 +272,18 @@ bondmath.calculate_convexity(price, face_value, coupon_rate, years_to_maturity, 
 Учебные расчеты по упрощенной модели (равные купоны, без НКД и реального графика выплат): YTM бисекцией в диапазоне [−50%, 500%], модифицированные дюрация (годы) и выпуклость (годы²): dP/P ≈ −D·dy + 0.5·C·dy². В аналитике используйте биржевые `YIELDCLOSE` и `DURATION` из истории; модель — фоллбэк (так делает ноутбук `bond-market.py`).
 
 ---
+
+## Состав и веса индексов (`indices`)
+
+```python
+indices.update_index_weights(indexes=CORE_INDEXES, start=None, max_days=30, session=None, flush_every=100) -> int
+indices.read_index_weights(indexes=None, start=None, end=None, as_of=None) -> pl.DataFrame
+indices.constituents_at(indexid, date, as_of=None) -> pl.DataFrame
+indices.fetch_weights(indexid, date, session=None, max_pages=50) -> pl.DataFrame
+indices.list_indexes(session=None) -> pl.DataFrame
+```
+
+Источник — `/iss/statistics/engines/stock/markets/index/analytics/<индекс>?date=`: бумаги индекса и их веса (%) на дату. ISS отдает один индекс за одну дату, веса меняются ежедневно, поэтому хранятся основные индексы `CORE_INDEXES` (17): `IMOEX`, `MOEX10`, `MOEXBC`, `MOEXBMI`, `MCXSM`, `MRBC`, 10 отраслевых (`MOEXOG` ... `MOEXRE`) и `RGBI`; RTSI и MCFTR не нужны — их состав совпадает с IMOEX. `list_indexes` — все 288 индексов с выдачей состава и их даты. Даты — торговый календарь IMOEX (с рабочими субботами); последняя обработанная дата каждого индекса — в `lake.load_state` (`index_weights:<индекс>`). Ночью — до 30 дат на индекс (шаг 1g), первичная выгрузка — `--history-init index_weights` (около 85 тыс. запросов). `constituents_at` — состав на последнюю дату расчета не позже заданной.
 
 ## Параметры бумаг по датам (`refdata`)
 

@@ -279,3 +279,54 @@ class TestZcycWorkingSaturday:
         assert sat in rates.read_zcyc('params')['date'].to_list()
         s.calls.clear()
         assert rates.repair_zcyc(session=s) == 0 and s.calls == []     # пустой день больше не запрашивается
+
+
+# ---------------------------------------------------------------- состав индексов
+
+def weights_payload(indexid, day, tickers):
+    cols = ['indexid', 'tradedate', 'ticker', 'shortnames', 'secids', 'weight', 'tradingsession', 'trade_session_date']
+    rows = [[indexid, day, t, t, t, w, 3.0, day] for t, w in tickers]
+    return {'analytics': block(cols, rows, {'weight': 'double', 'tradingsession': 'double'}),
+            'analytics.cursor': block(['INDEX', 'TOTAL', 'PAGESIZE'], [[0, len(rows), 100]],
+                                      {'INDEX': 'int64', 'TOTAL': 'int64', 'PAGESIZE': 'int64'})}
+
+
+class TestIndexWeights:
+    def test_calendar_days_progress_and_constituents(self, lake_env):
+        from moexutils import indices
+        cal = [dt.date(2025, 10, 30), dt.date(2025, 10, 31), dt.date(2025, 11, 1), dt.date(2025, 11, 3)]
+        lake.write('indexes', pl.DataFrame({'date': cal, 'ticker': ['IMOEX'] * 4, 'BOARDID': ['SNDX'] * 4,
+                                            'close': [1.0] * 4, 'value_rub': [1.0] * 4, 'volume': [1.0] * 4}))
+
+        def handler(url, p):
+            if url.endswith('analytics.json'):
+                return Resp({'indices': block(['indexid', 'shortname', 'from', 'till'],
+                                              [['IMOEX', 'Индекс', '2025-10-30', '2025-11-03']])})
+            day = p['date']
+            if day == '2025-10-31':                                  # индекс в этот день не рассчитывался
+                return Resp(weights_payload("IMOEX", day, []))
+            tickers = [('SBER', 15.0), ('GAZP', 10.0)] if day < '2025-11-03' else [('SBER', 16.0), ('LKOH', 9.0)]
+            return Resp(weights_payload('IMOEX', day, tickers))
+        s = FakeSession(handler)
+        n = indices.update_index_weights(['IMOEX'], session=s)
+        assert n == 6                                               # 3 даты с составом × 2 бумаги
+        w = indices.read_index_weights('IMOEX')
+        assert sorted(set(w['date'].to_list())) == [cal[0], cal[2], cal[3]]   # рабочая суббота есть
+        assert indices.constituents_at('IMOEX', '2025-11-02')['ticker'].to_list() == ['SBER', 'GAZP']
+        assert indices.constituents_at('IMOEX', cal[3])['ticker'].to_list() == ['SBER', 'LKOH']
+        s.calls.clear()
+        assert indices.update_index_weights(['IMOEX'], session=s) == 0
+        assert [c for c in s.calls if 'analytics/' in c[0]] == []    # прогресс в load_state, пустой день не повторяется
+
+
+class TestSwapratesView:
+    def test_perpetual_futures_only(self, lake_env):
+        lake.write('futures_contracts', pl.DataFrame({
+            'secid': ['USDRUBF', 'SiZ6'], 'asset_code': ['USDRUBF', 'Si'], 'underlying_asset': ['USD', 'USD'],
+            'expiration_date': [dt.date(2100, 1, 1), dt.date(2026, 12, 17)], 'base_secid': ['USDRUBF', 'SiZ6']}))
+        f = fut_rows('USDRUBF', [dt.date(2026, 9, 29)], [81.0], [1.0]).vstack(fut_rows('SiZ6', [dt.date(2026, 9, 29)], [82000.0], [1.0]))
+        lake.write('futures', f.with_columns(SWAPRATE=pl.Series([0.03, 0.0]), SWAPRATE_CURR=pl.Series([0.0004, 0.0]),
+                                             VALUE=pl.Series([1e6, 1e6])))
+        assert 'futures_swaprates' in lake.ensure_views()
+        got = lake.query('SELECT SECID, swaprate_rub, swaprate_curr FROM lake.futures_swaprates')
+        assert got.rows() == [('USDRUBF', 0.03, 0.0004)]

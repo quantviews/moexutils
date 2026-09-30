@@ -32,6 +32,7 @@
 | `currency_fixings` | `date, SECID, BOARDID` | ISS, валютные фиксинги за дату | 1f |
 | `ruonia` | `date` | cbr.ru | 1g |
 | `stock_refdata` | `secid, date` | ISS, referencedata (срезы с 01.04.2024, только изменения) | 1g |
+| `index_weights` | `date, indexid, ticker` | ISS, analytics (состав индексов) | 1g |
 | `load_state` | `name` | служебная: до какой даты обработан набор | 1g |
 | `zcyc_params` | `date` | ISS, КБД | 1g |
 | `zcyc_yields` | `date, period` | ISS, КБД | 1g |
@@ -162,6 +163,14 @@ erDiagram
 | Тип | `BONDTYPE`, `BONDSUBTYPE` |
 
 Доски: старые основные режимы (`EQOB`, `EQNB`, `EQOS`, `EQNO` и др.) до перехода на Т+, `TQOB` — гособлигации, `TQCB` — корпоративные, `TQOD`/`TQOE`/`TQOY`/`TQUD` — валютные, `TQRD`. Для анализа обычно фильтруют основные доски: `boards=['TQOB', 'TQCB']`.
+
+### `lake.index_weights` — состав и веса индексов
+
+Бумаги 17 основных индексов и их веса (% от индекса) на каждую дату расчета; ключ `date + indexid + ticker`. Колонки: `indexid`, `ticker`, `secids`, `shortnames`, `weight`, `tradingsession`, `trade_session_date`. Глубина: IMOEX — с 03.01.2001, отраслевые — с 2005, остальные — с начала выдачи ISS для индекса. Веса меняются ежедневно (от цен), состав — на ребалансировках. Для выборки бумаг без ошибки выжившего: состав индекса на дату — `indices.constituents_at`. Пишет шаг 1g (`indices.update_index_weights`).
+
+### Представление `lake.futures_swaprates` — ставки фондирования вечных фьючерсов
+
+Из `futures` для контрактов с экспирацией 2100-01-01 (`futures_contracts`): `date`, `SECID`, `asset_code`, `underlying_asset`, `swaprate_rub` (`SWAPRATE`, руб.), `swaprate_curr` (`SWAPRATE_CURR`, в валюте), `SETTLEPRICE`, `CLOSE`, `OPENPOSITION`, `VALUE`; с 05.12.2022. Это те же ставки, что на рынке ISS `swaprates` (доски FUSR и FUSC): дневное закрытие там совпадает с `SWAPRATE` в 94–97% дней, у рынка `swaprates` история короче (с 22.05.2023), отдельно он не хранится.
 
 ### Представления `lake.bonds_ofz`, `lake.bonds_corporate`
 
