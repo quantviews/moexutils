@@ -20,9 +20,9 @@ import subprocess
 from datetime import datetime
 from typing import Optional
 
-import lake
+from moexutils import lake
 
-logger = logging.getLogger("moex_utils")
+logger = logging.getLogger("moexutils")
 
 BACKUP_DIR = os.environ.get("MOEX_BACKUP_DIR") or os.path.join(lake.DATA_ROOT, "backups", "catalog")
 KEEP = 14

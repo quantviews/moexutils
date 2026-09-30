@@ -1,9 +1,0 @@
--r requirements.txt
-# Зависимости marimo-ноутбуков (marimo/) — ядру и тестам не нужны
-marimo
-matplotlib
-scipy
-statsmodels
-arch
-scikit-learn
-PyPortfolioOpt

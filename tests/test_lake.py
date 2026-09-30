@@ -3,12 +3,11 @@
 (MOEX_LAKE_CATALOG), Postgres не нужен.
 """
 import datetime as dt
-import os
 
 import polars as pl
 import pytest
 
-import lake
+from moexutils import lake
 
 
 @pytest.fixture

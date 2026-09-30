@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moexutils"
+version = "1.0.0"
+description = "Данные Московской биржи: акции, индексы, облигации, фьючерсы, ставки — хранилище DuckLake, polars"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+dependencies = [
+    "requests",
+    "pyarrow",
+    "openpyxl",
+    "lxml",
+    "numpy<2",
+    "duckdb>=1.5",
+    "polars>=1.44",
+]
+
+[project.optional-dependencies]
+# ноутбук обзора данных marimo/bond-market.py
+notebooks = ["marimo", "plotly"]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools]
+packages = ["moexutils"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["legacy", "marimo"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]

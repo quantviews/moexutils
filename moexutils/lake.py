@@ -26,9 +26,10 @@ from typing import Iterable, Optional
 import duckdb
 import polars as pl
 
-logger = logging.getLogger("moex_utils")
+logger = logging.getLogger("moexutils")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# корень проекта: metadata/ и (без MOEX_DATA_ROOT) данные — на уровень выше пакета
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_ROOT = os.environ.get("MOEX_DATA_ROOT") or BASE_DIR
 LAKE_DATA_PATH = os.path.join(DATA_ROOT, "lake")
 

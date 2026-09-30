@@ -26,13 +26,7 @@ from typing import Optional
 
 import polars as pl
 
-import backup
-import history
-import lake
-import moex_utils as moex
-import notify
-import quality
-import stocks
+from moexutils import backup, history, lake, notify, quality, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -116,7 +110,7 @@ def main(
     run_id = dt.datetime.now()
     warnings: list[str] = []
     issues = None
-    print(f"Данные: {moex.DATA_ROOT}"
+    print(f"Данные: {lake.DATA_ROOT}"
           + ("" if os.environ.get("MOEX_DATA_ROOT") else " (MOEX_DATA_ROOT не задана — папка проекта)"))
     if metadata_file is not None:
         stocks.METADATA_FILE = metadata_file

@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import io
 import json
 import logging
 import math
@@ -28,12 +27,13 @@ import numpy as np
 import polars as pl
 import requests
 
-import iss
-import lake
+from moexutils import iss
+from moexutils import lake
 
-logger = logging.getLogger("moex_utils")
+logger = logging.getLogger("moexutils")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# корень проекта: metadata/ и (без MOEX_DATA_ROOT) данные — на уровень выше пакета
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 METADATA_FILE = os.path.join(BASE_DIR, "metadata", "stock-index-base.xlsx")
 SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
 RENAMES_FILE = os.path.join(BASE_DIR, "metadata", "renames.csv")

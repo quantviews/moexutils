@@ -24,10 +24,10 @@ from typing import Iterable, Optional
 import polars as pl
 import requests
 
-import iss
-import lake
+from moexutils import iss
+from moexutils import lake
 
-logger = logging.getLogger("moex_utils")
+logger = logging.getLogger("moexutils")
 
 # Набор данных -> (путь рынка в ISS, начало истории, подпись для логов)
 DATASETS = {

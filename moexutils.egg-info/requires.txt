@@ -3,6 +3,13 @@ pyarrow
 openpyxl
 lxml
 numpy<2
-plotly
 duckdb>=1.5
 polars>=1.44
+
+[dev]
+pytest
+ruff
+
+[notebooks]
+marimo
+plotly

@@ -7,9 +7,9 @@ import datetime as dt
 import polars as pl
 import pytest
 
-import history
-import iss
-import lake
+from moexutils import history
+from moexutils import iss
+from moexutils import lake
 
 
 @pytest.fixture

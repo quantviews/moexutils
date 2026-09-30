@@ -1,0 +1,28 @@
+"""
+moexutils — данные Московской биржи: акции, индексы, облигации, фьючерсы, ставки.
+
+Модули:
+- stocks   — акции и индексы: загрузка, корпоративные события, adj_close, капитализация, ставки;
+- history  — история рынков «все инструменты за дату» (облигации, фьючерсы, ...), реестры бумаг;
+- quality  — проверка качества данных, история прогонов;
+- lake     — хранилище DuckLake (каталог PostgreSQL), запросы и запись (polars);
+- iss      — доступ к MOEX ISS;
+- bondmath — доходность, дюрация, выпуклость облигаций;
+- backup, notify — копия каталога хранилища, уведомления ночного обновления.
+
+    from moexutils import stocks, history, lake
+    sber = stocks.read_stocks('SBER', start='2024-01-01')
+"""
+import logging
+import sys
+
+__version__ = "1.0.0"
+
+_logger = logging.getLogger("moexutils")
+# Если логирование в приложении не настроено — сообщения в stdout (прогресс в
+# ноутбуках и update_data.bat). Любая внешняя настройка logging имеет приоритет.
+if not _logger.handlers and not logging.getLogger().handlers:
+    _handler = logging.StreamHandler(sys.stdout)
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _logger.addHandler(_handler)
+    _logger.setLevel(logging.INFO)

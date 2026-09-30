@@ -11,7 +11,7 @@ import logging
 import os
 import subprocess
 
-logger = logging.getLogger("moex_utils")
+logger = logging.getLogger("moexutils")
 
 # AppUserModelID Windows PowerShell — зарегистрирован в системе, уведомления от него показываются
 _APP_ID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"

@@ -15,11 +15,11 @@ import numpy as np
 import polars as pl
 import requests
 
-import history
-import lake
-import stocks
+from moexutils import history
+from moexutils import lake
+from moexutils import stocks
 
-logger = logging.getLogger("moex_utils")
+logger = logging.getLogger("moexutils")
 
 ISSUE_SCHEMA = {'check': pl.Utf8, 'object': pl.Utf8, 'detail': pl.Utf8}
 

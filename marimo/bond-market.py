@@ -29,12 +29,8 @@ app = marimo.App(width="medium", app_title="Долговой рынок", css_fi
 
 @app.cell(hide_code=True)
 def _():
-    # moex_utils лежит в корне проекта (родительская папка от marimo/)
-    import sys as _sys
-    import os as _os
     import datetime as dt
-    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-    import moex_utils as moex
+    from moexutils import bondmath, history, stocks
     import polars as pl
     import numpy as np
     import marimo as mo
@@ -44,7 +40,7 @@ def _():
     except ImportError:
         go = None
         plotly_available = False
-    return dt, go, mo, moex, np, pl, plotly_available
+    return bondmath, dt, go, history, mo, np, pl, plotly_available, stocks
 
 
 @app.cell(hide_code=True)
@@ -81,7 +77,7 @@ def _(mo):
 
 
 @app.cell(hide_code=True)
-def _(mo, moex, pl):
+def _(history, mo, pl):
     # Все выпуски досок TQOB (гособлигации) и TQCB (корпоративные) из хранилища
     _COLS = ['date', 'SECID', 'BOARDID', 'SHORTNAME', 'CLOSE', 'LEGALCLOSEPRICE',
              'YIELDCLOSE', 'DURATION', 'VALUE', 'MATDATE', 'FACEVALUE', 'FACEUNIT',
@@ -91,7 +87,7 @@ def _(mo, moex, pl):
 
     try:
         bonds_long = (
-            moex.read_bonds_market(boards=['TQOB', 'TQCB'], columns=_COLS)
+            history.read('bonds', boards=['TQOB', 'TQCB'], columns=_COLS)
             .rename({'LEGALCLOSEPRICE': 'PRICE_ALT', 'BOARDID': 'segment'})
             .with_columns(
                 pl.col('MATDATE').cast(pl.Utf8).str.to_date('%Y-%m-%d', strict=False),
@@ -123,7 +119,7 @@ def _(mo, moex, pl):
 
 
 @app.cell(hide_code=True)
-def _(bonds_long, bonds_ready, dt, moex, pl):
+def _(bondmath, bonds_long, bonds_ready, dt, pl):
     # Метрики всех выпусков на дату (последняя котировка не старше 14 дней до нее)
     def bonds_snapshot(asof=None):
         _w = bonds_long if asof is None else bonds_long.filter(pl.col('date') <= asof)
@@ -151,10 +147,10 @@ def _(bonds_long, bonds_ready, dt, moex, pl):
             if _y is not None and 0 < _y < 100:
                 _ytm, _src = _y, 'ISS'
             else:
-                _ytm, _src = moex.calculate_ytm(_price, _face, _coupon, _years), 'модель'
+                _ytm, _src = bondmath.calculate_ytm(_price, _face, _coupon, _years), 'модель'
             _d = _r['DURATION']  # ISS отдает дюрацию в днях
             _dur = (_d / 365.25 if _d is not None and _d > 0
-                    else moex.calculate_duration(_price, _face, _coupon, _years, _ytm))
+                    else bondmath.calculate_duration(_price, _face, _coupon, _years, _ytm))
 
             rows.append({
                 'SECID': _r['SECID'],
@@ -168,7 +164,7 @@ def _(bonds_long, bonds_ready, dt, moex, pl):
                 'price': _price,
                 'ytm': _ytm,
                 'duration': _dur,
-                'convexity': moex.calculate_convexity(_price, _face, _coupon, _years, _ytm),
+                'convexity': bondmath.calculate_convexity(_price, _face, _coupon, _years, _ytm),
                 'value': _r['VALUE'] if _r['VALUE'] is not None else 0.0,
                 'src': _src,
                 'date': _r['date'],
@@ -316,7 +312,7 @@ def _(bonds_long, bonds_ready, np, pl):
 
 
 @app.cell(hide_code=True)
-def _(curve_hist, go, mo, moex, pl, plotly_available):
+def _(curve_hist, go, mo, pl, plotly_available, stocks):
     # Динамика кривой: 2 года, 10 лет, ключевая ставка и терм-спред
     if not plotly_available or curve_hist.height < 20:
         term_block = mo.md("")
@@ -331,7 +327,7 @@ def _(curve_hist, go, mo, moex, pl, plotly_available):
         _figt.add_scatter(x=_dates, y=curve_hist['y2'].to_list(),
                           name='ОФЗ 2 года', line=dict(color='#0050CF', width=1.6),
                           hovertemplate='%{y:.2f}%<extra>2 года</extra>', row=1, col=1)
-        _kr = pl.read_csv(moex.KEY_RATE_FILE, try_parse_dates=True).sort('date')
+        _kr = pl.read_csv(stocks.KEY_RATE_FILE, try_parse_dates=True).sort('date')
         if _kr.height:
             _kr_s = curve_hist.select('date').join_asof(_kr, on='date', strategy='backward')
             _figt.add_scatter(x=_dates, y=_kr_s['rate'].to_list(), name='ключевая ставка',
@@ -477,10 +473,10 @@ def _(go, gspread_hist, mo, np, pl, plotly_available, snap_now):
 
 
 @app.cell(hide_code=True)
-def _(dt, go, mo, moex, pl, plotly_available):
+def _(dt, go, mo, pl, plotly_available, stocks):
     # RGBITR (гособлигации, полная доходность) против IMOEX за год
     def _index(_ticker):
-        return moex.read_index(_ticker).select('date', 'close').sort('date')
+        return stocks.read_index(_ticker).select('date', 'close').sort('date')
 
     try:
         _rgb = _index('RGBITR')

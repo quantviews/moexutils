@@ -10,8 +10,8 @@ import openpyxl
 import polars as pl
 import pytest
 
-import lake
-import stocks
+from moexutils import lake
+from moexutils import stocks
 
 
 def d(s):

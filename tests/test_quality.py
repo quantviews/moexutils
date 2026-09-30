@@ -7,9 +7,9 @@ import datetime as dt
 import polars as pl
 import pytest
 
-import lake
-import quality
-import stocks
+from moexutils import lake
+from moexutils import quality
+from moexutils import stocks
 
 
 def bdays(start, n):

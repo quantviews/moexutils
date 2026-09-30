@@ -10,9 +10,9 @@ import subprocess
 import polars as pl
 import pytest
 
-import backup
-import lake
-import quality
+from moexutils import backup
+from moexutils import lake
+from moexutils import quality
 import update_data
 
 

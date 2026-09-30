@@ -11,12 +11,8 @@
 """
 import datetime as dt
 import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import iss  # noqa: E402
-import lake  # noqa: E402
+from moexutils import iss, lake
 
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'docs', 'iss-columns.md')
 
@@ -99,7 +95,7 @@ def main():
 ## Содержание
 
 """ + "\n".join(f"- [{title}](#{i})" for i, (title, _, _) in enumerate(MARKETS, 1))
-        + f"\n- [Карточки бумаг](#cards)\n"]
+        + "\n- [Карточки бумаг](#cards)\n"]
 
     for i, (title, path, table) in enumerate(MARKETS, 1):
         where = f"хранится в `lake.{table}`" if table else "не хранится"
