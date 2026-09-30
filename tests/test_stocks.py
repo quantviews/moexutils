@@ -477,3 +477,12 @@ class TestRenameChainAdjClose:
         assert adj[d('2025-06-02')] == pytest.approx(1000 * 0.994 * 0.996)  # обе выплаты, без дубля OLD
         assert adj[d('2025-06-04')] == pytest.approx(1000 * 0.994 * 0.996)
         assert adj[d('2025-06-09')] == pytest.approx(990.0)
+
+
+class TestSectors:
+    def test_load_sectors_and_missing_file(self, tmp_path):
+        path = tmp_path / 'sectors.csv'
+        path.write_text('ticker,sector\nSBER,Финансы\nGAZP,Нефть и газ\n', encoding='utf-8')
+        assert stocks.load_sectors(str(path)).rows() == [('SBER', 'Финансы'), ('GAZP', 'Нефть и газ')]
+        empty = stocks.load_sectors(str(tmp_path / 'none.csv'))
+        assert empty.is_empty() and empty.columns == ['ticker', 'sector']

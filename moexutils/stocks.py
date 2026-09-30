@@ -39,6 +39,7 @@ SPLITS_FILE = os.path.join(BASE_DIR, "metadata", "splits.csv")
 RENAMES_FILE = os.path.join(BASE_DIR, "metadata", "renames.csv")
 DELISTED_FILE = os.path.join(BASE_DIR, "metadata", "delisted.csv")
 KEY_RATE_FILE = os.path.join(BASE_DIR, "metadata", "key_rate.csv")
+SECTORS_FILE = os.path.join(BASE_DIR, "metadata", "sectors.csv")
 EXTERNAL_SPLITS_FILE = os.path.join(BASE_DIR, "..", "dividends", "metadata", "splits.json")
 DIVIDENDS_FOLDER = os.path.join(BASE_DIR, "..", "dividends", "data")
 
@@ -122,6 +123,14 @@ def load_delisted(delisted_file: Optional[str] = None) -> pl.DataFrame:
     if not os.path.exists(path):
         return pl.DataFrame(schema={'ticker': pl.Utf8, 'last_date': pl.Date, 'note': pl.Utf8})
     return pl.read_csv(path, try_parse_dates=True).with_columns(pl.col('last_date').cast(pl.Date))
+
+
+def load_sectors(sectors_file: Optional[str] = None) -> pl.DataFrame:
+    """Отраслевой справочник (ticker, sector); нет файла — пустая таблица."""
+    path = sectors_file or SECTORS_FILE
+    if not os.path.exists(path):
+        return pl.DataFrame(schema={'ticker': pl.Utf8, 'sector': pl.Utf8})
+    return pl.read_csv(path, schema_overrides={'ticker': pl.Utf8, 'sector': pl.Utf8}).select('ticker', 'sector')
 
 
 def load_key_rate(key_rate_file: Optional[str] = None) -> pl.DataFrame:
