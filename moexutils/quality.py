@@ -210,7 +210,8 @@ def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = No
             if n >= 3:
                 i['detail'] += f" (гэп у {n} бумаг в этот день — возможно отраслевое движение)"
 
-    for dataset, label in (('bonds', 'облигации'), ('futures', 'фьючерсы')):
+    # все рынки «инструменты за дату»; набора нет в хранилище — пропуск
+    for dataset, label in ((k, v.label) for k, v in history.DATASETS.items()):
         try:
             have = history.dataset_dates(dataset)
             skip = history.empty_dates(dataset)

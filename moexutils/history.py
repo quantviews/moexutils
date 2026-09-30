@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-from typing import Iterable, Optional
+from typing import Iterable, NamedTuple, Optional
 
 import polars as pl
 import requests
@@ -29,10 +29,23 @@ from moexutils import lake
 
 logger = logging.getLogger("moexutils")
 
-# Набор данных -> (путь рынка в ISS, начало истории, подпись для логов)
+class Dataset(NamedTuple):
+    path: str                        # путь рынка в ISS
+    start: str                       # начало истории в ISS
+    label: str                       # подпись для логов
+    keep: Optional[pl.Expr] = None   # какие строки ответа хранить (None — все)
+
+
+# Набор данных = таблица хранилища (ключ date + SECID + BOARDID)
 DATASETS = {
-    'bonds': ('stock/markets/bonds', '1997-01-01', 'облигации (весь рынок)'),
-    'futures': ('futures/markets/forts', '2002-01-01', 'фьючерсы FORTS'),
+    'bonds': Dataset('stock/markets/bonds', '1997-01-01', 'облигации (весь рынок)'),
+    'futures': Dataset('futures/markets/forts', '2002-01-01', 'фьючерсы FORTS'),
+    'shares': Dataset('stock/markets/shares', '1997-03-24', 'акции и фонды (весь рынок)'),
+    'indexes_all': Dataset('stock/markets/index', '1995-09-01', 'индексы (все)'),
+    # у валютного рынка много строк-заглушек без сделок (NUMTRADES = 0, цены 0)
+    'currency': Dataset('currency/markets/selt', '1997-06-02', 'валютный рынок',
+                        keep=pl.col('NUMTRADES') > 0),
+    'currency_fixings': Dataset('currency/markets/index', '2019-08-01', 'валютные фиксинги'),
 }
 
 
@@ -79,7 +92,9 @@ def trading_calendar() -> list[dt.date]:
 
 
 def _fetch(dataset: str, date: dt.date, session: requests.Session) -> pl.DataFrame:
-    return iss.history_day(DATASETS[dataset][0], date, session)
+    rows = iss.history_day(DATASETS[dataset].path, date, session)
+    keep = DATASETS[dataset].keep
+    return rows.filter(keep) if keep is not None and rows.height else rows
 
 
 def update(dataset: str, start: Optional[str] = None, max_days: int = 3000,

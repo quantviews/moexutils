@@ -48,6 +48,10 @@ TABLE_KEYS = {
     'indexes': ['date', 'ticker'],
     'bonds': ['date', 'SECID', 'BOARDID'],
     'futures': ['date', 'SECID', 'BOARDID'],
+    'shares': ['date', 'SECID', 'BOARDID'],
+    'indexes_all': ['date', 'SECID', 'BOARDID'],
+    'currency': ['date', 'SECID', 'BOARDID'],
+    'currency_fixings': ['date', 'SECID', 'BOARDID'],
     'bonds_securities': ['SECID'],
     'empty_dates': ['dataset', 'date'],
     'update_runs': ['run_id'],
@@ -74,7 +78,7 @@ VIEWS = {
         ('bonds', 'bonds_securities')),
 }
 # Таблицы, разбитые по годам (дозапись трогает только текущий год)
-PARTITIONED_BY_YEAR = ('bonds', 'futures')
+PARTITIONED_BY_YEAR = ('bonds', 'futures', 'shares', 'indexes_all', 'currency')
 
 _RETRYABLE = (duckdb.IOException, duckdb.TransactionException, duckdb.ConnectionException)
 _extensions_installed = False

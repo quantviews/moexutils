@@ -3,6 +3,7 @@
 adj_close и капитализация, проверка качества и обслуживание хранилища.
 
 Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы →
+1f прочие рынки (все акции и фонды, все индексы, валюта, фиксинги) →
 2 пересчет adj_close и капитализации → 2b копии для SQL (реестры, stocks_adjusted,
 представления) → 3 проверка данных → 4 обслуживание хранилища →
 5 копия каталога. Все данные — в хранилище DuckLake (lake.py). Облигации и фьючерсы
@@ -97,6 +98,7 @@ def main(
     do_maintenance: bool = True,
     do_backup: bool = True,
     do_derived: bool = True,
+    do_markets: bool = True,
     history_init: Optional[str] = None,
     history_start: Optional[str] = None,
     rebuild: bool = False,
@@ -129,8 +131,8 @@ def main(
             print(f"=== Первичная выгрузка истории: {dataset} с {history_start or 'начала истории ISS'} ===")
             n = history.update(dataset, start=history_start, max_days=20000)
             print(f"{dataset}: +{n} строк")
-            if dataset == 'bonds':
-                history.update_securities('bonds', max_new=None)
+            if dataset in ('bonds', 'shares'):
+                history.update_securities(dataset, max_new=None)
 
     if do_update:
         print("=== 1. Обновление данных с MOEX ===" + (" (полное перескачивание)" if rebuild else ""))
@@ -176,6 +178,18 @@ def main(
         _update_dataset('futures', 'Фьючерсы', warnings)
     else:
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
+
+    if do_markets:
+        print("=== 1f. Прочие рынки: все акции и фонды, все индексы, валюта, фиксинги ===")
+        for dataset in ('shares', 'indexes_all', 'currency', 'currency_fixings'):
+            _update_dataset(dataset, history.DATASETS[dataset].label, warnings)
+        if 'shares' in (_lake_tables(warnings) or []):
+            try:
+                history.update_securities('shares')  # новые бумаги в реестр, до 500 за ночь
+            except Exception as e:
+                _warn(warnings, f"Реестр бумаг рынка акций: не удалось обновить — {e}")
+    else:
+        print("=== 1f. Прочие рынки — пропуск (--no-markets) ===")
 
     if do_adj_close and do_market_cap:
         if not div_ok:
@@ -262,6 +276,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-bonds", action="store_true", help="Не обновлять облигации")
     ap.add_argument("--no-key-rate", action="store_true", help="Не обновлять ключевую ставку ЦБ")
     ap.add_argument("--no-futures", action="store_true", help="Не обновлять фьючерсы")
+    ap.add_argument("--no-markets", action="store_true",
+                    help="Не обновлять прочие рынки (все акции, все индексы, валюта, фиксинги)")
     ap.add_argument("--no-adj", action="store_true", help="Не пересчитывать adj_close и капитализацию (шаг 2)")
     ap.add_argument("--no-cap", action="store_true", help="То же, что --no-adj")
     ap.add_argument("--no-check", action="store_true", help="Не выполнять проверку данных")
@@ -272,7 +288,7 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
-                    help="Первичная выгрузка истории наборов через запятую: bonds,futures")
+                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings")
     ap.add_argument("--history-start", type=str, default=None,
                     help="Начальная дата первичной выгрузки (по умолчанию — начало истории ISS)")
     # синонимы прежних флагов первичной выгрузки
@@ -298,6 +314,7 @@ if __name__ == "__main__":
     start = args.history_start or args.bonds_market_start or args.futures_start
     if args.check:
         args.no_update = args.no_index = args.no_bonds = args.no_key_rate = args.no_futures = True
+        args.no_markets = True
         args.no_adj = args.no_cap = args.no_maintenance = args.no_backup = args.no_derived = True
 
     try:
@@ -313,6 +330,7 @@ if __name__ == "__main__":
             do_maintenance=not args.no_maintenance,
             do_backup=not args.no_backup,
             do_derived=not args.no_derived,
+            do_markets=not args.no_markets,
             history_init=",".join(init) or None,
             history_start=start,
             rebuild=args.rebuild,

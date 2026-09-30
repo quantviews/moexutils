@@ -118,7 +118,8 @@ class TestMainNotifications:
 
     def run(self, **kw):
         return update_data.main(do_update=False, do_indexes=False, do_bonds=False, do_key_rate=False,
-                                do_futures=False, do_adj_close=False, do_derived=False, **kw)
+                                do_futures=False, do_adj_close=False, do_derived=False,
+                                do_markets=False, **kw)
 
     def test_step_failure_gives_exit_1_and_toast(self, env, monkeypatch):
         toasts, _ = env
