@@ -95,3 +95,53 @@ def test_maintenance_runs(lake_env):
         lake.write('bonds', frame([f'2025-06-0{i + 2}'], ['B1'], [100.0 + i]))
     lake.maintenance(retention_days=0)
     assert lake.query("SELECT count(*) AS n FROM lake.bonds")['n'][0] == 3
+
+
+class TestSnapshotsSyncViews:
+    def test_ref_formats(self):
+        assert lake.ref('stocks') == 'lake."stocks"'
+        assert lake.ref('stocks', 5) == 'lake."stocks" AT (VERSION => 5)'
+        assert lake.ref('stocks', '2026-09-29') == (
+            "lake.\"stocks\" AT (TIMESTAMP => TIMESTAMP '2026-09-29 23:59:59.999999')")
+        assert lake.ref('stocks', dt.datetime(2026, 9, 29, 12, 30)).endswith("'2026-09-29 12:30:00.000000')")
+        with pytest.raises(TypeError):
+            lake.ref('stocks', True)
+
+    def test_read_as_of_version(self, lake_env):
+        lake.write('bonds', frame(['2026-01-05'], ['A'], [100.0]))
+        v1 = int(lake.snapshots()['snapshot_id'].max())
+        lake.write('bonds', frame(['2026-01-05', '2026-01-06'], ['A', 'A'], [101.0, 102.0]))
+        then = lake.query(f"SELECT CLOSE FROM {lake.ref('bonds', v1)} ORDER BY date")['CLOSE'].to_list()
+        now = lake.query(f"SELECT CLOSE FROM {lake.ref('bonds')} ORDER BY date")['CLOSE'].to_list()
+        assert then == [100.0] and now == [101.0, 102.0]
+
+    def test_sync_writes_changes_and_deletes_missing_keys(self, lake_env):
+        ref = pl.DataFrame({'ticker': ['A', 'B', 'C'], 'sector': ['x', 'y', 'z']})
+        assert lake.sync('ref_sectors', ref) == (3, 0)
+        n_snap = lake.snapshots().height
+        assert lake.sync('ref_sectors', ref) == (0, 0)
+        assert lake.snapshots().height == n_snap                       # без изменений — без снимка
+        new = pl.DataFrame({'ticker': ['A', 'C', 'D'], 'sector': ['x', 'zz', 'w']})
+        assert lake.sync('ref_sectors', new) == (2, 1)                 # C изменен, D новый, B удален
+        assert lake.query('SELECT * FROM lake.ref_sectors ORDER BY ticker').rows() == new.rows()
+
+    def test_delete_only_write(self, lake_env):
+        lake.write('bonds', frame(['2026-01-05', '2026-01-06'], ['A', 'A'], [1.0, 2.0]))
+        gone = frame(['2026-01-05'], ['A'], [0.0]).select('date', 'SECID', 'BOARDID')
+        assert lake.write('bonds', pl.DataFrame(), delete=gone) == 0
+        assert lake.query('SELECT CLOSE FROM lake.bonds')['CLOSE'].to_list() == [2.0]
+        # таблицы нет — удалять нечего, таблица не создается
+        assert lake.write('futures', pl.DataFrame(), delete=gone) == 0
+        assert 'futures' not in lake.tables()
+
+    def test_views_created_when_sources_exist(self, lake_env):
+        assert lake.ensure_views() == []                               # исходных таблиц нет
+        lake.write('bonds', frame(['2026-01-05', '2026-01-05'], ['OFZ1', 'CORP1'], [99.0, 101.0]))
+        lake.write('bonds_securities', pl.DataFrame({'SECID': ['OFZ1', 'CORP1'],
+                                                     'TYPE': ['ofz_bond', 'exchange_bond']}))
+        assert sorted(lake.ensure_views()) == ['bonds_corporate', 'bonds_ofz']
+        assert lake.ensure_views() == []                               # уже есть
+        assert lake.query('SELECT SECID FROM lake.bonds_ofz')['SECID'].to_list() == ['OFZ1']
+        assert lake.query('SELECT SECID FROM lake.bonds_corporate')['SECID'].to_list() == ['CORP1']
+        assert set(lake.views()) == {'bonds_corporate', 'bonds_ofz'}
+        assert 'bonds_ofz' not in lake.tables()

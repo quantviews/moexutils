@@ -483,11 +483,13 @@ def is_traded(ticker: str, session: Optional[requests.Session] = None) -> Option
 # ---------------------------------------------------------------- хранилище
 
 def read_stocks(tickers=None, start=None, end=None, merge_renames: bool = True,
-                split_adjusted: bool = False, columns: Optional[list[str]] = None) -> pl.DataFrame:
+                split_adjusted: bool = False, columns: Optional[list[str]] = None,
+                as_of: lake.AsOf = None) -> pl.DataFrame:
     """
     Дневные данные акций из хранилища. merge_renames — склейка переименованных
     тикеров (исходный тикер строки — source_ticker); split_adjusted — цены в
-    пост-сплитовой базе (adjust_for_splits).
+    пост-сплитовой базе (adjust_for_splits). as_of — данные на момент снимка
+    хранилища (lake.ref); реестры сплитов и переименований — текущие.
     """
     where, params = [], []
     if tickers is not None:
@@ -505,7 +507,7 @@ def read_stocks(tickers=None, start=None, end=None, merge_renames: bool = True,
         where.append("date <= ?")
         params.append(_as_date(end))
     cols = ", ".join(dict.fromkeys(['date', 'ticker', *(columns or [])])) if columns else "*"
-    sql = f"SELECT {cols} FROM lake.stocks" + (" WHERE " + " AND ".join(where) if where else "")
+    sql = f"SELECT {cols} FROM {lake.ref('stocks', as_of)}" + (" WHERE " + " AND ".join(where) if where else "")
     df = lake.query(sql + " ORDER BY ticker, date", params)
     # Сначала склейка, потом сплиты: реестр сплитов записан на текущий тикер
     # (T, а не TCSG), и поправка должна захватить историю старого тикера
@@ -516,17 +518,17 @@ def read_stocks(tickers=None, start=None, end=None, merge_renames: bool = True,
     return df.sort('ticker', 'date')
 
 
-def list_tickers(include_delisted: bool = True) -> list[str]:
+def list_tickers(include_delisted: bool = True, as_of: lake.AsOf = None) -> list[str]:
     """Тикеры акций в хранилище (без снятых с торгов, если include_delisted=False)."""
-    names = lake.query("SELECT DISTINCT ticker FROM lake.stocks ORDER BY ticker")['ticker'].to_list()
+    names = lake.query(f"SELECT DISTINCT ticker FROM {lake.ref('stocks', as_of)} ORDER BY ticker")['ticker'].to_list()
     if not include_delisted:
         gone = set(load_delisted()['ticker'].to_list())
         names = [t for t in names if t not in gone]
     return names
 
 
-def read_index(ticker: str = 'IMOEX', start=None, end=None) -> pl.DataFrame:
-    """История индекса из хранилища: date, ticker, BOARDID, close, value_rub, volume."""
+def read_index(ticker: str = 'IMOEX', start=None, end=None, as_of: lake.AsOf = None) -> pl.DataFrame:
+    """История индекса из хранилища: date, ticker, BOARDID, close, value_rub, volume; as_of — см. lake.ref."""
     where, params = ["ticker = ?"], [ticker.upper()]
     if start is not None:
         where.append("date >= ?")
@@ -534,25 +536,11 @@ def read_index(ticker: str = 'IMOEX', start=None, end=None) -> pl.DataFrame:
     if end is not None:
         where.append("date <= ?")
         params.append(_as_date(end))
-    return lake.query(f"SELECT * FROM lake.indexes WHERE {' AND '.join(where)} ORDER BY date", params)
+    return lake.query(f"SELECT * FROM {lake.ref('indexes', as_of)} WHERE {' AND '.join(where)} ORDER BY date", params)
 
 
-def _changed_rows(old: pl.DataFrame, new: pl.DataFrame, key: list[str], rel_tol: float = 1e-9) -> pl.DataFrame:
-    """Строки new, которых нет в old или которые отличаются (числа — с относительным допуском)."""
-    if old.is_empty():
-        return new
-    cols = [c for c in new.columns if c not in key and c in old.columns]
-    joined = new.join(old.select(key + cols).with_columns(pl.lit(True).alias('__was')),
-                      on=key, how='left', suffix='__old')
-    diff = pl.lit(False)
-    for c in cols:
-        a, b = pl.col(c), pl.col(f"{c}__old")
-        if new.schema[c].is_numeric():
-            differs = ((a - b).abs() > rel_tol * pl.max_horizontal(a.abs(), b.abs(), pl.lit(1.0)))
-            diff = diff | differs.fill_null(False) | (a.is_null() != b.is_null())
-        else:
-            diff = diff | a.ne_missing(b)
-    return joined.filter(diff | pl.col('__was').is_null()).select(new.columns)
+# сравнение «что изменилось» — общее для всех таблиц, в lake
+_changed_rows = lake.changed_rows
 
 
 def _final_ticker(ticker: str, renames: pl.DataFrame) -> str:
@@ -729,3 +717,38 @@ def update_indexes(tickers: Iterable[str] = DEFAULT_INDEXES, session: Optional[r
             written += lake.write('indexes', delta)
     logger.info(f"[OK] Индексы: записано строк {written}")
     return written
+
+
+# ---------------------------------------------------------------- копии для SQL-потребителей
+#
+# Реестры metadata/ и акции со склейкой переименований и поправкой на сплиты
+# лежат и в хранилище: другие проекты читают их SQL-запросом, без кода moexutils.
+
+REGISTRIES = {
+    'ref_splits': load_splits,
+    'ref_renames': load_renames,
+    'ref_delisted': load_delisted,
+    'ref_key_rate': load_key_rate,
+    'ref_sectors': load_sectors,
+}
+
+
+def sync_registries() -> dict[str, tuple[int, int]]:
+    """Реестры metadata/ -> таблицы ref_* (только изменения); Returns: {таблица: (записано, удалено)}."""
+    out = {}
+    for table, loader in REGISTRIES.items():
+        out[table] = lake.sync(table, loader())
+        if out[table] != (0, 0):
+            logger.info(f"[OK] {table}: записано {out[table][0]}, удалено {out[table][1]}")
+    return out
+
+
+def update_adjusted() -> tuple[int, int]:
+    """
+    lake.stocks_adjusted = read_stocks(split_adjusted=True): склейка переименований
+    (source_ticker — исходный тикер) и цены в пост-сплитовой базе; пишутся только
+    изменения. Returns: (записано, удалено).
+    """
+    n = lake.sync('stocks_adjusted', read_stocks(split_adjusted=True))
+    logger.info(f"[OK] stocks_adjusted: записано {n[0]}, удалено {n[1]}")
+    return n

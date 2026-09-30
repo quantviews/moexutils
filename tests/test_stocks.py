@@ -486,3 +486,32 @@ class TestSectors:
         assert stocks.load_sectors(str(path)).rows() == [('SBER', 'Финансы'), ('GAZP', 'Нефть и газ')]
         empty = stocks.load_sectors(str(tmp_path / 'none.csv'))
         assert empty.is_empty() and empty.columns == ['ticker', 'sector']
+
+
+class TestSqlCopies:
+    def test_registries_and_adjusted_table(self, lake_env, registries, monkeypatch):
+        (registries / 'renames.csv').write_text('old,new,date\nOLD,NEW,2025-06-04\n', encoding='utf-8')
+        (registries / 'splits.csv').write_text('ticker,date,ratio,kind\nNEW,2025-06-05,10,price\n', encoding='utf-8')
+        monkeypatch.setattr(stocks, 'KEY_RATE_FILE', str(registries / 'kr.csv'))
+        monkeypatch.setattr(stocks, 'SECTORS_FILE', str(registries / 'sectors.csv'))
+        (registries / 'sectors.csv').write_text('ticker,sector\nNEW,Финансы\n', encoding='utf-8')
+        lake.write('stocks', pl.concat([sdf(['2025-06-03'], [1000], 'OLD'),
+                                        sdf(['2025-06-04', '2025-06-05'], [1000, 100], 'NEW')]))
+        out = stocks.sync_registries()
+        assert out['ref_renames'] == (1, 0) and out['ref_splits'] == (1, 0) and out['ref_sectors'] == (1, 0)
+        assert out['ref_key_rate'] == (0, 0)                             # пустой реестр — таблицы нет
+        assert stocks.sync_registries()['ref_renames'] == (0, 0)
+        assert stocks.update_adjusted() == (3, 0)
+        adj = lake.query('SELECT * FROM lake.stocks_adjusted ORDER BY date')
+        assert adj['ticker'].to_list() == ['NEW'] * 3
+        assert adj['source_ticker'].to_list() == ['OLD', 'NEW', 'NEW']
+        assert adj['close'].to_list() == pytest.approx([100.0, 100.0, 100.0])
+        assert stocks.update_adjusted() == (0, 0)
+
+    def test_read_stocks_as_of(self, lake_env, registries):
+        lake.write('stocks', sdf(['2025-06-02'], [100], 'AAA'))
+        v1 = int(lake.snapshots()['snapshot_id'].max())
+        lake.write('stocks', sdf(['2025-06-03'], [101], 'AAA'))
+        assert stocks.read_stocks('AAA', as_of=v1)['close'].to_list() == [100.0]
+        assert stocks.read_stocks('AAA')['close'].to_list() == [100.0, 101.0]
+        assert stocks.list_tickers(as_of=v1) == ['AAA']

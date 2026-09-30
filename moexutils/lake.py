@@ -20,8 +20,8 @@ import logging
 import os
 import time
 from contextlib import contextmanager
-from datetime import datetime, timedelta
-from typing import Iterable, Optional
+from datetime import date, datetime, time as dtime, timedelta
+from typing import Iterable, Optional, Union
 
 import duckdb
 import polars as pl
@@ -52,6 +52,26 @@ TABLE_KEYS = {
     'empty_dates': ['dataset', 'date'],
     'update_runs': ['run_id'],
     'quality_log': ['run_id', 'check', 'object', 'detail'],
+    # производная таблица: акции со склейкой переименований и поправкой на сплиты
+    'stocks_adjusted': ['date', 'ticker'],
+    # реестры metadata/ — копии для SQL-потребителей
+    'ref_splits': ['ticker', 'date'],
+    'ref_renames': ['old'],
+    'ref_delisted': ['ticker'],
+    'ref_key_rate': ['date'],
+    'ref_sectors': ['ticker'],
+}
+
+# Представления хранилища: имя -> (SELECT, таблицы, без которых его не создать)
+VIEWS = {
+    'bonds_ofz': (
+        "SELECT b.* FROM lake.bonds b WHERE b.SECID IN "
+        "(SELECT SECID FROM lake.bonds_securities WHERE TYPE = 'ofz_bond')",
+        ('bonds', 'bonds_securities')),
+    'bonds_corporate': (
+        "SELECT b.* FROM lake.bonds b WHERE b.SECID IN "
+        "(SELECT SECID FROM lake.bonds_securities WHERE TYPE IN ('corporate_bond', 'exchange_bond'))",
+        ('bonds', 'bonds_securities')),
 }
 # Таблицы, разбитые по годам (дозапись трогает только текущий год)
 PARTITIONED_BY_YEAR = ('bonds', 'futures')
@@ -175,13 +195,53 @@ def query(sql: str, params: Optional[list] = None) -> pl.DataFrame:
         return con.execute(sql, params or []).pl()
 
 
-def tables(con: Optional[duckdb.DuckDBPyConnection] = None) -> list[str]:
-    """Имена таблиц хранилища."""
-    sql = f"SELECT table_name FROM information_schema.tables WHERE table_catalog = '{ALIAS}' ORDER BY 1"
+def _names(kind: str, con: Optional[duckdb.DuckDBPyConnection]) -> list[str]:
+    sql = (f"SELECT table_name FROM information_schema.tables "
+           f"WHERE table_catalog = '{ALIAS}' AND table_type = '{kind}' ORDER BY 1")
     if con is not None:
         return [r[0] for r in con.execute(sql).fetchall()]
     with session(read_only=True) as c:
         return [r[0] for r in c.execute(sql).fetchall()]
+
+
+def tables(con: Optional[duckdb.DuckDBPyConnection] = None) -> list[str]:
+    """Имена таблиц хранилища (без представлений)."""
+    return _names('BASE TABLE', con)
+
+
+def views(con: Optional[duckdb.DuckDBPyConnection] = None) -> list[str]:
+    """Имена представлений хранилища (VIEWS)."""
+    return _names('VIEW', con)
+
+
+AsOf = Union[None, int, date, datetime, str]
+
+
+def ref(table: str, as_of: AsOf = None) -> str:
+    """
+    Ссылка на таблицу для SQL: `lake."stocks"`, с as_of — на момент снимка.
+    as_of: номер снимка (int), момент времени (datetime) или дата (date или
+    'YYYY-MM-DD' — состояние на конец этого дня). Доступны снимки не старше
+    SNAPSHOT_RETENTION_DAYS дней (список — snapshots()).
+    """
+    name = f"{ALIAS}.{_quote(table)}"
+    if as_of is None:
+        return name
+    if isinstance(as_of, bool):
+        raise TypeError("as_of: ожидается номер снимка, дата или момент времени")
+    if isinstance(as_of, int):
+        return f"{name} AT (VERSION => {as_of})"
+    if isinstance(as_of, str):
+        as_of = datetime.fromisoformat(as_of) if len(as_of) > 10 else date.fromisoformat(as_of)
+    if isinstance(as_of, date) and not isinstance(as_of, datetime):
+        as_of = datetime.combine(as_of, dtime(23, 59, 59, 999999))
+    return f"{name} AT (TIMESTAMP => TIMESTAMP '{as_of:%Y-%m-%d %H:%M:%S.%f}')"
+
+
+def snapshots() -> pl.DataFrame:
+    """Снимки хранилища: snapshot_id, snapshot_time, changes (что изменил снимок)."""
+    return query(f"SELECT snapshot_id, snapshot_time, changes FROM ducklake_snapshots('{ALIAS}') "
+                 "ORDER BY snapshot_id")
 
 
 def _columns(con, table: str) -> dict[str, str]:
@@ -196,16 +256,19 @@ def _quote(name: str) -> str:
 
 
 def write(table: str, df: pl.DataFrame, key: Optional[Iterable[str]] = None,
-          retries: int = 5) -> int:
+          retries: int = 5, delete: Optional[pl.DataFrame] = None) -> int:
     """
     Дозапись строк в таблицу одной транзакцией. Строки с тем же ключом
     обновляются (MERGE), новые — добавляются; колонки, которых в таблице еще
     нет, добавляются (у ISS набор полей со временем расширяется). Таблица
     создается при первой записи; bonds и futures — с разбиением по годам.
+    delete — ключи строк, которые удаляются в той же транзакции (до записи).
 
     Returns: число записанных строк.
     """
-    if df.is_empty():
+    has_delete = delete is not None and not delete.is_empty()
+    only_delete = df.is_empty()
+    if only_delete and not has_delete:
         return 0
     if key is None:
         if table in TABLE_KEYS:
@@ -215,10 +278,12 @@ def write(table: str, df: pl.DataFrame, key: Optional[Iterable[str]] = None,
         else:
             raise ValueError(f"{table}: не задан ключ таблицы (TABLE_KEYS или параметр key)")
     key = list(key)
-    missing_key = [k for k in key if k not in df.columns]
+    if has_delete and [k for k in key if k not in delete.columns]:
+        raise ValueError(f"{table}: в delete нет ключевых колонок {key}")
+    missing_key = [] if only_delete else [k for k in key if k not in df.columns]
     if missing_key:
         raise ValueError(f"{table}: в данных нет ключевых колонок {missing_key}")
-    dup = df.select(key).is_duplicated()
+    dup = df.select(key).is_duplicated() if not only_delete else pl.Series([], dtype=pl.Boolean)
     if dup.any():
         raise ValueError(f"{table}: {int(dup.sum())} строк с повторяющимся ключом {key}")
 
@@ -226,8 +291,15 @@ def write(table: str, df: pl.DataFrame, key: Optional[Iterable[str]] = None,
     for attempt in range(retries):
         con = connect()
         try:
-            con.register("_incoming", df)
             con.execute("BEGIN")
+            if has_delete and table in tables(con):
+                con.register("_delete", delete.select(key))
+                cond = " AND ".join(f"t.{_quote(k)} = d.{_quote(k)}" for k in key)
+                con.execute(f"DELETE FROM {ALIAS}.{_quote(table)} t USING _delete d WHERE {cond}")
+            if only_delete:
+                con.execute("COMMIT")
+                return 0
+            con.register("_incoming", df)
             if table not in tables(con):
                 con.execute(f"CREATE TABLE {ALIAS}.{_quote(table)} AS SELECT * FROM _incoming LIMIT 0")
                 if table in PARTITIONED_BY_YEAR:
@@ -257,6 +329,58 @@ def write(table: str, df: pl.DataFrame, key: Optional[Iterable[str]] = None,
         finally:
             con.close()
     raise last_error
+
+
+def changed_rows(old: pl.DataFrame, new: pl.DataFrame, key: list[str], rel_tol: float = 1e-9) -> pl.DataFrame:
+    """Строки new, которых нет в old или которые отличаются (числа — с относительным допуском)."""
+    if old.is_empty():
+        return new
+    cols = [c for c in new.columns if c not in key and c in old.columns]
+    joined = new.join(old.select(key + cols).with_columns(pl.lit(True).alias('__was')),
+                      on=key, how='left', suffix='__old')
+    diff = pl.lit(False)
+    for c in cols:
+        a, b = pl.col(c), pl.col(f"{c}__old")
+        if new.schema[c].is_numeric():
+            differs = ((a - b).abs() > rel_tol * pl.max_horizontal(a.abs(), b.abs(), pl.lit(1.0)))
+            diff = diff | differs.fill_null(False) | (a.is_null() != b.is_null())
+        else:
+            diff = diff | a.ne_missing(b)
+    return joined.filter(diff | pl.col('__was').is_null()).select(new.columns)
+
+
+def sync(table: str, df: pl.DataFrame, key: Optional[Iterable[str]] = None) -> tuple[int, int]:
+    """
+    Приводит таблицу к содержимому df одной транзакцией: пишет новые и
+    изменившиеся строки, удаляет строки, ключей которых в df нет. Ничего не
+    изменилось — снимок не создается. Returns: (записано, удалено).
+    """
+    key = list(key or TABLE_KEYS[table])
+    old = query(f"SELECT * FROM {ref(table)}") if table in tables() else pl.DataFrame()
+    changed = changed_rows(old, df, key)
+    stale = old.select(key).join(df.select(key), on=key, how='anti') if not old.is_empty() else None
+    if changed.is_empty() and (stale is None or stale.is_empty()):
+        return 0, 0
+    write(table, changed, key=key, delete=stale)
+    return changed.height, 0 if stale is None else stale.height
+
+
+def ensure_views(replace: bool = False) -> list[str]:
+    """
+    Создает недостающие представления VIEWS (replace=True — пересоздает все,
+    например после изменения их определений в коде). Представление, для
+    которого еще нет исходных таблиц, пропускается. Returns: созданные.
+    """
+    done = []
+    with session() as con:
+        have = set(tables(con))
+        current = set(views(con))
+        for name, (select, needs) in VIEWS.items():
+            if not set(needs) <= have or (name in current and not replace):
+                continue
+            con.execute(f"CREATE OR REPLACE VIEW {ALIAS}.{_quote(name)} AS {select}")
+            done.append(name)
+    return done
 
 
 def maintenance(retention_days: int = SNAPSHOT_RETENTION_DAYS) -> None:

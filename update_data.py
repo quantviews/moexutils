@@ -3,7 +3,8 @@
 adj_close и капитализация, проверка качества и обслуживание хранилища.
 
 Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы →
-2 пересчет adj_close и капитализации → 3 проверка данных → 4 обслуживание хранилища →
+2 пересчет adj_close и капитализации → 2b копии для SQL (реестры, stocks_adjusted,
+представления) → 3 проверка данных → 4 обслуживание хранилища →
 5 копия каталога. Все данные — в хранилище DuckLake (lake.py). Облигации и фьючерсы
 ночью только дообновляются — первичная выгрузка запускается явно (--history-init).
 
@@ -13,6 +14,7 @@ Windows (notify.py); сбой шага — код выхода 1.
 
 Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate]
         [--no-futures] [--no-adj] [--no-cap] [--no-check] [--no-maintenance] [--no-backup]
+        [--no-derived]
 Первичная выгрузка: python update_data.py --history-init bonds,futures (многочасовая)
 Только проверка (без обновления, окно — год, со статусом ISS): python update_data.py --check
 """
@@ -94,6 +96,7 @@ def main(
     do_check: bool = True,
     do_maintenance: bool = True,
     do_backup: bool = True,
+    do_derived: bool = True,
     history_init: Optional[str] = None,
     history_start: Optional[str] = None,
     rebuild: bool = False,
@@ -188,6 +191,21 @@ def main(
     else:
         print("=== 2. Пересчет adj_close и капитализации — пропуск (--no-adj/--no-cap) ===")
 
+    if do_derived:
+        print("=== 2b. Копии для SQL: реестры, stocks_adjusted, представления ===")
+        if _lake_tables(warnings) is not None:
+            try:
+                stocks.sync_registries()
+                if 'stocks' in lake.tables():
+                    stocks.update_adjusted()
+                made = lake.ensure_views()
+                if made:
+                    print(f"[OK] Представления: {', '.join(made)}")
+            except Exception as e:
+                _warn(warnings, f"Копии для SQL не обновлены — {e}")
+    else:
+        print("=== 2b. Копии для SQL — пропуск ===")
+
     if do_check:
         print(f"=== 3. Проверка данных (окно {check_days or 'вся история'} торг. дн., "
               f"дивиденды — {check_div_days or 'вся история'}) ===")
@@ -249,6 +267,8 @@ if __name__ == "__main__":
     ap.add_argument("--no-check", action="store_true", help="Не выполнять проверку данных")
     ap.add_argument("--no-maintenance", action="store_true", help="Не обслуживать хранилище")
     ap.add_argument("--no-backup", action="store_true", help="Не делать копию каталога хранилища")
+    ap.add_argument("--no-derived", action="store_true",
+                    help="Не обновлять копии для SQL (реестры ref_*, stocks_adjusted, представления)")
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
@@ -278,7 +298,7 @@ if __name__ == "__main__":
     start = args.history_start or args.bonds_market_start or args.futures_start
     if args.check:
         args.no_update = args.no_index = args.no_bonds = args.no_key_rate = args.no_futures = True
-        args.no_adj = args.no_cap = args.no_maintenance = args.no_backup = True
+        args.no_adj = args.no_cap = args.no_maintenance = args.no_backup = args.no_derived = True
 
     try:
         rc = main(
@@ -292,6 +312,7 @@ if __name__ == "__main__":
             do_check=not args.no_check,
             do_maintenance=not args.no_maintenance,
             do_backup=not args.no_backup,
+            do_derived=not args.no_derived,
             history_init=",".join(init) or None,
             history_start=start,
             rebuild=args.rebuild,

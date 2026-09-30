@@ -177,10 +177,11 @@ def repair(dataset: str, session: Optional[requests.Session] = None,
 
 
 def read(dataset: str, start=None, end=None, secids=None, boards=None,
-         columns: Optional[list[str]] = None) -> pl.DataFrame:
+         columns: Optional[list[str]] = None, as_of: lake.AsOf = None) -> pl.DataFrame:
     """
     История набора за период (включительно). secids / boards — код или список
-    кодов бумаг / режимов торгов (BOARDID); columns — нужные колонки (быстрее).
+    кодов бумаг / режимов торгов (BOARDID); columns — нужные колонки (быстрее);
+    as_of — на момент снимка хранилища (lake.ref).
     """
     _check(dataset)
     if dataset not in lake.tables():
@@ -199,7 +200,7 @@ def read(dataset: str, start=None, end=None, secids=None, boards=None,
             where.append(f"{col} IN ({', '.join('?' * len(val))})")
             params.extend(val)
     cols = ", ".join(f'"{c}"' for c in columns) if columns else "*"
-    sql = f"SELECT {cols} FROM lake.{dataset}"
+    sql = f"SELECT {cols} FROM {lake.ref(dataset, as_of)}"
     if where:
         sql += " WHERE " + " AND ".join(where)
     return lake.query(sql + " ORDER BY date", params)
@@ -207,12 +208,12 @@ def read(dataset: str, start=None, end=None, secids=None, boards=None,
 
 # ------------------------------------------------- реестр карточек бумаг
 
-def read_securities(dataset: str = 'bonds') -> pl.DataFrame:
+def read_securities(dataset: str = 'bonds', as_of: lake.AsOf = None) -> pl.DataFrame:
     """Реестр карточек ISS для бумаг набора (таблица <набор>_securities): строка на SECID."""
     table = f"{dataset}_securities"
     if table not in lake.tables():
         raise FileNotFoundError(f"В хранилище нет реестра {table}: выполните update_securities('{dataset}')")
-    return lake.query(f"SELECT * FROM lake.{table} ORDER BY SECID")
+    return lake.query(f"SELECT * FROM {lake.ref(table, as_of)} ORDER BY SECID")
 
 
 def update_securities(dataset: str = 'bonds', max_new: Optional[int] = 500,
