@@ -2,7 +2,8 @@
 Проверка качества данных в хранилище (акции, индексы, облигации, фьючерсы).
 
 data_quality_report() — замечания (check, object, detail) по торговому календарю
-IMOEX; quality_summary() — одна строка итога для лога. Шаг 4 update_data.py.
+IMOEX; quality_summary() — одна строка итога для лога. Шаг 3 update_data.py; история прогонов
+(update_runs, quality_log) — в конце файла.
 """
 from __future__ import annotations
 
