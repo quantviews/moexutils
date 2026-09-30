@@ -29,6 +29,8 @@ packages = ["moexutils"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# корень проекта в путях импорта: тесты импортируют скрипт update_data.py
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 120
