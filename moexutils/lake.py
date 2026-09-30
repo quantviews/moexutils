@@ -57,6 +57,9 @@ TABLE_KEYS = {
     'update_runs': ['run_id'],
     'quality_log': ['run_id', 'check', 'object', 'detail'],
     'ruonia': ['date'],
+    'stock_refdata': ['secid', 'date'],
+    # служебная: до какой даты обработан набор, если по данным этого не видно
+    'load_state': ['name'],
     'futures_contracts': ['secid'],
     'futures_continuous': ['date', 'asset'],
     'bond_coupons': ['secid', 'coupondate'],
@@ -399,13 +402,16 @@ def ensure_views(replace: bool = False) -> list[str]:
 def maintenance(retention_days: int = SNAPSHOT_RETENTION_DAYS) -> None:
     """
     Обслуживание: слить мелкие файлы ежедневных дозаписей, удалить снимки
-    старше retention_days и файлы, на которые больше не ссылается ни один снимок.
+    старше retention_days, файлы, на которые больше не ссылается ни один снимок,
+    и файлы-сироты старше того же срока (запись, не зафиксированная в каталоге).
     """
     older = (datetime.now() - timedelta(days=retention_days)).strftime("%Y-%m-%d %H:%M:%S")
     with session() as con:
         con.execute(f"CALL ducklake_merge_adjacent_files('{ALIAS}')")
         con.execute(f"CALL ducklake_expire_snapshots('{ALIAS}', older_than => TIMESTAMP '{older}')")
         con.execute(f"CALL ducklake_cleanup_old_files('{ALIAS}', older_than => TIMESTAMP '{older}')")
+        # файлы, которых каталог не знает (оборванная запись, отклоненная транзакция)
+        con.execute(f"CALL ducklake_delete_orphaned_files('{ALIAS}', older_than => TIMESTAMP '{older}')")
 
 
 def init() -> None:

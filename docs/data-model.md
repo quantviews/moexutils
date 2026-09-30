@@ -31,6 +31,8 @@
 | `currency` | `date, SECID, BOARDID` | ISS, валютный рынок selt за дату | 1f |
 | `currency_fixings` | `date, SECID, BOARDID` | ISS, валютные фиксинги за дату | 1f |
 | `ruonia` | `date` | cbr.ru | 1g |
+| `stock_refdata` | `secid, date` | ISS, referencedata (срезы с 01.04.2024, только изменения) | 1g |
+| `load_state` | `name` | служебная: до какой даты обработан набор | 1g |
 | `zcyc_params` | `date` | ISS, КБД | 1g |
 | `zcyc_yields` | `date, period` | ISS, КБД | 1g |
 | `zcyc_bonds` | `date, secid` | ISS, КБД | 1g |
@@ -271,6 +273,10 @@ erDiagram
 | `status` | VARCHAR | Статус расчета с сайта (`Стандартный`, `Резервный`; `—` — нет пометки) |
 | `published` | DATE | Дата публикации |
 
+### `lake.stock_refdata` — параметры бумаг по датам
+
+Объем выпуска, уровень листинга, номинал и параметры купона всех бумаг фондового рынка (акции, облигации, фонды) с 01.04.2024 — раньше ISS их по датам не отдает. Источник — ежедневный срез `/iss/referencedata/engines/stock/markets/all/securities?date=`. Хранятся **только изменения**: строка на бумагу и дату, с которой ее параметры стали такими (ключ `secid + date`); состояние на дату — последняя строка бумаги не позже нее (`refdata.refdata_at`). Колонки: `updatetime`, `isin`, `name`, `latname`, `inn`, `typename`, `typelatname`, `gosreg`, `facevalue`, `faceunit`, `issuesize`, `isqualifiedinvestors`, `listlevel`, `tradestatus`, `couponlenght`, `couponfrequency`, `couponvalueprc`, `couponvalue`, `coupondate`, `matdate`. Не хранятся: НКД (меняется ежедневно, есть в `bonds`) и флаги `hasprospectus`, `hastechnicaldefault` — в этой выдаче они изо дня в день «мигают» 0/1 у одних и тех же бумаг. Последний обработанный день — в служебной `lake.load_state` (по `max(date)` его не видно). Пишет шаг 1g (`refdata.update_refdata`, по вчерашний день, будни).
+
 ### `lake.zcyc_params`, `lake.zcyc_yields`, `lake.zcyc_bonds` — кривая бескупонной доходности
 
 Кривая бескупонной доходности ОФЗ MOEX (КБД) с 06.01.2014. Источник — ISS `/iss/engines/stock/zcyc` на каждую дату. Грузится **по вчерашний день**: за сегодня ISS отдает промежуточную кривую. Пишет шаг 1g (`rates.update_zcyc`); первичная выгрузка — `--history-init zcyc`. Колонки — как в ISS, `tradedate` → `date`, `tradetime` — время расчета.
@@ -344,7 +350,7 @@ erDiagram
 | 1d — ключевая ставка | `metadata/key_rate.csv` | новые решения ЦБ |
 | 1e — фьючерсы | `futures`, `empty_dates`, `futures_contracts`, `futures_continuous` | хвост истории, докачка пропусков; реестр контрактов, перекодировка строк после повторного листинга, пересчет непрерывных рядов |
 | 1f — прочие рынки | `shares`, `indexes_all`, `currency`, `currency_fixings`, `shares_securities`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек бумаг рынка акций |
-| 1g — ставки и потоки | `ruonia`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers` | RUONIA — вся история, записываются изменения; КБД — по вчерашний день; потоки — окно −10…+60 дней, по субботам все будущие |
+| 1g — ставки, потоки, параметры бумаг | `ruonia`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `stock_refdata`, `load_state` | RUONIA — вся история, записываются изменения; КБД — по вчерашний день; потоки — окно −10…+60 дней, по субботам все будущие |
 | 2 — пересчет | `stocks` | `adj_close` и капитализация после изменений дивидендов, срезов или реестра сплитов — только изменившиеся строки |
 | 2b — копии для SQL | `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors`, `stocks_adjusted`, представления `bonds_ofz`, `bonds_corporate` | синхронизация с файлами и `stocks`; недостающие представления |
 | 3 — проверка | `update_runs`, `quality_log` | отчет о качестве в лог; итог прогона и замечания — в конце прогона |

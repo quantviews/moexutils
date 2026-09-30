@@ -217,3 +217,40 @@ class TestDatasetFilter:
         monkeypatch.setattr(history.iss, 'history_day', lambda path, day, session: frame)
         assert history._fetch('currency', dt.date(2026, 9, 29), None)['SECID'].to_list() == ['USD000UTSTOM', 'Y']
         assert history._fetch('shares', dt.date(2026, 9, 29), None).height == 3
+
+
+# ---------------------------------------------------------------- параметры бумаг
+
+def refdata_payload(day, sizes):
+    """Срез на дату: две бумаги, объем выпуска по словарю, «мигающий» флаг hasprospectus."""
+    cols = ['tradedate', 'updatetime', 'secid', 'issuesize', 'listlevel', 'hasprospectus', 'accruedint']
+    rows = [[day, f'{day} 04:00:00', sec, sizes.get(sec, 1000.0), '1', float(dt.date.fromisoformat(day).day % 2), 5.0]
+            for sec in ('AAA', 'BBB')]
+    num = {c: 'double' for c in ('issuesize', 'hasprospectus', 'accruedint')}
+    return {'securities': block(cols, rows, num),
+            'securities.cursor': block(['INDEX', 'TOTAL', 'PAGESIZE'], [[0, 2, 1000]],
+                                       {'INDEX': 'int64', 'TOTAL': 'int64', 'PAGESIZE': 'int64'})}
+
+
+class TestRefdata:
+    def test_only_changes_stored_and_state_at_date(self, lake_env, monkeypatch):
+        from moexutils import refdata
+        yesterday = dt.date.today() - dt.timedelta(days=1)
+        days = [yesterday - dt.timedelta(days=i) for i in range(14)]
+        days = sorted(d for d in days if d.weekday() < 5)[-6:]
+        change_day = days[3]
+
+        def handler(url, p):
+            sizes = {'AAA': 2000.0} if p['date'] >= change_day.isoformat() else {}
+            return Resp(refdata_payload(p['date'], sizes))
+        s = FakeSession(handler)
+        n = refdata.update_refdata(start=days[0], session=s)
+        got = refdata.read_refdata()
+        # первая дата — обе бумаги; потом только смена объема AAA; флаг и НКД не хранятся
+        assert n == 3 and 'hasprospectus' not in got.columns and 'accruedint' not in got.columns
+        assert got.select('secid', 'date', 'issuesize').rows() == [
+            ('AAA', days[0], 1000.0), ('AAA', change_day, 2000.0), ('BBB', days[0], 1000.0)]
+        assert refdata.refdata_at(days[2], 'AAA')['issuesize'].to_list() == [1000.0]
+        assert refdata.refdata_at(days[-1])['issuesize'].to_list() == [2000.0, 1000.0]
+        s.calls.clear()
+        assert refdata.update_refdata(session=s) == 0 and s.calls == []   # по вчерашний день актуально

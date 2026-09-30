@@ -4,7 +4,7 @@ adj_close и капитализация, проверка качества и о
 
 Шаги: 1 акции → 1b индексы → 1c облигации → 1d ключевая ставка → 1e фьючерсы →
 1f прочие рынки (все акции и фонды, все индексы, валюта, фиксинги) →
-1g ставки и облигации (RUONIA, КБД, денежные потоки облигаций) →
+1g ставки и справочники (RUONIA, КБД, денежные потоки облигаций, параметры бумаг) →
 2 пересчет adj_close и капитализации → 2b копии для SQL (реестры, stocks_adjusted,
 представления) → 3 проверка данных → 4 обслуживание хранилища →
 5 копия каталога. Все данные — в хранилище DuckLake (lake.py). Облигации и фьючерсы
@@ -31,7 +31,7 @@ from typing import Optional
 
 import polars as pl
 
-from moexutils import backup, cashflows, contracts, history, lake, notify, quality, rates, stocks
+from moexutils import backup, cashflows, contracts, history, lake, notify, quality, rates, refdata, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -138,6 +138,9 @@ def main(
             if dataset == 'cashflows':
                 cashflows.update_cashflows('full')
                 continue
+            if dataset == 'refdata':
+                refdata.update_refdata(start=history_start)
+                continue
             n = history.update(dataset, start=history_start, max_days=20000)
             print(f"{dataset}: +{n} строк")
             if dataset in ('bonds', 'shares'):
@@ -209,10 +212,11 @@ def main(
         print("=== 1f. Прочие рынки — пропуск (--no-markets) ===")
 
     if do_rates:
-        print("=== 1g. RUONIA, КБД, денежные потоки облигаций ===")
+        print("=== 1g. RUONIA, КБД, денежные потоки облигаций, параметры бумаг ===")
         if _lake_tables(warnings) is not None:
             for title, step in (("RUONIA", rates.update_ruonia),
                                 ("КБД", rates.update_zcyc),
+                ("Параметры бумаг (объем выпуска, листинг)", refdata.update_refdata),
                                 # по субботам — все будущие потоки, в остальные ночи — окно ±дни
                                 ("Денежные потоки облигаций", lambda: cashflows.update_cashflows(
                                     'future' if dt.date.today().weekday() == 5 else 'window'))):
@@ -322,7 +326,7 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
-                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows")
+                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata")
     ap.add_argument("--history-start", type=str, default=None,
                     help="Начальная дата первичной выгрузки (по умолчанию — начало истории ISS)")
     # синонимы прежних флагов первичной выгрузки

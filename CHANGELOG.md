@@ -18,4 +18,7 @@
 - Чтение на момент снимка: параметр `as_of` у функций чтения, `lake.ref`, `lake.snapshots`.
 - Проверка качества охватывает все наборы `history.DATASETS` (`<набор>_stale`, `<набор>_gaps`).
 - `stocks.load_sectors` (`metadata/sectors.csv`).
+- Параметры бумаг по датам с 01.04.2024 (`refdata`, `stock_refdata` — только изменения; служебная `load_state`).
+- Роль `moex_reader` создана; ночное обслуживание удаляет файлы-сироты (`ducklake_delete_orphaned_files`).
+- Проект vectorbt читает данные через пакет.
 - Аналитические ноутбуки (`stocks-performance`, `ticker-analysis`, `portfolio-analysis`, `momentum-strategy`, `arima-analysis`) перенесены в проект `moex-analytics`; здесь остался обзор данных `marimo/bond-market.py`.

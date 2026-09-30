@@ -6,7 +6,7 @@
 
 | Способ | Для чего |
 |--------|----------|
-| Пакет `moexutils` (`pip install -e <папка moexutils>`) | `stocks.read_stocks`, `stocks.read_index`, `history.read`, `history.read_securities`, `rates.read_ruonia`, `rates.read_zcyc`, `cashflows.read_cashflows`, `contracts.read_contracts`, `contracts.read_continuous`, `lake.query` — результат polars ([справочник API](api-reference.md)) |
+| Пакет `moexutils` (`pip install -e <папка moexutils>`) | `stocks.read_stocks`, `stocks.read_index`, `history.read`, `history.read_securities`, `rates.read_ruonia`, `rates.read_zcyc`, `refdata.refdata_at`, `refdata.read_refdata`, `cashflows.read_cashflows`, `contracts.read_contracts`, `contracts.read_continuous`, `lake.query` — результат polars ([справочник API](api-reference.md)) |
 | SQL через DuckDB | подключение к хранилищу (`lake.connect(read_only=True)` или свой `ATTACH 'ducklake:postgres:dbname=moex_lake'`) и запросы к `lake.<таблица>` |
 
 Роль PostgreSQL для чтения — `moex_reader` (создается один раз от суперпользователя `postgres` скриптом `scripts/reader_role.sql`, пароль — `\password moex_reader`; у потребителя `MOEX_PG_USER=moex_reader` и строка в `pgpass.conf`). Писать в хранилище может только роль `moex` — ночное обновление и ручные выгрузки moexutils.
@@ -16,8 +16,8 @@
 | Уровень | Таблицы и представления | Гарантия |
 |---------|-------------------------|----------|
 | **Стабильные** | `stocks`, `stocks_adjusted`, `indexes`, `ruonia`, `futures_continuous`, `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors` | Ключ, имена, типы и смысл колонок из модели данных не меняются без смены старшей версии пакета |
-| **Поля биржи** | `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, представления `bonds_ofz`, `bonds_corporate` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
-| **Служебные** | `update_runs`, `quality_log`, `empty_dates` | Для мониторинга; состав колонок может меняться в младших версиях |
+| **Поля биржи** | `bonds`, `futures`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, представления `bonds_ofz`, `bonds_corporate`, `stock_refdata` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
+| **Служебные** | `update_runs`, `quality_log`, `empty_dates`, `load_state` | Для мониторинга; состав колонок может меняться в младших версиях |
 
 ## Что гарантируется для данных
 
