@@ -16,8 +16,9 @@ Windows (notify.py); сбой шага — код выхода 1.
 
 Запуск: python update_data.py [--no-update] [--no-index] [--no-bonds] [--no-key-rate]
         [--no-futures] [--no-adj] [--no-cap] [--no-check] [--no-maintenance] [--no-backup]
-        [--no-derived]
-Первичная выгрузка: python update_data.py --history-init bonds,futures (многочасовая)
+        [--no-derived] [--no-markets] [--no-rates]
+Первичная выгрузка: python update_data.py --history-init bonds,futures,shares,indexes_all,currency,
+        currency_fixings,zcyc,cashflows --history-start <начало> (многочасовая)
 Только проверка (без обновления, окно — год, со статусом ISS): python update_data.py --check
 """
 from __future__ import annotations

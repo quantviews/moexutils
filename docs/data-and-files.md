@@ -6,15 +6,15 @@
 
 ```
 moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
-├── stocks.py, history.py, quality.py, lake.py, iss.py  # модули библиотеки (docs/README.md)
-├── moex_utils.py            # фасад: реэкспорт функций модулей, облигации, фьючерсы
-├── backup.py, notify.py     # копия каталога хранилища, уведомления Windows
+├── moexutils/               # пакет (pip install -e .): stocks, history, rates, cashflows, contracts,
+│                            # quality, lake, iss, bondmath, backup, notify (docs/README.md)
+├── pyproject.toml           # пакет, зависимости, extras notebooks/dev, настройки pytest и ruff
 ├── update_data.py           # пайплайн обновления (CLI)
 ├── update_data.bat          # запуск на Windows (выбор интерпретатора)
 ├── scheduled_update.cmd     # обертка для планировщика задач (лог в logs/)
-├── marimo/                  # marimo-ноутбуки (аналитика и преподавание)
+├── marimo/bond-market.py    # ноутбук обзора данных (аналитические — в ../moex-analytics)
 ├── legacy/                  # архив: Jupyter-ноутбуки и скрипты на pandas (не запускаются)
-├── scripts/                 # служебные: перенос в хранилище, генератор справочника колонок ISS
+├── scripts/                 # gen_iss_columns.py — справочник колонок ISS; reader_role.sql — роль moex_reader
 ├── tests/                   # офлайн pytest-тесты
 ├── docs/                    # документация
 ├── metadata/
@@ -30,10 +30,14 @@ moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
 
 moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не в git, не в облаке)
 ├── lake/                    # файлы данных хранилища DuckLake (каталог — PostgreSQL moex_lake)
-│   └── main/<таблица>/...   # stocks, indexes, bonds, bonds_securities, futures, empty_dates,
-│                            # update_runs, quality_log
-├── backups/catalog/        # копии каталога хранилища (pg_dump), 14 последних
-├── data/, indexes/, bonds/, futures/  # прежние Parquet-файлы — не используются, подлежат удалению
+│   └── main/<таблица>/...   # stocks, stocks_adjusted, indexes, indexes_all, shares, shares_securities,
+│                            # bonds, bonds_securities, bond_coupons, bond_amortizations, bond_offers,
+│                            # futures, futures_contracts, futures_continuous, currency, currency_fixings,
+│                            # ruonia, zcyc_params, zcyc_yields, zcyc_bonds, ref_splits, ref_renames,
+│                            # ref_delisted, ref_key_rate, ref_sectors, empty_dates, update_runs, quality_log
+├── backups/catalog/         # копии каталога хранилища moex_lake-ГГГГММДД-ччммсс.dump (pg_dump), 14 последних
+├── data/, indexes/, bonds/, futures/  # прежние Parquet-файлы — пакетом не используются; удалить после
+│                            # перевода проекта vectorbt на пакет (он еще читает их)
 dividends/                   # соседний проект: F:\Yandex.Disk\FINANCE\dividends
 ├── data/<TICKER>.csv        # приведены к текущей акции — их читает moexutils
 ├── data/raw/<TICKER>.csv    # сырые значения с сайта
@@ -44,14 +48,14 @@ dividends/                   # соседний проект: F:\Yandex.Disk\FIN
 
 Без `MOEX_DATA_ROOT` данные ищутся в папке проекта. Переменная задана для пользователя Windows постоянно; ее видят новые процессы, включая ночную задачу.
 
-**Хранилище DuckLake.** Все рыночные данные — акции, индексы, облигации, фьючерсы — живут в таблицах DuckLake: каталог — база `moex_lake` в локальном PostgreSQL 17 (служба `postgresql-x64-17`), файлы данных — Parquet (zstd) в `F:\moex-data\lake`. Файлы хранилища вручную не трогать: какие из них актуальны, знает только каталог. Читать — через `lake.query(...)` или функции `moex_utils`/`history`; снимки старше 30 дней удаляются ночным обслуживанием, более свежие позволяют откатиться (`SELECT ... FROM lake.bonds AT (VERSION => n)`).
+**Хранилище DuckLake.** Все рыночные данные — акции, индексы, облигации и их денежные потоки, фьючерсы, валюта, ставки, кривая ОФЗ — живут в таблицах DuckLake: каталог — база `moex_lake` в локальном PostgreSQL 17 (служба `postgresql-x64-17`), файлы данных — Parquet (zstd) в `F:\moex-data\lake`. Файлы хранилища вручную не трогать: какие из них актуальны, знает только каталог. Читать — через `lake.query(...)` или функции пакета (`stocks`, `history`, `rates`, `cashflows`, `contracts`), другим проектам — под ролью `moex_reader` ([контракт данных](data-contract.md)); снимки старше 30 дней удаляются ночным обслуживанием, более свежие позволяют откатиться (`SELECT ... FROM lake.bonds AT (VERSION => n)`).
 
 ---
 
 ## Таблицы, реестры, дивиденды
 
-Таблицы хранилища (`stocks`, `indexes`, `bonds`, `bonds_securities`, `futures`, `empty_dates`), их ключи, колонки и связи, реестры `metadata/` и формат CSV дивидендов описаны в [модели данных](data-model.md). Все поля, которые отдает биржа по каждому рынку, — в [справочнике колонок ISS](iss-columns.md).
+Таблицы и представления хранилища, их ключи, колонки и связи, реестры `metadata/` и формат CSV дивидендов описаны в [модели данных](data-model.md). Все поля, которые отдает биржа по каждому рынку, — в [справочнике колонок ISS](iss-columns.md).
 
 ## Логи
 
-`logs/update.log` — ночное обновление (`scheduled_update.cmd`, ротация после 5 МБ в `update.old.log`); `logs/backfill_*.log` — первичные выгрузки. В начале каждого прогона — строка `Данные: <корень>`, в конце — итог проверки данных.
+`logs/update.log` — ночное обновление (`scheduled_update.cmd`, ротация после 5 МБ в `update.old.log`); `logs/backfill_*.log` — первичные выгрузки (`--history-init`). В начале каждого прогона — строка `Данные: <корень>`, в конце — итог проверки данных.

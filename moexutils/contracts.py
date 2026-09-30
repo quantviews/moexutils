@@ -65,6 +65,8 @@ def update_contracts(session: Optional[requests.Session] = None) -> tuple[int, i
 
 def read_contracts(assets=None, as_of: lake.AsOf = None) -> pl.DataFrame:
     """Реестр контрактов из хранилища; assets — ASSETCODE или список."""
+    if 'futures_contracts' not in lake.tables():
+        raise FileNotFoundError("В хранилище нет реестра futures_contracts: выполните contracts.update_contracts()")
     df = lake.query(f"SELECT * FROM {lake.ref('futures_contracts', as_of)} ORDER BY asset_code, expiration_date")
     if assets is not None:
         assets = [assets] if isinstance(assets, str) else list(assets)

@@ -29,6 +29,7 @@ from moexutils import lake
 
 logger = logging.getLogger("moexutils")
 
+
 class Dataset(NamedTuple):
     path: str                        # путь рынка в ISS
     start: str                       # начало истории в ISS
