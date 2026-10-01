@@ -131,6 +131,7 @@ def build_continuous(assets: Iterable[str] = MAIN_ASSETS, roll_days: int = ROLL_
     df = (fut.join(reg, on='SECID')
              .with_columns(pl.coalesce('SETTLEPRICE', 'CLOSE').alias('settle'))
              .filter(pl.col('settle').is_not_null() & (pl.col('settle') > 0)))
+    px = df.select('date', 'SECID', 'settle')
     df = df.filter((pl.col('expiration_date') - pl.col('date')).dt.total_days() > roll_days)
     front = pl.concat([_front(g) for _, g in df.group_by('asset')], how='vertical') if df.height else df
     front = front.sort('asset', 'date').with_columns(
@@ -139,7 +140,6 @@ def build_continuous(assets: Iterable[str] = MAIN_ASSETS, roll_days: int = ROLL_
         pl.col('date').shift(1).over('asset').alias('prev_date'))
     # отношение цен нового и старого контракта в последний день старого;
     # нет цены нового в тот день — по ценам обоих в день перехода
-    px = df.select('date', 'SECID', 'settle')
     rolls = (front.filter('roll')
                   .join(px.rename({'SECID': 'prev_secid', 'settle': 'old_px', 'date': 'prev_date'}),
                         on=['prev_secid', 'prev_date'], how='left')
@@ -166,7 +166,21 @@ def build_continuous(assets: Iterable[str] = MAIN_ASSETS, roll_days: int = ROLL_
 
 def update_continuous(assets: Iterable[str] = MAIN_ASSETS) -> tuple[int, int]:
     """Пересчет непрерывных рядов -> lake.futures_continuous (только изменения)."""
-    n = lake.sync('futures_continuous', build_continuous(assets))
+    assets = list(assets)
+    if not assets:
+        return 0, 0
+    new = build_continuous(assets)
+    if 'futures_continuous' in lake.tables():
+        old = lake.query(
+            "SELECT * FROM lake.futures_continuous "
+            f"WHERE asset IN ({', '.join('?' * len(assets))})", assets)
+        key = lake.TABLE_KEYS['futures_continuous']
+        delta = lake.changed_rows(old, new, key)
+        stale = old.select(key).join(new.select(key), on=key, how='anti')
+        lake.write('futures_continuous', delta, delete=stale)
+        n = (delta.height, stale.height)
+    else:
+        n = (lake.write('futures_continuous', new), 0)
     logger.info(f"[OK] Непрерывные фьючерсы: записано {n[0]}, удалено {n[1]}")
     return n
 
