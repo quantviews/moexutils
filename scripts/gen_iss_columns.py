@@ -23,7 +23,7 @@ MARKETS = [
     ('Облигации (рынок bonds, все доски)', 'stock/markets/bonds', ('bonds',)),
     ('Индексы (рынок index)', 'stock/markets/index', ('indexes_all', 'indexes')),
     ('Фьючерсы (FORTS)', 'futures/markets/forts', ('futures',)),
-    ('Опционы (FORTS)', 'futures/markets/options', ()),
+    ('Опционы (FORTS)', 'futures/markets/options', ('options',)),
     ('Валютный рынок (selt)', 'currency/markets/selt', ('currency',)),
     ('Валютные фиксинги (рынок index валютного рынка)', 'currency/markets/index', ('currency_fixings',)),
 ]

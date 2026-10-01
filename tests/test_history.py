@@ -138,7 +138,7 @@ class TestHistory:
 
     def test_unknown_dataset(self, lake_env):
         with pytest.raises(ValueError):
-            history.update('options')
+            history.update('unknown_market')
 
     def test_securities_registry(self, lake_env, monkeypatch):
         history.update('bonds', start=(dt.date.today() - dt.timedelta(days=3)).isoformat(),

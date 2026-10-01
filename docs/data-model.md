@@ -23,6 +23,7 @@
 | `bonds` | `date, SECID, BOARDID` | ISS, все бумаги рынка bonds за дату | 1c |
 | `bonds_securities` | `SECID` | ISS, карточки бумаг | 1c |
 | `futures` | `date, SECID, BOARDID` | ISS, все контракты FORTS за дату | 1e |
+| `options` | `date, SECID, BOARDID` | ISS, все опционные контракты и доски за дату; строки без сделок сохраняются | 1f |
 | `futures_contracts` | `secid` | ISS, реестр серий FORTS | 1e |
 | `futures_continuous` | `date, asset` | расчет по `futures` и `futures_contracts` | 1e |
 | `shares` | `date, SECID, BOARDID` | ISS, все бумаги рынка shares за дату | 1f |
@@ -311,6 +312,10 @@ erDiagram
 ### `lake.empty_dates` — служебная
 
 Торговые (по календарю IMOEX) даты, за которые ISS подтвержденно не вернул строк; ключ `dataset + date` (`dataset` — имя набора из `history.DATASETS`). При докачке пропусков такие даты больше не запрашиваются.
+
+### `lake.options` — дневная история опционов
+
+Источник — `/history/engines/futures/markets/options/securities`, ключ `date + SECID + BOARDID`, разбиение Parquet по годам. Выгрузка охватывает 2025–2026 годы; источник имеет историю с 19.09.2001. Все поля фактической выдачи ISS сохраняются: `OPEN`, `LOW`, `HIGH`, `CLOSE`, `OPENPOSITIONVALUE`, `VALUE`, `VOLUME`, `OPENPOSITION`, `SETTLEPRICE`, `WAPRICE`, `CHANGE`, `QTY`, `NUMTRADES`, `THEOR_PRICE`; `TRADEDATE` переименовано в `date`. Нулевые цены сделок при `NUMTRADES = 0` не удаляются: строка может содержать расчетную цену или открытый интерес. Страйк, call/put и экспирация в фактической исторической выдаче за 30.09.2026 отсутствуют; отдельный реестр опционов пока не загружен. Все доски хранятся отдельно, без склейки контрактов и без фильтра ликвидности. Чтение — `history.read('options')`, ночная дозагрузка — шаг 1f; проверки `options_stale` и `options_gaps` работают по общим правилам наборов истории.
 
 ### `lake.load_state` — прогресс и свежесть загрузок
 

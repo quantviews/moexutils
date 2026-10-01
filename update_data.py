@@ -205,8 +205,8 @@ def main(
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
 
     if do_markets:
-        print("=== 1f. Прочие рынки: все акции и фонды, все индексы, валюта, фиксинги ===")
-        for dataset in ('shares', 'indexes_all', 'currency', 'currency_fixings'):
+        print("=== 1f. Прочие рынки: все акции и фонды, все индексы, валюта, фиксинги, опционы ===")
+        for dataset in ('shares', 'indexes_all', 'currency', 'currency_fixings', 'options'):
             _update_dataset(dataset, history.DATASETS[dataset].label, warnings)
         if 'shares' in (_lake_tables(warnings) or []):
             try:
@@ -333,7 +333,7 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
-                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata,index_weights")
+                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,options,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata,index_weights")
     ap.add_argument("--history-start", type=str, default=None,
                     help="Начальная дата первичной выгрузки (по умолчанию — начало истории ISS)")
     # синонимы прежних флагов первичной выгрузки
