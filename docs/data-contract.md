@@ -16,7 +16,7 @@
 | Уровень | Таблицы и представления | Гарантия |
 |---------|-------------------------|----------|
 | **Стабильные** | `stocks`, `stocks_adjusted`, `indexes`, `ruonia`, `futures_continuous`, `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors` | Ключ, имена, типы и смысл колонок из модели данных не меняются без смены старшей версии пакета |
-| **Поля биржи** | `bonds`, `futures`, `options`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `stock_refdata`, `index_weights`, представления `bonds_ofz`, `bonds_corporate`, `futures_swaprates` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
+| **Поля биржи** | `bonds`, `futures`, `options`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `options_series`, `options_contracts`, `stock_refdata`, `index_weights`, представления `bonds_ofz`, `bonds_corporate`, `futures_swaprates` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
 | **Служебные** | `update_runs`, `quality_log`, `empty_dates`, `load_state` | Для мониторинга; состав колонок может меняться в младших версиях |
 
 ## Что гарантируется для данных
@@ -32,6 +32,10 @@
 - **Реестры `ref_*`** — копии файлов `metadata/` на момент последнего обновления.
 - **Коды фьючерсов.** При повторном листинге кода (раз в 10 лет) ISS задним числом переименовывает старый контракт (`SiZ5` 2015 года → `SiZ5_2015`); ночной шаг переводит уже сохраненные строки `futures` на новый код. Поэтому `SECID` старого контракта в `futures` может смениться — связывайте историю с реестром `futures_contracts` по текущему `secid` (или по `base_secid` и датам обращения), а не по кодам, сохраненным у себя.
 - **Удаление строк.** `bond_coupons` и `bond_amortizations` в окне обновления приводятся к выдаче биржи — отмененные и перенесенные выплаты удаляются; `futures_contracts`, `futures_continuous`, `stocks_adjusted`, `ref_*` синхронизируются целиком (строки, которых больше нет в источнике, удаляются). При обновлении `futures_continuous` с выбранными активами синхронизируются только эти активы, остальные сохраняются. `futures_continuous` пересчитывается по всей истории: `adj_factor` и `settle_adj` прошлых дат меняются при каждом переходе на новый контракт.
+
+## Параметры опционов
+
+Опционы: параметры хранятся отдельно от дневной истории; ключ `options_contracts` — `secid + series_name`. Связь с историей требует совпадения короткого кода и даты в пределах `history_from..history_till`. Размер лота подтверждается карточкой той же серии, источник сохранен в `lot_size_source_secid`; отсутствующие значения не подставляются. `strike_source` различает числовую выдачу ISS, карточку и восстановление по полному биржевому коду.
 
 ## Данные на момент в прошлом
 

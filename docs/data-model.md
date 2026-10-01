@@ -24,6 +24,8 @@
 | `bonds_securities` | `SECID` | ISS, карточки бумаг | 1c |
 | `futures` | `date, SECID, BOARDID` | ISS, все контракты FORTS за дату | 1e |
 | `options` | `date, SECID, BOARDID` | ISS, все опционные контракты и доски за дату; строки без сделок сохраняются | 1f |
+| `options_series` | `name` | ISS, опционные серии, включая истекшие; размер лота серии с источником | 1f |
+| `options_contracts` | `secid, series_name` | ISS, контракты серий: Call/Put, страйк, даты истории | 1f |
 | `futures_contracts` | `secid` | ISS, реестр серий FORTS | 1e |
 | `futures_continuous` | `date, asset` | расчет по `futures` и `futures_contracts` | 1e |
 | `shares` | `date, SECID, BOARDID` | ISS, все бумаги рынка shares за дату | 1f |
@@ -315,7 +317,27 @@ erDiagram
 
 ### `lake.options` — дневная история опционов
 
-Источник — `/history/engines/futures/markets/options/securities`, ключ `date + SECID + BOARDID`, разбиение Parquet по годам. Выгрузка охватывает 2025–2026 годы; источник имеет историю с 19.09.2001. Все поля фактической выдачи ISS сохраняются: `OPEN`, `LOW`, `HIGH`, `CLOSE`, `OPENPOSITIONVALUE`, `VALUE`, `VOLUME`, `OPENPOSITION`, `SETTLEPRICE`, `WAPRICE`, `CHANGE`, `QTY`, `NUMTRADES`, `THEOR_PRICE`; `TRADEDATE` переименовано в `date`. Нулевые цены сделок при `NUMTRADES = 0` не удаляются: строка может содержать расчетную цену или открытый интерес. Страйк, call/put и экспирация в фактической исторической выдаче за 30.09.2026 отсутствуют; отдельный реестр опционов пока не загружен. Все доски хранятся отдельно, без склейки контрактов и без фильтра ликвидности. Чтение — `history.read('options')`, ночная дозагрузка — шаг 1f; проверки `options_stale` и `options_gaps` работают по общим правилам наборов истории.
+Источник — `/history/engines/futures/markets/options/securities`, ключ `date + SECID + BOARDID`, разбиение Parquet по годам. Выгрузка охватывает 2025–2026 годы; источник имеет историю с 19.09.2001. Все поля фактической выдачи ISS сохраняются: `OPEN`, `LOW`, `HIGH`, `CLOSE`, `OPENPOSITIONVALUE`, `VALUE`, `VOLUME`, `OPENPOSITION`, `SETTLEPRICE`, `WAPRICE`, `CHANGE`, `QTY`, `NUMTRADES`, `THEOR_PRICE`; `TRADEDATE` переименовано в `date`. Нулевые цены сделок при `NUMTRADES = 0` не удаляются: строка может содержать расчетную цену или открытый интерес. Страйк, call/put и экспирация в фактической исторической выдаче за 30.09.2026 отсутствуют; параметры доступны в отдельных таблицах `options_series` и `options_contracts`. Все доски хранятся отдельно, без склейки контрактов и без фильтра ликвидности. Чтение — `history.read('options')`, ночная дозагрузка — шаг 1f; проверки `options_stale` и `options_gaps` работают по общим правилам наборов истории.
+
+### `lake.options_series`, `lake.options_contracts` — параметры опционов
+
+`options_series` содержит полный архив серий ISS (`/statistics/engines/futures/markets/options/series?show_expired=1`): `name`, `start_date`, `expiration_date`, `asset_code`, `underlying_asset`, `series_type`, `exec_type`, `margin_style`, `option_on_spot`, `settle_type` и прочие поля биржи. Безымянная техническая заглушка без дат и актива исключается. `options_contracts` загружается из `/series/<name>/securities` для серий, пересекающихся с датами сохраненной истории: `secid`, `series_name`, `shortname`, `option_type` (`C`/`P`), `strike`, `history_from`, `history_till`, `is_traded`.
+
+Некоторые истекшие серии отсутствуют в архиве ISS; недостающие коды из истории восстанавливаются по `/securities/<SECID>` с проверкой начала обращения и экспирации. Их `is_traded` остается null, если карточка не сообщает статус. `strike_source`: `ISS` — числовое поле пакетной выдачи, `description` — карточка контракта, `full_code` — восстановление пустого числового поля по полному коду той же серии и типа согласно [правилам MOEX](https://www.moex.com/s1085). Восстановление по короткому коду не используется.
+
+`lot_size`, `lot_size_source_secid`, `unit`, `faceunit` — параметры серии из карточки контракта с точно совпавшим `SERIES_NAME`. `lot_size` — лот опциона, не множитель базового фьючерса; единицы котировки сохраняются отдельно. Если источник не подтверждает размер, поле остается null. Короткие коды могут повторяться, поэтому ключ контракта — `secid + series_name`. Историю связывают также по дате:
+
+```sql
+SELECT h.*, c.option_type, c.strike, s.expiration_date, s.asset_code,
+       s.underlying_asset, s.lot_size, s.unit
+FROM lake.options h
+JOIN lake.options_contracts c ON h.SECID = c.secid
+  AND h.date BETWEEN c.history_from AND c.history_till
+JOIN lake.options_series s ON c.series_name = s.name
+WHERE h.date = DATE '2026-09-30';
+```
+
+Загрузчик сохраняет успешные серии пакетами и возобновляет сбойные; обновляет действующие серии раз в день и истекшие после последнего дня обращения. Ночное обновление — шаг 1f. `options_series:<имя>` в `load_state` отмечает сохраненную серию, `options_registry` — успешное завершение всего реестра. Проверки `options_registry_stale` и `options_registry_gaps` контролируют свежесть и связь истории с параметрами. На 01.10.2026: 302 558 контрактов; все 14 659 030 строк истории за 2025–2026 имеют ровно одну запись параметров на свою дату.
 
 ### `lake.load_state` — прогресс и свежесть загрузок
 
@@ -367,7 +389,7 @@ erDiagram
 | 1c — облигации | `bonds`, `bonds_securities`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек |
 | 1d — ключевая ставка | `metadata/key_rate.csv` | новые решения ЦБ |
 | 1e — фьючерсы | `futures`, `empty_dates`, `futures_contracts`, `futures_continuous` | хвост истории, докачка пропусков; реестр контрактов, перекодировка строк после повторного листинга, пересчет непрерывных рядов |
-| 1f — прочие рынки | `shares`, `indexes_all`, `currency`, `currency_fixings`, `shares_securities`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек бумаг рынка акций |
+| 1f — прочие рынки | `shares`, `indexes_all`, `currency`, `currency_fixings`, `shares_securities`, `options`, `options_series`, `options_contracts`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек бумаг рынка акций |
 | 1g — ставки, потоки, параметры бумаг | `ruonia`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `stock_refdata`, `load_state` | RUONIA — вся история, записываются изменения; КБД и параметры бумаг — по вчерашний день (параметры — только изменения, последний обработанный день — в `load_state`); потоки — окно −10…+60 дней, по субботам все будущие |
 | 2 — пересчет | `stocks` | `adj_close` и капитализация после изменений дивидендов, срезов или реестра сплитов — только изменившиеся строки |
 | 2b — копии для SQL | `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors`, `stocks_adjusted`, представления `bonds_ofz`, `bonds_corporate` | синхронизация с файлами и `stocks`; недостающие представления |

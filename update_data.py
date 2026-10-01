@@ -33,7 +33,7 @@ from typing import Optional
 
 import polars as pl
 
-from moexutils import backup, cashflows, contracts, history, indices, lake, notify, quality, rates, refdata, stocks
+from moexutils import backup, cashflows, contracts, history, indices, lake, notify, options, quality, rates, refdata, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -208,6 +208,11 @@ def main(
         print("=== 1f. Прочие рынки: все акции и фонды, все индексы, валюта, фиксинги, опционы ===")
         for dataset in ('shares', 'indexes_all', 'currency', 'currency_fixings', 'options'):
             _update_dataset(dataset, history.DATASETS[dataset].label, warnings)
+        if 'options' in (_lake_tables(warnings) or []):
+            try:
+                options.update_registry()
+            except Exception as e:
+                _warn(warnings, f"Реестр опционов: не удалось обновить — {e}")
         if 'shares' in (_lake_tables(warnings) or []):
             try:
                 history.update_securities('shares')  # новые бумаги в реестр, до 500 за ночь

@@ -19,7 +19,7 @@
 | Параметры бумаг по датам | Объем выпуска, листинг, номинал, купон всех бумаг фондового рынка — только изменения | с 01.04.2024 |
 | Состав индексов | Бумаги и веса 17 основных индексов (IMOEX, широкий рынок, голубые фишки, отраслевые, RGBI) на каждую дату | IMOEX с 2001, отраслевые с 2005 |
 
-Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы выгружаются за 2025–2026 годы; страйки, типы и экспирации требуют отдельного реестра контрактов и в таблице истории не гарантируются.
+Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы выгружаются за 2025–2026 годы; страйки, Call/Put, экспирации, базовые активы и размер лота серии доступны через `options.read_contracts()` (`options_series`, `options_contracts`).
 
 **Хранение.** Все рыночные данные — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL; реестры корпоративных событий копируются туда же (`ref_*`). Модель таблиц — [docs/data-model.md](docs/data-model.md), гарантии для потребителей — [docs/data-contract.md](docs/data-contract.md), все поля биржи по рынкам — [docs/iss-columns.md](docs/iss-columns.md). Весь код — на polars, pandas в проекте не используется; прежние Jupyter-ноутбуки на pandas — в архиве [legacy/](legacy/README.md).
 
@@ -39,12 +39,13 @@ pip install -e ".[dev]"          # + pytest и ruff
 
 ```python
 import polars as pl
-from moexutils import stocks, history, rates, refdata, cashflows, contracts, lake, quality
+from moexutils import stocks, history, rates, refdata, cashflows, contracts, options, lake, quality
 
 # Акции и индексы
 sber = stocks.read_stocks('SBER', start='2024-01-01')      # close, adj_close, market_cap, ...
 all_stocks = stocks.read_stocks(split_adjusted=True)        # все тикеры: склейка переименований + сплиты
 imoex = stocks.read_index('IMOEX')
+option_parameters = options.read_contracts(assets='ASTR')
 
 # Рынки «все инструменты за дату»: bonds, futures, shares, indexes_all, currency, currency_fixings, options
 ofz_corp = history.read('bonds', boards=['TQOB', 'TQCB'], start='2026-01-01')

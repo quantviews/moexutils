@@ -30,6 +30,13 @@ def test_uninitialized_optional_datasets_are_skipped(env):
     assert quality.freshness_report(TODAY).is_empty()
 
 
+def test_options_registry_requires_successful_checkpoint(env):
+    lake.write('options_series', pl.DataFrame({'name': ['S']}))
+    assert checks() == {('options_registry_stale', 'options_registry')}
+    state(['options_registry'], [TODAY])
+    assert checks() == set()
+
+
 def test_ruonia_publication_grace_and_stale(env):
     lake.write('ruonia', pl.DataFrame({'date': [CAL[-2]], 'rate': [14.]}))
     assert checks() == set()

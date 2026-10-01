@@ -119,6 +119,15 @@ def _freshness_report(calendar: list[dt.date], today: dt.date) -> pl.DataFrame:
     cal = sorted({d for d in calendar if d < today})
     weekdays = [d for d in cal if d.weekday() < 5]
     latest = cal[-1] if cal else None
+    if {'options_series', 'options_contracts'} & names:
+        stale('options_registry_stale', 'options_registry', state.get('options_registry'), latest)
+        if {'options', 'options_contracts'} <= names:
+            missing = lake.query('SELECT count(*) AS n FROM lake.options h '
+                                 'ANTI JOIN lake.options_contracts c ON h.SECID=c.secid '
+                                 'AND h.date BETWEEN c.history_from AND c.history_till')['n'][0]
+            if missing:
+                add('options_registry_gaps', 'options_registry',
+                    f'{missing} строк истории без параметров контракта на эту дату')
     if 'ruonia' in names:
         last = lake.query('SELECT max(date) AS d FROM lake.ruonia')['d'][0]
         # Ночной прогон: ставка за предыдущий рабочий день может еще не выйти.

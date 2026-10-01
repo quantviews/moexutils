@@ -87,3 +87,15 @@ def test_options_included_in_nightly_other_markets(monkeypatch):
                             do_adj_close=False, do_market_cap=False, do_derived=False,
                             do_check=False, do_maintenance=False, do_backup=False) == 0
     assert 'options' in called
+
+
+def test_options_registry_updated_with_nightly_market_step(monkeypatch):
+    called = []
+    monkeypatch.setattr(update_data, '_update_dataset', lambda *args: None)
+    monkeypatch.setattr(update_data, '_lake_tables', lambda warnings: ['options'])
+    monkeypatch.setattr(update_data.options, 'update_registry', lambda: called.append('registry'))
+    assert update_data.main(do_update=False, do_indexes=False, do_bonds=False, do_key_rate=False,
+                            do_futures=False, do_markets=True, do_rates=False,
+                            do_adj_close=False, do_market_cap=False, do_derived=False,
+                            do_check=False, do_maintenance=False, do_backup=False) == 0
+    assert called == ['registry']

@@ -243,7 +243,21 @@ history.read_securities(dataset='bonds', as_of=None) -> pl.DataFrame
 
 **Прочие рынки** (`shares`, `indexes_all`, `currency`, `currency_fixings`) — шаг 1f; реестр `shares_securities` дополняется там же. Особенности данных — [data-model.md](data-model.md#рынки-все-инструменты-за-дату-shares-indexes_all-currency-currency_fixings).
 
-### Доступ к ISS (`iss`)
+## Реестр опционов (`options`)
+
+```python
+from moexutils import options
+options.update_registry(start=None, end=None, workers=4, flush_every=50) -> dict
+options.read_contracts(secids=None, assets=None, as_of=None) -> pl.DataFrame
+```
+
+`update_registry` по умолчанию покрывает диапазон сохраненной истории `options`; первичная загрузка: `options.update_registry('2025-01-01', '2026-09-30', workers=8)`. Загружаются истекшие и действующие серии; успех каждой серии сохраняется, повторный запуск продолжает пропущенные и обновляет действующие. Пропавшие из архива серий контракты восстанавливаются по карточкам ISS. Сетевой сбой возвращается вызывающему коду после сохранения успешных серий. Записываются только изменения, архивные записи сохраняются. Ночью выполняется на шаге 1f; `--no-markets` отключает шаг.
+
+`read_contracts` объединяет контракты и серии: страйк, `option_type` (`C`/`P`), экспирация, базовый актив, размер лота серии и его источник. Фильтры `secids`/`assets` принимают строку или список. Ключ — `secid + series_name`; при соединении с историей нужно проверить `history_from <= date <= history_till`, чтобы не смешать повторно использованные короткие коды. Подробности и пример SQL — [модель данных](data-model.md).
+
+---
+
+## Доступ к ISS (`iss`)
 
 ```python
 iss.make_session() -> requests.Session

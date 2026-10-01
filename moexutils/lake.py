@@ -63,6 +63,8 @@ TABLE_KEYS = {
     # служебная: до какой даты обработан набор, если по данным этого не видно
     'load_state': ['name'],
     'futures_contracts': ['secid'],
+    'options_series': ['name'],
+    'options_contracts': ['secid', 'series_name'],
     'futures_continuous': ['date', 'asset'],
     'bond_coupons': ['secid', 'coupondate'],
     'bond_amortizations': ['secid', 'amortdate', 'data_source'],
