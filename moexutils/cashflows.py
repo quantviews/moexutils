@@ -22,7 +22,8 @@
 купоны, новые выпуски); по субботам — все будущие потоки; полная выгрузка —
 update_cashflows('full') (около 2,6 тыс. запросов). Запрошенный диапазон дат
 приходит целиком, поэтому купоны и амортизации в нем, которых биржа больше не
-отдает (отмененные, перенесенные), удаляются; оферты — только при полной выгрузке.
+отдает (отмененные, перенесенные), удаляются; будущие оферты сверяются по полному
+реестру с отбором нормализованной даты, чтобы учесть пустой offerdate.
 """
 from __future__ import annotations
 
@@ -58,7 +59,7 @@ FUTURE_STATE_PREFIX = 'cashflows_future:'
 
 
 def fetch_block(block: str, start=None, till=None, session: Optional[requests.Session] = None,
-                max_pages: int = 5000) -> pl.DataFrame:
+                max_pages: int = 5000, empty_page_retries: int = 2) -> pl.DataFrame:
     """Все страницы блока ('coupons', 'amortizations', 'offers') за период дат потока (None — вся история)."""
     session = session or iss.make_session()
     params = {'iss.only': f"{block},{block}.cursor", 'limit': 100}
@@ -66,7 +67,8 @@ def fetch_block(block: str, start=None, till=None, session: Optional[requests.Se
         params['from'] = str(start)[:10]
     if till is not None:
         params['till'] = str(till)[:10]
-    df = iss.fetch_pages(URL, block, params, session, max_pages)
+    df = iss.fetch_pages(URL, block, params, session, max_pages,
+                         empty_page_retries=empty_page_retries)
     return prepare(block, df) if df.height else df
 
 
@@ -95,7 +97,14 @@ def update_cashflows(mode: str = 'window', session: Optional[requests.Session] =
     session = session or iss.make_session()
     out = {}
     for block, b in BLOCKS.items():
-        new = fetch_block(block, start, till, session)
+        if block == 'offers' and mode == 'future':
+            # ISS filters offerdate, but future offers can have only start/end.
+            # Read the full small registry, then filter its normalized date.
+            new = fetch_block(block, None, None, session)
+            if new.height:
+                new = new.filter(pl.col(b.date_col) >= today)
+        else:
+            new = fetch_block(block, start, till, session)
         stale, delta = None, new
         if b.table in lake.tables():
             where, params = [], []
@@ -108,9 +117,9 @@ def update_cashflows(mode: str = 'window', session: Optional[requests.Session] =
             if new.is_empty():
                 new = old.clear()
             stale = old.select(b.key).join(new.select(b.key), on=b.key, how='anti')
-            if block == 'offers' and mode != 'full':
+            if block == 'offers' and mode == 'window':
                 # фильтр ISS по датам идет по offerdate, а у части оферт он пустой
-                # (0000-00-00): их нет в выдаче окна — удалять только при полной выгрузке
+                # (0000-00-00): их нет в выдаче окна — удалять при future/full, когда реестр прочитан целиком
                 stale = None
             delta = lake.changed_rows(old, new, b.key)   # пишутся только новые и изменившиеся
         out[b.table] = lake.write(b.table, delta, delete=stale)

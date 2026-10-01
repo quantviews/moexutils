@@ -60,3 +60,32 @@ def test_incomplete_cashflow_response_cannot_delete_saved_rows(lake_env, monkeyp
         cashflows.update_cashflows('full')
     assert cashflows.read_cashflows('coupons').select(saved.columns).equals(saved)
 
+
+def test_future_offers_include_start_date_and_delete_canceled_only_in_future(lake_env, monkeypatch):
+    today = dt.date.today()
+    past, future = today - dt.timedelta(days=20), today + dt.timedelta(days=400)
+    lake.write('bond_offers', pl.DataFrame({'secid': ['PAST', 'CANCELED'],
+                                          'offer_date': [past, future], 'value': [90., 100.]}))
+    calls = []
+
+    def fetch(block, start, till, session):
+        calls.append((block, start, till))
+        if block != 'offers':
+            return pl.DataFrame()
+        # This future offer is absent from an ISS from-filtered response,
+        # because its offerdate is 0000-00-00; only the start date is known.
+        raw = pl.DataFrame({'secid': ['NEW', 'PAST'], 'offerdate': ['0000-00-00', str(past)],
+                            'offerdatestart': [str(future), str(past)],
+                            'offerdateend': [str(future), str(past)], 'value': [105., 95.]})
+        return cashflows.prepare('offers', raw)
+
+    monkeypatch.setattr(cashflows, 'fetch_block', fetch)
+    cashflows.update_cashflows('future')
+    assert ('offers', None, None) in calls
+    rows = cashflows.read_cashflows('offers')
+    assert rows['secid'].to_list() == ['NEW', 'PAST']
+    assert rows.filter(pl.col('secid') == 'PAST')['value'][0] == 90.
+    assert rows.filter(pl.col('secid') == 'NEW')['value'][0] == 105.
+    markers = dict(lake.query('SELECT name,date FROM lake.load_state').iter_rows())
+    assert markers[cashflows.FUTURE_STATE_PREFIX + 'bond_offers'] == today
+

@@ -10,6 +10,7 @@ Float64, остальные — строки. Так одна колонка и�
 from __future__ import annotations
 
 from typing import Optional
+import logging
 
 import polars as pl
 import requests
@@ -106,7 +107,7 @@ def records_to_frame(records: list[dict]) -> pl.DataFrame:
 
 
 def fetch_pages(url: str, block: str, params: dict, session: requests.Session,
-                max_pages: int) -> pl.DataFrame:
+                max_pages: int, empty_page_retries: int = 0) -> pl.DataFrame:
     """Полная выдача блока ISS; неполная или поврежденная выдача вызывает ValueError.
 
     Без TOTAL запрашиваем страницы до подтвержденной пустой страницы. Если
@@ -114,7 +115,10 @@ def fetch_pages(url: str, block: str, params: dict, session: requests.Session,
     """
     if max_pages <= 0:
         raise ValueError("max_pages должен быть положительным")
+    if empty_page_retries < 0:
+        raise ValueError('empty_page_retries must be nonnegative')
     pages, offset, total = [], 0, None
+    empty_attempts = 0
 
     def integer(value):
         try:
@@ -156,8 +160,14 @@ def fetch_pages(url: str, block: str, params: dict, session: requests.Session,
         page = to_frame(payload)
         if page.is_empty():
             if total is not None and offset != total:
+                if empty_attempts < empty_page_retries:
+                    empty_attempts += 1
+                    logging.getLogger('moexutils').warning(
+                        f'[WARN] ISS {block}: empty page {offset}/{total}; retry {empty_attempts}')
+                    continue
                 raise ValueError(f"ISS: неполная выдача {block}: {offset}/{total}")
             break
+        empty_attempts = 0
         pages.append(page)
         offset += page.height
         if total is not None:

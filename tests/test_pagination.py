@@ -28,6 +28,32 @@ class Session:
         return Response()
 
 
+def coupon_page(index, total, rows):
+    return {'coupons': {'columns': ['secid', 'coupondate'], 'data': rows},
+            'coupons.cursor': {'columns': ['INDEX', 'TOTAL'], 'data': [[index, total]]}}
+
+
+def test_transient_empty_page_retried_at_same_offset():
+    session = Session([coupon_page(0, 2, [['A', '2026-10-01']]),
+                       coupon_page(1, 2, []), coupon_page(1, 2, [['B', '2026-10-01']])])
+    frame = cashflows.fetch_block('coupons', session=session)
+    assert frame['secid'].to_list() == ['A', 'B']
+    assert session.offsets == [0, 1, 1]
+
+
+def test_empty_page_retry_exhaustion_still_rejects_partial_data():
+    session = Session([coupon_page(0, 1, [])] * 3)
+    with pytest.raises(ValueError, match='неполная выдача'):
+        cashflows.fetch_block('coupons', session=session)
+    assert session.offsets == [0, 0, 0]
+
+
+def test_total_must_remain_stable_on_empty_page_retry():
+    session = Session([coupon_page(0, 1, []), coupon_page(0, 2, [['A', '2026-10-01']])])
+    with pytest.raises(ValueError, match='TOTAL изменился'):
+        cashflows.fetch_block('coupons', session=session)
+
+
 @pytest.fixture(params=['day', 'security', 'refdata', 'weights', 'coupons'])
 def loader(request):
     kind = request.param
@@ -55,7 +81,8 @@ def loader(request):
             return refdata.fetch_snapshot(DAY, session=session, max_pages=max_pages)
         if kind == 'weights':
             return indices.fetch_weights('IMOEX', DAY, session=session, max_pages=max_pages)
-        return cashflows.fetch_block('coupons', session=session, max_pages=max_pages)
+        return cashflows.fetch_block('coupons', session=session, max_pages=max_pages,
+                                     empty_page_retries=0)
 
     return block, page, fetch
 
