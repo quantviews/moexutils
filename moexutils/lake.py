@@ -361,7 +361,10 @@ def changed_rows(old: pl.DataFrame, new: pl.DataFrame, key: list[str], rel_tol: 
     """Строки new, которых нет в old или которые отличаются (числа — с относительным допуском)."""
     if old.is_empty():
         return new
-    cols = [c for c in new.columns if c not in key and c in old.columns]
+    cols = [c for c in new.columns if c not in key]
+    missing = [c for c in cols if c not in old.columns]
+    if missing:
+        old = old.with_columns([pl.lit(None, dtype=new.schema[c]).alias(c) for c in missing])
     joined = new.join(old.select(key + cols).with_columns(pl.lit(True).alias('__was')),
                       on=key, how='left', suffix='__old')
     diff = pl.lit(False)

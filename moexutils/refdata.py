@@ -65,7 +65,10 @@ def _changes(state: pl.DataFrame, snap: pl.DataFrame) -> pl.DataFrame:
     """Строки среза, у которых параметры отличаются от последнего состояния бумаги (или бумага новая)."""
     if state.is_empty():
         return snap
-    cols = [c for c in _compare_cols(snap) if c in state.columns]
+    cols = _compare_cols(snap)
+    missing = [c for c in cols if c not in state.columns]
+    if missing:
+        state = state.with_columns([pl.lit(None, dtype=snap.schema[c]).alias(c) for c in missing])
     joined = snap.join(state.select('secid', *cols).with_columns(pl.lit(True).alias('__was')),
                        on='secid', how='left', suffix='__old')
     diff = pl.col('__was').is_null()
