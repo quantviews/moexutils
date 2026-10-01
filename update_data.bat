@@ -17,7 +17,7 @@ if not defined PY set "PY=python"
 
 "%PY%" -c "import moexutils, polars, duckdb" 2>nul
 if errorlevel 1 (
-    echo [ERROR] Python "%PY%" cannot import moexutils/polars/duckdb (pip install -e . in the project folder).
+    echo [ERROR] Python "%PY%" cannot import moexutils/polars/duckdb ^(pip install -e . in the project folder^).
     echo Set MOEX_PYTHON to the interpreter of the project environment.
     set "RC=1"
     goto :end
