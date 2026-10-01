@@ -69,14 +69,22 @@ def fetch_block(block: str, start=None, till=None, session: Optional[requests.Se
         data = session.get(URL, params={**params, 'start': offset})
         data.raise_for_status()
         data = data.json()
-        page = iss.to_frame(data.get(block))
+        payload = data.get(block)
+        if not isinstance(payload, dict) or 'columns' not in payload or 'data' not in payload:
+            raise ValueError(f"ISS: отсутствует или поврежден блок {block}")
+        page = iss.to_frame(payload)
+        cursor = iss.to_frame(data.get(f"{block}.cursor"))
+        total = int(cursor['TOTAL'][0]) if cursor.height and 'TOTAL' in cursor.columns else None
         if page.is_empty():
+            if total is not None and offset < total:
+                raise ValueError(f"ISS: неполная выдача {block}: {offset}/{total}")
             break
         pages.append(page)
         offset += page.height
-        cursor = iss.to_frame(data.get(f"{block}.cursor"))
-        if cursor.is_empty() or offset >= int(cursor['TOTAL'][0]):
+        if total is not None and offset >= total:
             break
+    else:
+        raise ValueError(f"ISS: превышен лимит страниц {block}; выдача неполная")
     return prepare(block, pl.concat(pages, how='diagonal_relaxed')) if pages else pl.DataFrame()
 
 
@@ -107,7 +115,7 @@ def update_cashflows(mode: str = 'window', session: Optional[requests.Session] =
     for block, b in BLOCKS.items():
         new = fetch_block(block, start, till, session)
         stale, delta = None, new
-        if new.height and b.table in lake.tables():
+        if b.table in lake.tables():
             where, params = [], []
             for op, val in ((">=", start), ("<=", till)):
                 if val is not None:
@@ -115,6 +123,8 @@ def update_cashflows(mode: str = 'window', session: Optional[requests.Session] =
                     params.append(val)
             old = lake.query(f"SELECT * FROM lake.{b.table}"
                              + (" WHERE " + " AND ".join(where) if where else ""), params)
+            if new.is_empty():
+                new = old.clear()
             stale = old.select(b.key).join(new.select(b.key), on=b.key, how='anti')
             if block == 'offers' and mode != 'full':
                 # фильтр ISS по датам идет по offerdate, а у части оферт он пустой
