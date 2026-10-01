@@ -16,7 +16,7 @@
 | Уровень | Таблицы и представления | Гарантия |
 |---------|-------------------------|----------|
 | **Стабильные** | `stocks`, `stocks_adjusted`, `indexes`, `ruonia`, `futures_continuous`, `ref_splits`, `ref_renames`, `ref_delisted`, `ref_key_rate`, `ref_sectors` | Ключ, имена, типы и смысл колонок из модели данных не меняются без смены старшей версии пакета |
-| **Поля биржи** | `bonds`, `futures`, `options`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `options_series`, `options_contracts`, `stock_refdata`, `index_weights`, представления `bonds_ofz`, `bonds_corporate`, `futures_swaprates` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
+| **Поля биржи** | `bonds`, `futures`, `options`, `shares`, `indexes_all`, `currency`, `currency_fixings`, `bonds_securities`, `shares_securities`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `futures_contracts`, `options_series`, `options_contracts`, `futures_open_positions`, `options_open_positions`, `open_position_assets`, `stock_refdata`, `index_weights`, представления `bonds_ofz`, `bonds_corporate`, `futures_swaprates` | Ключ (из [модели данных](data-model.md#таблицы-кратко)) и колонки под именами ISS. Новые поля биржи появляются автоматически; существующие колонки не удаляются и не переименовываются (если биржа перестанет отдавать поле, оно останется пустым в новых строках) |
 | **Служебные** | `update_runs`, `quality_log`, `empty_dates`, `load_state` | Для мониторинга; состав колонок может меняться в младших версиях |
 
 ## Что гарантируется для данных
@@ -47,3 +47,5 @@
 
 - **Младшая версия** (1.x): новые таблицы, представления, колонки, функции и параметры; исправления данных (например, пересчет `adj_close` после найденной ошибки) — с записью в CHANGELOG.
 - **Старшая версия** (2.0): удаление или переименование стабильной таблицы или колонки, смена ключа, типа или смысла колонки — только с записью в CHANGELOG и указанием, как перейти.
+
+Дневные открытые позиции: агрегация по базовому активу; опционные типы и стили входят в ключ. Отсутствующие строки групп не означают гарантированный ноль, неизвестные изменения сохраняются как null. Число участников с длинными/короткими позициями не является разбиением на непересекающиеся группы.

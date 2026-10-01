@@ -37,6 +37,16 @@ def test_options_registry_requires_successful_checkpoint(env):
     assert checks() == set()
 
 
+def test_open_positions_checkpoints_and_retired_assets(env):
+    lake.write('open_position_assets', pl.DataFrame({'market': ['forts', 'options'],
+                'asset': ['ACTIVE', 'RETIRED'], 'date_from': [CAL[0], CAL[0]],
+                'date_till': [CAL[-1], CAL[0]]}))
+    state(['futures_open_positions:ACTIVE', 'options_open_positions:RETIRED'], [CAL[-2], CAL[0]])
+    assert checks() == {('open_positions_stale', 'forts/ACTIVE')}
+    state(['futures_open_positions:ACTIVE'], [CAL[-1]])
+    assert checks() == set()
+
+
 def test_ruonia_publication_grace_and_stale(env):
     lake.write('ruonia', pl.DataFrame({'date': [CAL[-2]], 'rate': [14.]}))
     assert checks() == set()

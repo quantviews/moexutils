@@ -119,6 +119,18 @@ def _freshness_report(calendar: list[dt.date], today: dt.date) -> pl.DataFrame:
     cal = sorted({d for d in calendar if d < today})
     weekdays = [d for d in cal if d.weekday() < 5]
     latest = cal[-1] if cal else None
+    if 'open_position_assets' in names and latest is not None:
+        for table in ('futures_open_positions', 'options_open_positions'):
+            if table in names:
+                last_data = lake.query(f'SELECT max(date) AS d FROM lake.{table}')['d'][0]
+                stale('open_positions_market_stale', table, last_data, latest)
+        assets = lake.query('SELECT market,asset,date_from,date_till FROM lake.open_position_assets')
+        for market, asset, first, last in assets.iter_rows():
+            if first > latest or last < dt.date(2025, 1, 1):
+                continue
+            table = {'forts': 'futures_open_positions', 'options': 'options_open_positions'}[market]
+            stale('open_positions_stale', f'{market}/{asset}', state.get(f'{table}:{asset}'),
+                  min(latest, last))
     if {'options_series', 'options_contracts'} & names:
         stale('options_registry_stale', 'options_registry', state.get('options_registry'), latest)
         if {'options', 'options_contracts'} <= names:

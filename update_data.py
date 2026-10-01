@@ -33,7 +33,7 @@ from typing import Optional
 
 import polars as pl
 
-from moexutils import backup, cashflows, contracts, history, indices, lake, notify, options, quality, rates, refdata, stocks
+from moexutils import backup, cashflows, contracts, history, indices, lake, notify, openpositions, options, quality, rates, refdata, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -140,6 +140,9 @@ def main(
             if dataset == 'cashflows':
                 cashflows.update_cashflows('full')
                 continue
+            if dataset == 'open_positions':
+                openpositions.update(start=history_start)
+                continue
             if dataset == 'refdata':
                 refdata.update_refdata(start=history_start)
                 continue
@@ -208,6 +211,11 @@ def main(
         print("=== 1f. Прочие рынки: все акции и фонды, все индексы, валюта, фиксинги, опционы ===")
         for dataset in ('shares', 'indexes_all', 'currency', 'currency_fixings', 'options'):
             _update_dataset(dataset, history.DATASETS[dataset].label, warnings)
+        if 'open_position_assets' in (_lake_tables(warnings) or []):
+            try:
+                openpositions.update()
+            except Exception as e:
+                _warn(warnings, f"Открытые позиции физлиц/юрлиц: не удалось обновить — {e}")
         if 'options' in (_lake_tables(warnings) or []):
             try:
                 options.update_registry()
@@ -338,7 +346,7 @@ if __name__ == "__main__":
     ap.add_argument("--check", action="store_true",
                     help="Только проверка данных: без обновления, окно — год, статус ISS")
     ap.add_argument("--history-init", type=str, default=None,
-                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,options,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata,index_weights")
+                    help="Первичная выгрузка истории наборов через запятую: bonds,futures,options,shares,indexes_all,currency,currency_fixings,zcyc,cashflows,refdata,index_weights,open_positions")
     ap.add_argument("--history-start", type=str, default=None,
                     help="Начальная дата первичной выгрузки (по умолчанию — начало истории ISS)")
     # синонимы прежних флагов первичной выгрузки

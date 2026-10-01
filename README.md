@@ -13,6 +13,7 @@
 | Денежные потоки облигаций | Купоны, амортизации, оферты всех выпусков, включая погашенные и будущие выплаты | с 1997 |
 | Кривая ОФЗ | Кривая бескупонной доходности MOEX (КБД): параметры, доходности на сроки 0,25–20 лет, ОФЗ кривой | с 06.01.2014 |
 | Фьючерсы | История **всех** контрактов FORTS: цены, расчетная цена, открытый интерес, объемы; реестр контрактов с датами экспирации; непрерывные ряды по 12 основным активам | с 2002 |
+| Позиции физлиц/юрлиц | Дневные длинные/короткие позиции, число участников и изменения по базовым активам фьючерсов и опционов | с 2025 |
 | Опционы | Дневная история всех контрактов и досок: цены, расчетная и теоретическая цена, объемы, открытый интерес; строки без сделок сохраняются | с 2025; ISS доступен с 19.09.2001 |
 | Валюта | Валютный рынок (selt, строки со сделками); валютные фиксинги MOEX | с 1997; фиксинги — с 2019 |
 | Ставки | Ключевая ставка ЦБ (до 13.09.2013 — ставка рефинансирования); RUONIA с объемом, числом сделок и процентилями | с 2003; RUONIA — с 2010 |
@@ -39,13 +40,14 @@ pip install -e ".[dev]"          # + pytest и ruff
 
 ```python
 import polars as pl
-from moexutils import stocks, history, rates, refdata, cashflows, contracts, options, lake, quality
+from moexutils import stocks, history, rates, refdata, cashflows, contracts, options, openpositions, lake, quality
 
 # Акции и индексы
 sber = stocks.read_stocks('SBER', start='2024-01-01')      # close, adj_close, market_cap, ...
 all_stocks = stocks.read_stocks(split_adjusted=True)        # все тикеры: склейка переименований + сплиты
 imoex = stocks.read_index('IMOEX')
 option_parameters = options.read_contracts(assets='ASTR')
+retail_si = openpositions.read('forts', assets='Si', is_fiz=1, start='2025-01-01')
 
 # Рынки «все инструменты за дату»: bonds, futures, shares, indexes_all, currency, currency_fixings, options
 ofz_corp = history.read('bonds', boards=['TQOB', 'TQCB'], start='2026-01-01')
