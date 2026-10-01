@@ -131,6 +131,29 @@ class TestMainNotifications:
         assert len(toasts) == 1 and 'сбой' in toasts[0][0] and 'disk full' in toasts[0][1]
         assert lake.query('SELECT status FROM lake.update_runs')['status'].to_list() == ['error']
 
+    @pytest.mark.parametrize('kind', ['bonds', 'stocks'])
+    def test_internal_fetch_failure_reaches_run_status(self, env, monkeypatch, kind):
+        toasts, _ = env
+        day = dt.date.today() - dt.timedelta(days=7)
+
+        def boom(*args, **kwargs):
+            raise ConnectionError('ISS down')
+
+        if kind == 'bonds':
+            lake.write('bonds', pl.DataFrame({'date': [day], 'SECID': ['A'], 'BOARDID': ['TQCB']}))
+            monkeypatch.setattr(update_data.history, '_fetch', boom)
+        else:
+            cols = update_data.stocks.STOCK_COLS
+            lake.write('stocks', pl.DataFrame({'date': [day], 'ticker': ['TEST'],
+                                               **{c: [100.] for c in cols if c not in ('date', 'ticker')}}))
+            monkeypatch.setattr(update_data.stocks, 'fetch_stock', boom)
+        assert update_data.main(
+            do_update=kind == 'stocks', do_bonds=kind == 'bonds', do_indexes=False,
+            do_key_rate=False, do_futures=False, do_adj_close=False, do_market_cap=False,
+            do_derived=False, do_markets=False, do_rates=False) == 1
+        assert lake.query('SELECT status FROM lake.update_runs')['status'].to_list() == ['error']
+        assert len(toasts) == 1 and 'сбой' in toasts[0][0]
+
     def test_toast_only_for_new_issues(self, env):
         toasts, state = env
         state['issues'] = issues_frame([('dividend_gap', 'MSNG', 'гэп')])

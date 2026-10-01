@@ -172,7 +172,8 @@ def update_zcyc(start=None, max_days: int = 5000, session: Optional[requests.Ses
             blocks = fetch_zcyc(day, session)
         except Exception as e:
             logger.warning(f"[WARN] КБД {day}: {e} — прогон остановлен, сохраняю скачанное")
-            break
+            flush()
+            raise
         for block, df in blocks.items():
             if df.height:
                 frames[block].append(df)

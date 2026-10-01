@@ -117,7 +117,8 @@ def update_refdata(start=None, max_days: int = 2000, session: Optional[requests.
             snap = fetch_snapshot(day, session)
         except Exception as e:
             logger.warning(f"[WARN] Параметры бумаг {day}: {e} — прогон остановлен, сохраняю изменения")
-            break
+            flush()
+            raise
         last_done = day
         if snap.is_empty():
             continue

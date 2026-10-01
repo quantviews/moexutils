@@ -102,8 +102,9 @@ class TestHistory:
         weekdays_before = [d for d in (lo - dt.timedelta(days=i) for i in range(1, 40)) if d.weekday() < 5]
         fail_day = weekdays_before[3]
         fake = FakeISS(two_bonds, fail_on=[fail_day])
-        history.update('bonds', start=(today - dt.timedelta(days=60)).isoformat(), session=fake,
-                       flush_every=2)
+        with pytest.raises(ConnectionError, match='ISS down'):
+            history.update('bonds', start=(today - dt.timedelta(days=60)).isoformat(), session=fake,
+                           flush_every=2)
         assert fake.days[:4] == weekdays_before[:4]            # назад от истории
         dates = history.dataset_dates('bonds')
         assert dates[0] == weekdays_before[2]                   # до сбойной даты, без дыр

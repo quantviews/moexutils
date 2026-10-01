@@ -104,6 +104,7 @@ def update_index_weights(indexes: Iterable[str] = CORE_INDEXES, start=None, max_
     except Exception as e:
         logger.warning(f"[WARN] Состав индексов: список ISS недоступен — {e}")
     total = 0
+    errors = []
     for idx in indexes:
         done = _processed_until(idx)
         if done is not None:
@@ -130,6 +131,7 @@ def update_index_weights(indexes: Iterable[str] = CORE_INDEXES, start=None, max_
                 df = fetch_weights(idx, day, session)
             except Exception as e:
                 logger.warning(f"[WARN] Состав {idx} {day}: {e} — индекс остановлен, сохраняю скачанное")
+                errors.append(e)
                 break
             last_done = day
             if df.height:
@@ -141,6 +143,8 @@ def update_index_weights(indexes: Iterable[str] = CORE_INDEXES, start=None, max_
         if written:
             logger.info(f"[OK] Состав {idx}: +{written} строк, по {last_done}")
         total += written
+    if errors:
+        raise ExceptionGroup("Ошибки загрузки состава индексов", errors)
     if not total:
         logger.info("[INFO] Состав индексов: новых дат нет")
     return total

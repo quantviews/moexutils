@@ -153,7 +153,8 @@ def update(dataset: str, start: Optional[str] = None, max_days: int = 3000,
             rows = _fetch(dataset, day, session)
         except Exception as e:
             logger.warning(f"[WARN] {label} {day}: {e} — прогон остановлен, сохраняю скачанное")
-            break
+            flush()
+            raise
         if rows.height:
             frames.append(rows)
         if i % flush_every == 0:
@@ -186,17 +187,20 @@ def repair(dataset: str, session: Optional[requests.Session] = None,
 
     logger.info(f"[INFO] {label}: пропущенных торговых дат — {len(missing)}, докачиваю")
     session = session or iss.make_session()
-    frames, empty = [], []
+    frames, empty, errors = [], [], []
     for day in missing:
         try:
             rows = _fetch(dataset, day, session)
         except Exception as e:
             logger.warning(f"[WARN] {label} {day}: {e}")
+            errors.append(e)
             continue
         (frames.append(rows) if rows.height else empty.append(day))
     if empty:
         lake.write('empty_dates', pl.DataFrame({'dataset': [dataset] * len(empty), 'date': empty}))
     written = lake.write(dataset, pl.concat(frames, how='diagonal_relaxed')) if frames else 0
+    if errors:
+        raise ExceptionGroup(f"{label}: ошибки восстановления истории", errors)
     if written:
         logger.info(f"[OK] {label}: +{written} строк за {len(frames)} пропущенных дат")
     return written
@@ -286,7 +290,8 @@ def update_securities(dataset: str = 'bonds', max_new: Optional[int] = 500,
             desc = iss.security_description(secid, session=session)
         except Exception as e:
             logger.warning(f"[WARN] {secid}: карточка ISS недоступна — {e}; прогон остановлен")
-            break
+            flush()
+            raise
         rows.append({**desc, 'SECID': secid, 'FETCHED': fetched})
         if i % flush_every == 0:
             flush()

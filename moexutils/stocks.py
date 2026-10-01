@@ -638,6 +638,7 @@ def update_stocks(tickers: Optional[Iterable[str]] = None, include_delisted: boo
     logger.info(f"Акций к обновлению: {len(todo)}")
 
     changed, warned = [], {}
+    errors = []
     for ticker in todo:
         old = existing.filter(pl.col('ticker') == ticker) if existing.height else pl.DataFrame()
         start = dt.date(2002, 1, 1) if rebuild or old.is_empty() else old['date'].max()
@@ -645,6 +646,7 @@ def update_stocks(tickers: Optional[Iterable[str]] = None, include_delisted: boo
             new = fetch_stock(ticker, start, session=session)
         except Exception as e:
             logger.error(f"[ERROR] {ticker}: не удалось загрузить — {e}")
+            errors.append(e)
             continue
         if new.is_empty() and old.is_empty():
             logger.info(f"[SKIP] {ticker}: ISS не вернул данных")
@@ -660,6 +662,8 @@ def update_stocks(tickers: Optional[Iterable[str]] = None, include_delisted: boo
         for rec, value in items:
             logger.warning(f"[WARN] {ticker}: дивиденд {value} на {rec} не согласуется ни с одной ценовой базой — пропущен")
     written = lake.write('stocks', pl.concat(changed, how='vertical_relaxed')) if changed else 0
+    if errors:
+        raise ExceptionGroup("Ошибки загрузки инструментов", errors)
     logger.info(f"[OK] Акции: записано строк {written}")
     return written
 
@@ -705,12 +709,14 @@ def update_indexes(tickers: Iterable[str] = DEFAULT_INDEXES, session: Optional[r
             if 'indexes' in lake.tables() else pl.DataFrame(schema={'ticker': pl.Utf8, 'last': pl.Date}))
     last = dict(zip(have['ticker'].to_list(), have['last'].to_list()))
     written = 0
+    errors = []
     for ticker in [t.upper() for t in tickers]:
         start = last.get(ticker, dt.date(2000, 1, 1))
         try:
             new = fetch_index(ticker, start, session=session)
         except Exception as e:
             logger.warning(f"[WARN] {ticker}: не удалось обновить индекс — {e}")
+            errors.append(e)
             continue
         if new.is_empty():
             continue
@@ -718,6 +724,8 @@ def update_indexes(tickers: Iterable[str] = DEFAULT_INDEXES, session: Optional[r
         delta = _changed_rows(old.select(new.columns) if old.height else pl.DataFrame(), new, ['date', 'ticker'])
         if delta.height:
             written += lake.write('indexes', delta)
+    if errors:
+        raise ExceptionGroup("Ошибки загрузки инструментов", errors)
     logger.info(f"[OK] Индексы: записано строк {written}")
     return written
 
