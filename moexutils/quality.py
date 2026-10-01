@@ -1,5 +1,6 @@
 """
-Проверка качества данных в хранилище: акции, индексы и все рынки history.DATASETS.
+Проверка качества данных: акции, индексы, рынки history.DATASETS и свежесть
+ставок, кривой, параметров бумаг, составов индексов и денежных потоков.
 
 data_quality_report() — замечания (check, object, detail) по торговому календарю
 IMOEX; quality_summary() — одна строка итога для лога. Шаг 3 update_data.py; история прогонов
@@ -15,7 +16,7 @@ import numpy as np
 import polars as pl
 import requests
 
-from moexutils import history
+from moexutils import cashflows, history, indices, rates, refdata
 from moexutils import lake
 from moexutils import stocks
 
@@ -85,6 +86,76 @@ def find_dividend_gap_candidates(df: pl.DataFrame, div_folder: Optional[str] = N
     return pl.DataFrame(rows, schema=empty.schema) if rows else empty
 
 
+def freshness_report(today=None) -> pl.DataFrame:
+    """Офлайн-проверка свежести дополнительных наборов; today — дата проверки.
+
+    Отсутствующий целиком набор пропускается. Для наборов с редкими изменениями
+    проверяется load_state, для выплат — успешные ежедневные и еженедельные выгрузки.
+    """
+    day = stocks._as_date(today) if today is not None else dt.date.today()
+    return _freshness_report(trading_calendar(), day)
+
+
+def _freshness_report(calendar: list[dt.date], today: dt.date) -> pl.DataFrame:
+    rows = []
+
+    def add(check, obj, detail):
+        rows.append({'check': check, 'object': obj, 'detail': detail})
+
+    def stale(check, obj, last, expected):
+        if expected is None:
+            return
+        if last is None:
+            add(check, obj, f"нет данных или отметки успешного обновления; ожидается дата не раньше {expected:%Y-%m-%d}")
+        elif last < expected:
+            add(check, obj, f"последняя дата {last:%Y-%m-%d}, ожидается не раньше {expected:%Y-%m-%d}")
+
+    names = set(lake.tables())
+    state = {}
+    if 'load_state' in names:
+        state = dict(lake.query('SELECT name, date FROM lake.load_state').iter_rows())
+    # Данные текущего дня еще могут быть промежуточными. Календарь IMOEX —
+    # ориентир, а не независимый календарь рабочих дней Банка России.
+    cal = sorted({d for d in calendar if d < today})
+    weekdays = [d for d in cal if d.weekday() < 5]
+    latest = cal[-1] if cal else None
+    if 'ruonia' in names:
+        last = lake.query('SELECT max(date) AS d FROM lake.ruonia')['d'][0]
+        # Ночной прогон: ставка за предыдущий рабочий день может еще не выйти.
+        expected = weekdays[-2] if len(weekdays) >= 2 else None
+        stale('ruonia_stale', 'RUONIA', last, expected)
+
+    if set(rates.ZCYC_TABLES.values()) & names:
+        skip = history.empty_dates('zcyc')
+        expected_days = [d for d in cal if d >= rates.ZCYC_START and d not in skip]
+        expected = expected_days[-1] if expected_days else None
+        for table in rates.ZCYC_TABLES.values():
+            last = lake.query(f'SELECT max(date) AS d FROM lake.{table}')['d'][0] if table in names else None
+            stale('zcyc_stale', table, last, expected)
+
+    if refdata.TABLE in names or refdata.TABLE in state:
+        # Загрузчик параметров опрашивает только будни и хранит лишь изменения.
+        expected_days = [d for d in weekdays if d >= refdata.START]
+        expected = expected_days[-1] if expected_days else None
+        stale('refdata_stale', refdata.TABLE, state.get(refdata.TABLE), expected)
+
+    if indices.TABLE in names or any(n.startswith(indices.TABLE + ':') for n in state):
+        for indexid in indices.CORE_INDEXES:
+            stale('index_weights_stale', indexid, state.get(indices.TABLE + ':' + indexid), latest)
+
+    prefixes = (cashflows.UPDATE_STATE_PREFIX, cashflows.FUTURE_STATE_PREFIX)
+    if any(b.table in names for b in cashflows.BLOCKS.values()) or any(n.startswith(prefixes) for n in state):
+        # Планировщик запускает обновление вт–сб; полный будущий горизонт — по субботам.
+        daily = next(today - dt.timedelta(days=i) for i in range(7)
+                     if (today - dt.timedelta(days=i)).weekday() in (1, 2, 3, 4, 5))
+        weekly = today - dt.timedelta(days=(today.weekday() - 5) % 7)
+        for b in cashflows.BLOCKS.values():
+            stale('cashflows_stale', b.table, state.get(cashflows.UPDATE_STATE_PREFIX + b.table), daily)
+            stale('cashflows_future_stale', b.table,
+                  state.get(cashflows.FUTURE_STATE_PREFIX + b.table), weekly)
+    return pl.DataFrame(rows, schema=ISSUE_SCHEMA)
+
+
 def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = None,
                         div_days: Optional[int] = 120, adj_jump: float = 0.25,
                         check_iss: bool = False,
@@ -98,7 +169,8 @@ def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = No
     stock_gaps, adj_missing, adj_jump (артефакт корректировки: изменение adj_close
     расходится с ценой), price_spike (скачок с разворотом), dividend_skipped,
     dividend_gap (см. find_dividend_gap_candidates), bonds_stale/bonds_gaps,
-    futures_stale/futures_gaps.
+    futures_stale/futures_gaps; ruonia_stale, zcyc_stale, refdata_stale,
+    index_weights_stale, cashflows_stale и cashflows_future_stale.
 
     Returns: DataFrame (check, object, detail); пустой — замечаний нет.
     """
@@ -108,6 +180,7 @@ def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = No
         issues.append({'check': check, 'object': obj, 'detail': detail})
 
     cal = trading_calendar()
+    issues.extend(_freshness_report(cal, dt.date.today()).to_dicts())
     if not cal:
         add('calendar', 'IMOEX', 'нет истории IMOEX в хранилище — проверки по календарю невозможны')
         return pl.DataFrame(issues, schema=ISSUE_SCHEMA)

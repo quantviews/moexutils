@@ -53,6 +53,8 @@ BLOCKS = {
 }
 DATE_COLS = ('coupondate', 'recorddate', 'startdate', 'amortdate', 'offerdate', 'offerdatestart', 'offerdateend')
 WINDOW_BACK, WINDOW_FORWARD = 10, 60
+UPDATE_STATE_PREFIX = 'cashflows:'
+FUTURE_STATE_PREFIX = 'cashflows_future:'
 
 
 def fetch_block(block: str, start=None, till=None, session: Optional[requests.Session] = None,
@@ -112,6 +114,12 @@ def update_cashflows(mode: str = 'window', session: Optional[requests.Session] =
                 stale = None
             delta = lake.changed_rows(old, new, b.key)   # пишутся только новые и изменившиеся
         out[b.table] = lake.write(b.table, delta, delete=stale)
+        # Даты выплат (в том числе будущих) не показывают свежесть выгрузки.
+        # Отмечаем каждый успешно синхронизированный блок, даже пустой.
+        names = [UPDATE_STATE_PREFIX + b.table]
+        if mode in ('future', 'full'):
+            names.append(FUTURE_STATE_PREFIX + b.table)
+        lake.write('load_state', pl.DataFrame({'name': names, 'date': [today] * len(names)}))
         gone = 0 if stale is None else stale.height
         logger.info(f"[OK] {b.table}: записано {out[b.table]}" + (f", удалено отмененных {gone}" if gone else ""))
     return out
