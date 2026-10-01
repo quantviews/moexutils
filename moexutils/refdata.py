@@ -37,22 +37,10 @@ def fetch_snapshot(date, session: Optional[requests.Session] = None, max_pages: 
     """Срез параметров всех бумаг на дату (все страницы по 1000); date — колонка Date."""
     session = session or iss.make_session()
     day = dt.date.fromisoformat(str(date)[:10])
-    pages, offset = [], 0
-    for _ in range(max_pages):
-        resp = session.get(URL, params={'date': day.isoformat(), 'start': offset})
-        resp.raise_for_status()
-        data = resp.json()
-        page = iss.to_frame(data.get('securities'))
-        if page.is_empty():
-            break
-        pages.append(page)
-        offset += page.height
-        cursor = iss.to_frame(data.get('securities.cursor'))
-        if cursor.is_empty() or offset >= int(cursor['TOTAL'][0]):
-            break
-    if not pages:
-        return pl.DataFrame()
-    df = pl.concat(pages, how='diagonal_relaxed').unique('secid', keep='last', maintain_order=True)
+    df = iss.fetch_pages(URL, 'securities', {'date': day.isoformat()}, session, max_pages)
+    if df.is_empty():
+        return df
+    df = df.unique('secid', keep='last', maintain_order=True)
     return (df.with_columns(pl.lit(day).alias('date'))
               .select(['date', 'secid', *[c for c in df.columns if c not in ('secid', *_DROPPED)]]))
 

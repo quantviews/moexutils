@@ -47,22 +47,10 @@ def fetch_weights(indexid: str, date, session: Optional[requests.Session] = None
     """Состав индекса на дату (все страницы): date, indexid, ticker, secids, shortnames, weight, ..."""
     session = session or iss.make_session()
     day = dt.date.fromisoformat(str(date)[:10])
-    pages, offset = [], 0
-    for _ in range(max_pages):
-        resp = session.get(f"{URL}/{indexid}.json", params={'date': day.isoformat(), 'start': offset, 'limit': 100})
-        resp.raise_for_status()
-        data = resp.json()
-        page = iss.to_frame(data.get('analytics'))
-        if page.is_empty():
-            break
-        pages.append(page)
-        offset += page.height
-        cursor = iss.to_frame(data.get('analytics.cursor'))
-        if cursor.is_empty() or offset >= int(cursor['TOTAL'][0]):
-            break
-    if not pages:
-        return pl.DataFrame()
-    df = pl.concat(pages, how='diagonal_relaxed')
+    df = iss.fetch_pages(f"{URL}/{indexid}.json", 'analytics',
+                         {'date': day.isoformat(), 'limit': 100}, session, max_pages)
+    if df.is_empty():
+        return df
     # ISS на дату без расчета может отдать ближайшую другую дату — берем только запрошенную
     df = df.with_columns(pl.col('tradedate').str.to_date('%Y-%m-%d').alias('date')).filter(pl.col('date') == day)
     return (df.drop('tradedate').select(['date', 'indexid', 'ticker', *[c for c in df.columns

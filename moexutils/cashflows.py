@@ -64,28 +64,8 @@ def fetch_block(block: str, start=None, till=None, session: Optional[requests.Se
         params['from'] = str(start)[:10]
     if till is not None:
         params['till'] = str(till)[:10]
-    pages, offset = [], 0
-    for _ in range(max_pages):
-        data = session.get(URL, params={**params, 'start': offset})
-        data.raise_for_status()
-        data = data.json()
-        payload = data.get(block)
-        if not isinstance(payload, dict) or 'columns' not in payload or 'data' not in payload:
-            raise ValueError(f"ISS: отсутствует или поврежден блок {block}")
-        page = iss.to_frame(payload)
-        cursor = iss.to_frame(data.get(f"{block}.cursor"))
-        total = int(cursor['TOTAL'][0]) if cursor.height and 'TOTAL' in cursor.columns else None
-        if page.is_empty():
-            if total is not None and offset < total:
-                raise ValueError(f"ISS: неполная выдача {block}: {offset}/{total}")
-            break
-        pages.append(page)
-        offset += page.height
-        if total is not None and offset >= total:
-            break
-    else:
-        raise ValueError(f"ISS: превышен лимит страниц {block}; выдача неполная")
-    return prepare(block, pl.concat(pages, how='diagonal_relaxed')) if pages else pl.DataFrame()
+    df = iss.fetch_pages(URL, block, params, session, max_pages)
+    return prepare(block, df) if df.height else df
 
 
 def prepare(block: str, df: pl.DataFrame) -> pl.DataFrame:

@@ -105,6 +105,71 @@ def records_to_frame(records: list[dict]) -> pl.DataFrame:
     return pl.DataFrame(series)
 
 
+def fetch_pages(url: str, block: str, params: dict, session: requests.Session,
+                max_pages: int) -> pl.DataFrame:
+    """Полная выдача блока ISS; неполная или поврежденная выдача вызывает ValueError.
+
+    Без TOTAL запрашиваем страницы до подтвержденной пустой страницы. Если
+    TOTAL был получен, он остается обязательной границей даже без следующего cursor.
+    """
+    if max_pages <= 0:
+        raise ValueError("max_pages должен быть положительным")
+    pages, offset, total = [], 0, None
+
+    def integer(value):
+        try:
+            result = int(value)
+            if isinstance(value, bool) or float(value) != result or result < 0:
+                raise ValueError
+            return result
+        except (TypeError, ValueError, OverflowError) as e:
+            raise ValueError(f"ISS: поврежден cursor блока {block}") from e
+
+    for _ in range(max_pages):
+        resp = session.get(url, params={**params, 'start': offset})
+        resp.raise_for_status()
+        data = resp.json()
+        payload = data.get(block) if isinstance(data, dict) else None
+        if (not isinstance(payload, dict) or not isinstance(payload.get('columns'), list)
+                or not isinstance(payload.get('data'), list)
+                or any(not isinstance(row, list) or len(row) != len(payload['columns'])
+                       for row in payload['data'])
+                or (payload['data'] and not payload['columns'])):
+            raise ValueError(f"ISS: отсутствует или поврежден блок {block}")
+        cursor = data.get(f'{block}.cursor')
+        if cursor is not None:
+            if (not isinstance(cursor, dict) or not isinstance(cursor.get('columns'), list)
+                    or not isinstance(cursor.get('data'), list)
+                    or len(cursor['data']) > 1
+                    or any(not isinstance(row, list) or len(row) != len(cursor['columns'])
+                           for row in cursor['data'])):
+                raise ValueError(f"ISS: поврежден cursor блока {block}")
+            if cursor['data']:
+                fields = dict(zip(cursor['columns'], cursor['data'][0]))
+                if 'INDEX' in fields and integer(fields['INDEX']) != offset:
+                    raise ValueError(f"ISS: неверное смещение страницы {block}: ожидалось {offset}")
+                if 'TOTAL' in fields:
+                    count = integer(fields['TOTAL'])
+                    if total is not None and count != total:
+                        raise ValueError(f"ISS: TOTAL изменился при загрузке {block}: {total} -> {count}")
+                    total = count
+        page = to_frame(payload)
+        if page.is_empty():
+            if total is not None and offset != total:
+                raise ValueError(f"ISS: неполная выдача {block}: {offset}/{total}")
+            break
+        pages.append(page)
+        offset += page.height
+        if total is not None:
+            if offset > total:
+                raise ValueError(f"ISS: число строк {block} превышает TOTAL: {offset}/{total}")
+            if offset == total:
+                break
+    else:
+        raise ValueError(f"ISS: превышен лимит страниц {block}; выдача неполная")
+    return pl.concat(pages, how='diagonal_relaxed') if pages else pl.DataFrame()
+
+
 def history_day(market_path: str, date, session: requests.Session,
                 max_pages: int = 1000) -> pl.DataFrame:
     """
@@ -114,24 +179,9 @@ def history_day(market_path: str, date, session: requests.Session,
     """
     url = f"{ISS_URL}/history/engines/{market_path}/securities.json"
     day = date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date)
-    pages, offset = [], 0
-    for _ in range(max_pages):  # защита от бесконечного цикла
-        resp = session.get(url, params={'date': day, 'start': offset})
-        resp.raise_for_status()
-        data = resp.json()
-        page = to_frame(data.get('history'))
-        if page.is_empty():
-            break
-        pages.append(page)
-        offset += page.height
-        cursor = to_frame(data.get('history.cursor'))
-        if cursor.is_empty() or 'TOTAL' not in cursor.columns:
-            break
-        if offset >= int(cursor['TOTAL'][0]):
-            break
-    if not pages:
-        return pl.DataFrame()
-    df = pl.concat(pages, how='diagonal_relaxed')
+    df = fetch_pages(url, 'history', {'date': day}, session, max_pages)
+    if df.is_empty():
+        return df
     return (df.with_columns(pl.col('TRADEDATE').str.to_date('%Y-%m-%d').alias('date'))
               .drop('TRADEDATE')
               .select(['date', *[c for c in df.columns if c != 'TRADEDATE']]))
@@ -150,22 +200,9 @@ def security_history(market_path: str, secid: str, start, end=None,
     params = {'from': _day(start), 'till': _day(end) if end is not None else _day(_today())}
     if columns:
         params['history.columns'] = ','.join(dict.fromkeys(['TRADEDATE', *columns]))
-    pages, offset = [], 0
-    for _ in range(max_pages):
-        resp = session.get(url, params={**params, 'start': offset})
-        resp.raise_for_status()
-        data = resp.json()
-        page = to_frame(data.get('history'))
-        if page.is_empty():
-            break
-        pages.append(page)
-        offset += page.height
-        cursor = to_frame(data.get('history.cursor'))
-        if cursor.is_empty() or 'TOTAL' not in cursor.columns or offset >= int(cursor['TOTAL'][0]):
-            break
-    if not pages:
-        return pl.DataFrame()
-    df = pl.concat(pages, how='diagonal_relaxed')
+    df = fetch_pages(url, 'history', params, session, max_pages)
+    if df.is_empty():
+        return df
     return (df.with_columns(pl.col('TRADEDATE').str.to_date('%Y-%m-%d').alias('date'))
               .drop('TRADEDATE'))
 
