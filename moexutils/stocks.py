@@ -356,7 +356,7 @@ def load_dividends(ticker: str, div_folder: Optional[str] = None) -> pl.DataFram
                          schema_overrides={'closing_date': pl.Utf8, 'dividend_value': pl.Float64})
     except Exception as e:
         logger.error(f"{ticker}: не удалось прочитать дивиденды {path} — {e}")
-        return pl.DataFrame(schema=schema)
+        raise ValueError(f"{ticker}: поврежден или недоступен файл дивидендов {path}") from e
     return (df.with_columns(pl.col('closing_date').str.to_date('%Y-%m-%d', strict=False))
             .filter(pl.col('closing_date').is_not_null() & (pl.col('dividend_value') > 0))
             .sort('closing_date'))
