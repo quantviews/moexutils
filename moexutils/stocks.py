@@ -45,6 +45,7 @@ KEY_RATE_FILE = os.path.join(BASE_DIR, "metadata", "key_rate.csv")
 SECTORS_FILE = os.path.join(BASE_DIR, "metadata", "sectors.csv")
 EXTERNAL_SPLITS_FILE = os.path.join(BASE_DIR, "..", "dividends", "metadata", "splits.json")
 DIVIDENDS_FOLDER = os.path.join(BASE_DIR, "..", "dividends", "data")
+DIVIDEND_SUPPLEMENTS_FILE = os.path.join(BASE_DIR, "metadata", "dividend_supplements.csv")
 
 SHARES_MARKET = 'stock/markets/shares'
 INDEX_MARKET = 'stock/markets/index'
@@ -346,19 +347,33 @@ def ex_dividend_pos(dates: list, record_date) -> int:
 
 
 def load_dividends(ticker: str, div_folder: Optional[str] = None) -> pl.DataFrame:
-    """Дивиденды тикера из CSV проекта dividends: closing_date, dividend_value (> 0), по дате."""
+    """External dividends plus local fallback dates; external rows take priority.
+
+    Preserve multiple external payments on one date. A dated external zero also
+    supersedes a supplement. Supplements are in the current-share basis.
+    """
     path = os.path.join(div_folder or DIVIDENDS_FOLDER, f"{ticker}.csv")
     schema = {'closing_date': pl.Date, 'dividend_value': pl.Float64}
-    if not os.path.exists(path):
-        return pl.DataFrame(schema=schema)
+    df = pl.DataFrame(schema=schema)
     try:
-        df = pl.read_csv(path, columns=['closing_date', 'dividend_value'],
-                         schema_overrides={'closing_date': pl.Utf8, 'dividend_value': pl.Float64})
+        if os.path.exists(path):
+            df = (pl.read_csv(path, columns=['closing_date', 'dividend_value'],
+                              schema_overrides={'closing_date': pl.Utf8, 'dividend_value': pl.Float64})
+                  .with_columns(pl.col('closing_date').str.to_date('%Y-%m-%d', strict=False)))
+        if os.path.exists(DIVIDEND_SUPPLEMENTS_FILE):
+            local = (pl.read_csv(DIVIDEND_SUPPLEMENTS_FILE,
+                                schema_overrides={'closing_date': pl.Utf8, 'dividend_value': pl.Float64})
+                     .filter(pl.col('ticker') == ticker)
+                     .with_columns(pl.col('closing_date').str.to_date('%Y-%m-%d'))
+                     .select('closing_date', 'dividend_value'))
+            if local.select('closing_date').is_duplicated().any():
+                raise ValueError('Duplicate local dividend date')
+            local = local.join(df.select('closing_date').unique(), on='closing_date', how='anti')
+            df = pl.concat([df, local])
     except Exception as e:
-        logger.error(f"{ticker}: не удалось прочитать дивиденды {path} — {e}")
-        raise ValueError(f"{ticker}: поврежден или недоступен файл дивидендов {path}") from e
-    return (df.with_columns(pl.col('closing_date').str.to_date('%Y-%m-%d', strict=False))
-            .filter(pl.col('closing_date').is_not_null() & (pl.col('dividend_value') > 0))
+        logger.error(f"{ticker}: не удалось прочитать дивиденды — {e}")
+        raise ValueError(f"{ticker}: поврежден или недоступен файл дивидендов") from e
+    return (df.filter(pl.col('closing_date').is_not_null() & (pl.col('dividend_value') > 0))
             .sort('closing_date'))
 
 
