@@ -63,6 +63,13 @@ TABLE_KEYS = {
     # служебная: до какой даты обработан набор, если по данным этого не видно
     'load_state': ['name'],
     'futures_contracts': ['secid'],
+    'futures_parameter_observations': ['SECID', 'BOARDID', 'observed_at'],
+    'futures_description_observations': ['secid', 'observed_at'],
+    'futures_risk_limits': ['date', 'assetcode', 'updatetime', 'observed_at'],
+    'futures_staticparams': ['date', 'row_hash', 'observed_at'],
+    'futures_staticparamskeyterm': ['date', 'row_hash', 'observed_at'],
+    'futures_rclimits': ['date', 'row_hash', 'observed_at'],
+    'futures_specification_editions': ['asset_candidate', 'source_url', 'source_valid_from', 'reviewed_on'],
     'options_series': ['name'],
     'options_contracts': ['secid', 'series_name'],
     'open_position_assets': ['market', 'asset'],

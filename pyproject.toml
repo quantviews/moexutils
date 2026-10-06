@@ -27,6 +27,9 @@ dev = ["pytest", "ruff"]
 [tool.setuptools]
 packages = ["moexutils"]
 
+[tool.setuptools.package-data]
+moexutils = ["specification_sources.json"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # корень проекта в путях импорта: тесты импортируют скрипт update_data.py

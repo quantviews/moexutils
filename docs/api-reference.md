@@ -1,5 +1,8 @@
 # Справочник API
 
+Проверено по коду 06.10.2026. Поля источника и глубина наблюдений параметров
+фьючерсов описаны отдельно в [futures-parameters.md](futures-parameters.md).
+
 Пакет `moexutils` (`pip install -e .`), модули импортируются из него: `from moexutils import stocks, history, lake`.
 
 | Модуль | Что в нем |
@@ -10,15 +13,19 @@
 | `refdata` | Параметры бумаг по датам (объем выпуска, листинг, номинал, купон) с 01.04.2024 |
 | `indices` | Состав и веса индексов по датам |
 | `openpositions` | Дневные позиции физлиц/юрлиц по фьючерсам и опционам |
+| `options` | Реестр серий и контрактов опционов, страйки, Call/Put, экспирации и базовые активы |
 | `cashflows` | Денежные потоки облигаций: купоны, амортизации, оферты |
 | `contracts` | Реестр фьючерсных контрактов, перекодировка после повторного листинга, непрерывные ряды |
+| `futures_rms` | Архивы дополнительных параметров RMS; [схема и ограничения](futures-parameters.md) |
+| `specification_editions` | Кандидаты редакций документов, не исторические параметры контрактов |
+| `futures_params` | [Наблюдения параметров/ГО, карточки контрактов и архив ставок риска](futures-parameters.md); чтение без сетевых загрузок |
 | `quality` | Проверка качества данных, история прогонов |
 | `lake` | Хранилище DuckLake: подключение, SQL-запросы с результатом в polars, запись и синхронизация по ключу, снимки, представления, обслуживание |
 | `iss` | Доступ к ISS: HTTP-сессия, разбор ответов в polars |
 | `bondmath` | Доходность, дюрация, выпуклость облигации |
 | `backup`, `notify` | Копия каталога хранилища, уведомления Windows |
 
-Все функции чтения возвращают **polars** DataFrame; pandas в проекте не используется. Функции чтения принимают `as_of` — данные на момент снимка хранилища (см. [`lake.ref`](#хранилище-ducklake-lake)). Модель таблиц — [data-model.md](data-model.md), гарантии для потребителей — [data-contract.md](data-contract.md), все поля биржи — [iss-columns.md](iss-columns.md). Скрипт обновления — `update_data.py` (раздел в конце).
+Все функции чтения возвращают **polars** DataFrame; pandas в проекте не используется. Функции с параметром `as_of` в сигнатуре позволяют читать данные на момент снимка хранилища (см. [`lake.ref`](#хранилище-ducklake-lake)). Модель таблиц — [data-model.md](data-model.md), гарантии для потребителей — [data-contract.md](data-contract.md), все поля биржи — [iss-columns.md](iss-columns.md). Скрипт обновления — `update_data.py` (раздел в конце).
 
 ## Константы и инфраструктура
 
@@ -240,7 +247,7 @@ history.read_securities(dataset='bonds', as_of=None) -> pl.DataFrame
 
 **Облигации** (`bonds`). Доски: старые EQOB/EQNB/EQOS (до 2016–2020), TQOB (гособлигации), TQCB (корпоративные), валютные TQOD/TQOE/TQOY/TQUD, TQRD. Колонки ISS: цены (`OPEN`, `LOW`, `HIGH`, `CLOSE`, `WAPRICE`, `LEGALCLOSEPRICE`), доходности (`YIELDCLOSE`, `YIELDATWAP`, `YIELDTOOFFER`), `DURATION` (дни), НКД `ACCINT`, `ZSPREAD`, `BEICLOSE`/`IRICPICLOSE` для ОФЗ-ИН, купон (`COUPONPERCENT`, `COUPONVALUE`), номинал и валюта, оферты и call/put-даты, `BONDTYPE`/`BONDSUBTYPE`, обороты. Выпуск может торговаться на нескольких досках в один день — для анализа фильтруйте `boards` (например `['TQOB', 'TQCB']`) или читайте представления `bonds_ofz` / `bonds_corporate`. Первичная выгрузка — около 95 тыс. запросов, 6–7 часов.
 
-**Фьючерсы** (`futures`). `OPEN`, `LOW`, `HIGH`, `CLOSE`, расчетная цена `SETTLEPRICE`, открытый интерес `OPENPOSITION` и `OPENPOSITIONVALUE`, `VOLUME`, `VALUE`, `NUMTRADES`, `SWAPRATE`, базовый актив `ASSETCODE`, `SHORTNAME`. Истекшие контракты остаются в истории. Коды контрактов повторяются раз в 10 лет, и при повторном листинге ISS **задним числом переименовывает старый контракт**: `SiZ5` декабря 2015 года теперь `SiZ5_2015` — и в реестре, и в истории торгов. Строки, загруженные до переименования, переводит на новый код `contracts.remap_futures_secids` (шаг 1e), поэтому `SECID` однозначно определяет контракт и совпадает с `futures_contracts.secid`. Счетчик `TOTAL` в ответе ISS бывает больше числа реально отдаваемых строк — особенность ISS. Первичная выгрузка — около 25 тыс. запросов.
+**Фьючерсы** (`futures`). `OPEN`, `LOW`, `HIGH`, `CLOSE`, расчетная цена `SETTLEPRICE`, открытый интерес `OPENPOSITION` и `OPENPOSITIONVALUE`, `VOLUME`, `VALUE`, `NUMTRADES`, `SWAPRATE`, базовый актив `ASSETCODE`, `SHORTNAME`. Истекшие контракты остаются в истории. Коды контрактов повторяются раз в 10 лет, и при повторном листинге ISS **задним числом переименовывает старый контракт**: `SiZ5` декабря 2015 года теперь `SiZ5_2015` — и в реестре, и в истории торгов. Строки, загруженные до переименования, переводит на новый код `contracts.remap_futures_secids` (шаг 1e), но полное покрытие реестром не гарантировано: 06.10.2026 подтверждены 131 SECID истории без записи `futures_contracts`. Для соединений используйте LEFT JOIN; карточки этих кодов доступны в `futures_description_observations`. Если выдача не достигает объявленного `TOTAL`, загрузчик считает ее неполной и возвращает ошибку; это не принимается за успешную выгрузку. Первичная выгрузка — около 25 тыс. запросов.
 
 **Прочие рынки** (`shares`, `indexes_all`, `currency`, `currency_fixings`) — шаг 1f; реестр `shares_securities` дополняется там же. Особенности данных — [data-model.md](data-model.md#рынки-все-инструменты-за-дату-shares-indexes_all-currency-currency_fixings).
 
@@ -383,6 +390,94 @@ contracts.read_continuous(assets=None, start=None, end=None, as_of=None) -> pl.D
 
 ---
 
+## Параметры фьючерсов (`futures_params`)
+
+```python
+from moexutils import futures_params
+
+futures_params.read_observations(secid, descriptions=False) -> pl.DataFrame
+futures_params.read_risk_limits(start, end, asset=None) -> pl.DataFrame
+futures_params.capture_current() -> pl.DataFrame
+futures_params.capture_descriptions(secids, refresh=False, workers=4) -> int
+futures_params.risk_bounds() -> tuple[date, date]
+futures_params.update_risk_limits(start=None, end=None, workers=4) -> int
+futures_params.update() -> None
+```
+
+Функции `read_*` только читают DuckLake. `read_observations` возвращает все
+полученные срезы точного SECID; `descriptions=True` выбирает карточки.
+`read_risk_limits` возвращает последний полученный ответ на каждую дату,
+включая все его различные `updatetime`; даты границ включены. Отсутствующие
+таблицы вызывают ошибку DuckDB, сетевые загрузки при чтении не запускаются.
+
+Функции загрузки требуют сети, доступа к `MOEX_DATA_ROOT` и роли записи.
+`capture_descriptions` по умолчанию использует JSON-кэш, `refresh=True`
+запрашивает новые наблюдения. `risk_bounds` читает заявленные границы ISS.
+`update_risk_limits` с явным `start` обрабатывает календарный диапазон;
+без него догружает от последней сохраненной даты и перепроверяет последние
+семь дней. Возвращаемое число строк — обработанные записи, не обязательно
+новые ключи. `update()` подключен к шагу 1e и отключается `--no-futures`.
+
+Полная первичная выгрузка:
+
+```bash
+python -m moexutils.futures_params --backfill-risk --all-descriptions --workers 4
+```
+
+Ставки риска по активу не равны историческому рублевому ГО контракта.
+Ни `observed_at`, ни IMTIME не устанавливают историческую применимость всех
+полей спецификации. Даты `effective_from/effective_to` текущих параметров
+оставлены неизвестными. Для этих функций нет параметра `as_of`.
+
+## Покрытие и аудит фьючерсов (`futures_audit`)
+
+`read_coverage(secid=None, year=None)` возвращает polars по контрактам/годам.
+`report()` возвращает `(metadata, sections)` из одной транзакции чтения,
+`export(output=None)` сохраняет JSON в папку и возвращает `Path`.
+Сетевых запросов и изменений DuckLake нет; `export` записывает только файл отчета.
+Отсутствующие таблицы вызывают ошибку. Отчет включен в ночной шаг 1e,
+`--no-futures` отключает его вместе с обновлением фьючерсов.
+[Состав разделов, поля и ограничения](futures-audit.md).
+
+## Архивы риск-параметров (`futures_rms`)
+
+```python
+from moexutils import futures_rms
+
+futures_rms.bounds(dataset) -> tuple[date, date]
+futures_rms.update_dataset(dataset, backfill=False, workers=4) -> int
+futures_rms.update(backfill=False, workers=4) -> None
+futures_rms.read(dataset, start, end, asset=None) -> pl.DataFrame
+```
+
+`dataset`: только `staticparams`, `staticparamskeyterm`, `rclimits`.
+`bounds` обращается к ISS; `update_dataset` возвращает число обработанных строк,
+не обязательно новых ключей. `backfill=True` проверяет все календарные даты
+заявленного архива; обычное обновление догружает хвост и перепроверяет последние
+семь дней. Все страницы ответа сохраняются, неполная выдача вызывает ошибку.
+`read` читает только DuckLake, границы включены, отбирается последнее наблюдение
+на дату со всеми сроками, категориями и версиями строк. Параметра `as_of` нет.
+При отсутствии таблицы возникает ошибка DuckDB. Ночное обновление — шаг 1e.
+Это входные параметры риск-модели, не рублевое ГО контракта.
+
+## Редакции документов (`specification_editions`)
+
+```python
+from moexutils import specification_editions
+
+specification_editions.reviewed_editions() -> pl.DataFrame
+specification_editions.install() -> int
+specification_editions.read_editions(asset=None, on=None) -> pl.DataFrame
+```
+
+`reviewed_editions` читает включенный в пакет JSON и проверяет интервалы внутри
+каждого источника. `install` явно записывает его в DuckLake, без сети; автоматически
+ночью не вызывается. `read_editions` только читает таблицу, `on` фильтрует по датам
+перечня включительно. Возвращает кандидатов: открытые окончания и пересечения
+разных семейств не доказывают действие документа сегодня. Это **не API параметров
+контракта на дату**. У всех исходных 41 записей применимость не подтверждена.
+Источники, ключи, поля и ограничения — [в описании данных](futures-parameters.md).
+
 ## Проверка качества данных (`quality`)
 
 ```python
@@ -474,6 +569,12 @@ python update_data.py --history-init shares,indexes_all,currency,currency_fixing
 Первой строкой скрипт пишет корень данных (`Данные: F:\moex-data`) — по ней в логе видно, подхватилась ли `MOEX_DATA_ROOT`. Вывод идет в UTF-8 и при перенаправлении в файл. Из кода: `from update_data import main; main(...)` (из папки проекта) — параметры повторяют опции (`do_update`, `do_indexes`, `do_bonds`, `do_key_rate`, `do_futures`, `do_markets`, `do_rates`, `do_adj_close`, `do_market_cap`, `do_derived`, `do_check`, `do_maintenance`, `do_backup`, `history_init`, `history_start`, `check_days`, `check_div_days`, `check_iss`, `rebuild`, `div_folder`, `metadata_file`, `index_tickers`, `mode`, `notify_on`); возвращает код выхода.
 
 ### Резервная копия каталога (`backup`)
+
+Копия каталога не содержит файлы `lake/` и `raw/`. Для восстановления нужен
+согласованный комплект; порядок копирования и ограничения — в
+[описании файлов](data-and-files.md). Перенос каталога данных на другой путь
+может требовать изменения путей в каталоге DuckLake: одной смены `MOEX_DATA_ROOT`
+недостаточно. Полное восстановление на другой машине пока не проверено.
 
 ```python
 backup.backup_catalog(folder=None, keep=14) -> str   # путь к новой копии

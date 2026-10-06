@@ -33,7 +33,7 @@ from typing import Optional
 
 import polars as pl
 
-from moexutils import backup, cashflows, contracts, history, indices, lake, notify, openpositions, options, quality, rates, refdata, stocks
+from moexutils import backup, cashflows, contracts, futures_audit, futures_params, futures_rms, history, indices, lake, notify, openpositions, options, quality, rates, refdata, stocks
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -204,6 +204,18 @@ def main(
                 contracts.update_continuous()
             except Exception as e:
                 _warn(warnings, f"Реестр и непрерывные ряды фьючерсов не обновлены — {e}")
+        try:
+            futures_params.update()
+        except Exception as e:
+            _warn(warnings, f"Параметры фьючерсов и ставки риска не обновлены — {e}")
+        try:
+            futures_rms.update()
+        except Exception as e:
+            _warn(warnings, f"Архивы риск-параметров FORTS не обновлены — {e}")
+        try:
+            print(f"[OK] Покрытие параметров и аудит FORTS: {futures_audit.export()}")
+        except Exception as e:
+            _warn(warnings, f"Отчет покрытия параметров FORTS не создан — {e}")
     else:
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
 

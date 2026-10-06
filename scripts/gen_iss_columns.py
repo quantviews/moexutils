@@ -34,7 +34,7 @@ CARDS = [
 ]
 # Карточки -> реестр хранилища
 CARD_TABLES = {'ОФЗ': 'bonds_securities', 'Корпоративная облигация': 'bonds_securities',
-               'Акция': 'shares_securities'}
+               'Акция': 'shares_securities', 'Фьючерс': 'futures_description_observations'}
 # Поля, которые в рабочих таблицах акций и индексов переименованы из ISS
 RENAMED = {
     'stocks': {'TRADEDATE': 'date', 'SECID': 'ticker', 'OPEN': 'open', 'LOW': 'low', 'HIGH': 'high',
@@ -96,12 +96,15 @@ def main():
 
 - **Поле** — код ISS; *(скрытое)* — поле есть в метаданных, но по умолчанию не отдается.
 - **Храним** — имя колонки в нашем хранилище, если поле сохраняется. Наборы «все
-  инструменты за дату» (`shares`, `bonds`, `indexes_all`, `futures`, `currency`,
+  инструменты за дату» (`shares`, `bonds`, `indexes_all`, `futures`, `options`, `currency`,
   `currency_fixings`) хранят все отдаваемые поля под теми же именами (дата торгов —
   `date`); рабочие таблицы `stocks` и `indexes` — свой набор полей в нижнем регистре
   (в колонке — `таблица.поле`).
 
 Модель наших таблиц — в [data-model.md](data-model.md).
+Наблюдения параметров фьючерсов, архив ставок риска и ограничения истории —
+в [futures-parameters.md](futures-parameters.md). Текущий блок `marketdata`
+фьючерсов сохраняется только в исходных JSON, не отдельной таблицей.
 
 ## Содержание
 
@@ -125,14 +128,18 @@ def main():
         for block, label in (('securities', 'Справочник инструментов торгов'),
                              ('marketdata', 'Текущие данные торгов')):
             if cur.get(block):
-                parts.append(f"\n### {label} (`/engines/{path}/securities`, блок `{block}`) — не храним\n\n"
-                             + columns_table(iss.to_frame(cur[block]), (), cols, show_hidden=False) + "\n")
+                saved = ('futures_parameter_observations',) if path == 'futures/markets/forts' and block == 'securities' else ()
+                status = 'lake.futures_parameter_observations (наблюдения с 06.10.2026)' if saved else 'не храним отдельной таблицей'
+                parts.append(f"\n### {label} (`/engines/{path}/securities`, блок `{block}`) — {status}\n\n"
+                             + columns_table(iss.to_frame(cur[block]), saved, cols, show_hidden=False) + "\n")
         print(f"[OK] {title}")
 
     parts.append('\n<a id="cards"></a>\n\n## Карточки бумаг (`/iss/securities/<SECID>`, блок `description`)\n\n'
                  'Набор полей зависит от вида бумаги. Карточки облигаций хранятся в '
                  '`lake.bonds_securities`, акций и фондов — в `lake.shares_securities` '
-                 '(все поля, имена как в ISS).\n')
+                 '(все поля, имена как в ISS). Карточки фьючерсов — в '
+                 '`lake.futures_description_observations`: выбранные поля в колонках, '
+                 'полный ответ в `raw_json`. Это наблюдения, не архив версий спецификаций.\n')
     for label, secid in CARDS:
         resp = session.get(f"{iss.ISS_URL}/securities/{secid}.json", params={'iss.only': 'description'}).json()
         desc = iss.to_frame(resp.get('description'))
@@ -142,6 +149,8 @@ def main():
         rows = [f"\n### {label} (пример: `{secid}`)\n", "| Поле | Описание | Тип | Храним |", "|---|---|---|---|"]
         for r in desc.iter_rows(named=True):
             keep = f"`{r['name']}`" if table and r['name'] in cols.get(table, set()) else ''
+            if label == 'Фьючерс' and table in cols:
+                keep = '`secid` (код запроса), `raw_json`' if r['name'] == 'SECID' else (keep or '`raw_json`')
             rows.append(f"| `{r['name']}` | {md_escape(r['title'])} | {md_escape(r.get('type'))} | {keep} |")
         parts.append("\n".join(rows) + "\n")
         print(f"[OK] карточка {secid}")
