@@ -614,3 +614,27 @@ notify.toast(title, text) -> bool   # показано ли
 ## Выгрузка опционов по датам
 
 `python scripts/backfill_options.py --start 2025-01-01 --end 2026-09-30 --workers 8` загружает все календарные даты диапазона (не только календарь IMOEX). Число потоков — от 1 до 8, по умолчанию 4; сеть работает параллельно, запись в DuckLake последовательно. Каждая дата сначала выгружается полностью с проверкой пагинации ISS, затем записывается в `lake.options`. Подтвержденные пустые даты записываются в `empty_dates`; при ошибке отдельной даты остальные сохраняются, команда заканчивается ошибкой и повторный запуск обрабатывает только недостающие даты. `end` должен быть раньше текущей даты, чтобы не сохранять промежуточные итоги. Ночная дозагрузка подключена к шагу 1f; таблица читается через `history.read('options', secids=..., boards=..., start=..., end=..., as_of=...)`.
+
+
+## `perpetual_audit` — проверка CNYRUBF
+
+- `read_cny_history() -> pl.DataFrame`: сырая история всех досок CNYRUBF, CNY и спредов; LEFT JOIN реестра и последней карточки.
+- `coverage(frame)`: NULL, нули, границы заполнения полей и дубли по инструменту/доске.
+- `candidate_gaps(frame, market_dates)`: кандидаты пропусков, не официальный календарь.
+- `compare_funding(history, candles)`: FUSR → SWAPRATE, FUSC → SWAPRATE_CURR; полное соединение, отсутствие/NULL отдельно, спорные значения не заменяются.
+- `illustrative_cashflow(previous_price, next_price, funding_per_unit, side, lot=1000)`: Decimal-арифметика без округления для явно заданных единиц руб./CNY; не расчет исторической клиентской ВМ.
+- `export(compare=False, output=None) -> Path`: локальный отчет в одной транзакции чтения, optional сверка двух досок CNYRUBF через ISS, без изменений таблиц.
+
+CLI: `python -m moexutils.perpetual_audit --compare-swaprates`.
+[Формат файлов, результаты и ограничения](perpetual-futures.md).
+
+
+## `perpetual_data` — входные данные оценочной ВМ
+
+`read_cny_bundle(report_dir) -> CnyBundle` читает конкретный пакет аудита версии 1,
+проверяет SHA-256 файлов и ключи. Поля: `history`, `descriptions`,
+`parameter_observations`, `candidate_gaps`, `metadata` (включая `estimation_policy`).
+`bundle.pair(dated_secid, *, board='RFUD', start=None, end=None)` возвращает polars
+с полным соединением обеих ног по дате и префиксами `dated_`/`perpetual_`.
+Отсутствующие ноги сохраняются; исходные цены и ставки не заполняются и не заменяются.
+[Контракт, статусы, единицы и пример потребителя](estimated-vm-contract.md).

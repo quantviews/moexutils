@@ -191,7 +191,7 @@ erDiagram
 
 ### Представление `lake.futures_swaprates` — ставки фондирования вечных фьючерсов
 
-Из `futures` для контрактов с экспирацией 2100-01-01 (`futures_contracts`): `date`, `SECID`, `asset_code`, `underlying_asset`, `swaprate_rub` (`SWAPRATE`, руб.), `swaprate_curr` (`SWAPRATE_CURR`, в валюте), `SETTLEPRICE`, `CLOSE`, `OPENPOSITION`, `VALUE`; с 05.12.2022. Это те же ставки, что на рынке ISS `swaprates` (доски FUSR и FUSC): дневное закрытие там совпадает с `SWAPRATE` в 94–97% дней, у рынка `swaprates` история короче (с 22.05.2023), отдельно он не хранится.
+Из `futures` для контрактов с экспирацией 2100-01-01 (`futures_contracts`): `date`, `SECID`, `asset_code`, `underlying_asset`, `swaprate_rub` (`SWAPRATE`, руб.), `swaprate_curr` (`SWAPRATE_CURR`, в валюте), `SETTLEPRICE`, `CLOSE`, `OPENPOSITION`, `VALUE`; с 05.12.2022. Это поля итогов FORTS, а не гарантированно идентичный архив свечей рынка `swaprates`. Сверка CNYRUBF 08.10.2026 выявила 34 расхождения FUSR/SWAPRATE на 863 общих заполненных датах и 2 расхождения FUSC/SWAPRATE_CURR на 18 датах. Дата экспирации 2100 сама по себе не подтверждает тип инструмента; представление также исключает строки без обоих значений и не заменяет сырую историю всех досок. Для полного исследования используйте [аудит бессрочных фьючерсов](perpetual-futures.md): LEFT JOIN, отдельная классификация и сохранение NULL. Отдельная таблица свечей в хранилище не создается.
 
 ### Представления `lake.bonds_ofz`, `lake.bonds_corporate`
 

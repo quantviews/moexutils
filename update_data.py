@@ -34,6 +34,7 @@ from typing import Optional
 import polars as pl
 
 from moexutils import backup, cashflows, contracts, futures_audit, futures_params, futures_rms, history, indices, lake, notify, openpositions, options, quality, rates, refdata, stocks
+from moexutils import perpetual_monitor
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -120,6 +121,7 @@ def main(
     run_id = dt.datetime.now()
     warnings: list[str] = []
     issues = None
+    perpetual_issues = pl.DataFrame(schema=quality.ISSUE_SCHEMA)
     print(f"Данные: {lake.DATA_ROOT}"
           + ("" if os.environ.get("MOEX_DATA_ROOT") else " (MOEX_DATA_ROOT не задана — папка проекта)"))
     if metadata_file is not None:
@@ -216,6 +218,11 @@ def main(
             print(f"[OK] Покрытие параметров и аудит FORTS: {futures_audit.export()}")
         except Exception as e:
             _warn(warnings, f"Отчет покрытия параметров FORTS не создан — {e}")
+        try:
+            report, perpetual_issues = perpetual_monitor.run()
+            print(f"[OK] Пакет и контроль CNY: {report}; замечаний: {perpetual_issues.height}")
+        except Exception as e:
+            _warn(warnings, f"Пакет и контроль CNY не выполнены — {e}")
     else:
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
 
@@ -294,6 +301,7 @@ def main(
         try:
             issues = quality.data_quality_report(days=check_days, div_folder=div_folder,
                                                  div_days=check_div_days, check_iss=check_iss)
+            issues = pl.concat([issues, perpetual_issues])
             for check, obj, detail in issues.head(60).iter_rows():
                 print(f"  [{check}] {obj}: {detail}")
             if issues.height > 60:
