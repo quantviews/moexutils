@@ -3,7 +3,7 @@
 Как устроены данные moexutils: где хранятся, какие таблицы и ключи, что означают колонки, как таблицы связаны между собой и с реестрами, какие шаги обновления их пишут. Полный список полей, которые отдает биржа по каждому рынку, — в [iss-columns.md](iss-columns.md); что гарантируется потребителям — в [data-contract.md](data-contract.md).
 
 Отчеты покрытия и P1 сохраняются вне таблиц, в `reports/futures-audit/`;
-[схема отчета и ограничения](futures-audit.md). Они не меняют историю цен.
+[схема отчета и ограничения](futures-audit.md). Они не меняют историю цен. Пакеты CNY в `reports/perpetual-audit/` — отдельные выгрузки по снимку, не новые таблицы DuckLake; их [версия, ключи, единицы и признаки качества](estimated-vm-contract.md) описаны отдельно.
 
 ## Слои хранения
 
@@ -419,7 +419,7 @@ WHERE h.date = DATE '2026-09-30';
 | 1b — индексы | `indexes` | дозагрузка с последней даты |
 | 1c — облигации | `bonds`, `bonds_securities`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек |
 | 1d — ключевая ставка | `metadata/key_rate.csv` | новые решения ЦБ |
-| 1e — фьючерсы | `futures`, `empty_dates`, `futures_contracts`, `futures_continuous`, `futures_parameter_observations`, `futures_description_observations`, `futures_risk_limits`, `futures_staticparams`, `futures_staticparamskeyterm`, `futures_rclimits` | хвост истории, ремонт дат, реестр и склейки; текущие параметры/ГО, карточки, архив ставок риска |
+| 1e — фьючерсы | `futures`, `empty_dates`, `futures_contracts`, `futures_continuous`, `futures_parameter_observations`, `futures_description_observations`, `futures_risk_limits`, `futures_staticparams`, `futures_staticparamskeyterm`, `futures_rclimits` | хвост истории, ремонт дат, реестр и склейки; параметры/ГО, карточки, архивы риска; отчеты FORTS и пакет/мониторинг CNY вне таблиц |
 | 1f — прочие рынки | `shares`, `indexes_all`, `currency`, `currency_fixings`, `shares_securities`, `options`, `options_series`, `options_contracts`, `empty_dates` | хвост истории, докачка пропусков, до 500 новых карточек бумаг рынка акций |
 | 1g — ставки, потоки, параметры бумаг | `ruonia`, `zcyc_params`, `zcyc_yields`, `zcyc_bonds`, `bond_coupons`, `bond_amortizations`, `bond_offers`, `stock_refdata`, `load_state` | RUONIA — вся история, записываются изменения; КБД и параметры бумаг — по вчерашний день (параметры — только изменения, последний обработанный день — в `load_state`); потоки — окно −10…+60 дней, по субботам все будущие |
 | 2 — пересчет | `stocks` | `adj_close` и капитализация после изменений дивидендов, срезов или реестра сплитов — только изменившиеся строки |

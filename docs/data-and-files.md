@@ -7,7 +7,8 @@
 ```
 moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
 ├── moexutils/               # пакет (pip install -e .): stocks, history, rates, refdata, cashflows,
-│                            # contracts, futures_params, futures_rms, specification_editions, options, openpositions, indices,
+│                            # contracts, futures_params, futures_rms, futures_audit, specification_editions,
+│                            # perpetual_audit, perpetual_data, perpetual_monitor, options, openpositions, indices,
 │                            # quality, lake, iss, bondmath, backup, notify (docs/README.md)
 ├── pyproject.toml           # пакет, зависимости, extras notebooks/dev, настройки pytest и ruff
 ├── update_data.py           # пайплайн обновления (CLI)
@@ -23,6 +24,7 @@ moexutils/                   # проект: F:\Yandex.Disk\FINANCE\moexutils
 │   ├── splits.csv             # реестр сплитов: ticker, date, ratio, kind
 │   ├── renames.csv            # реестр переименований: old, new, date
 │   ├── delisted.csv           # снятые с торгов: ticker, last_date, note
+│   ├── dividend_supplements.csv # подтвержденные дополнения дивидендов; внешний источник приоритетен
 │   ├── key_rate.csv           # ключевая ставка ЦБ: date, rate
 │   └── sectors.csv            # ticker, sector — секторный разрез
 └── logs/                    # логи ночного обновления и выгрузок (не в git)
@@ -38,6 +40,7 @@ moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не
 │                            # ref_renames, ref_delisted, ref_key_rate, ref_sectors, empty_dates, load_state,
 │                            # update_runs, quality_log
 ├── backups/catalog/         # копии каталога хранилища moex_lake-ГГГГММДД-ччммсс.dump (pg_dump), 14 последних
+├── reports/perpetual-audit/ # пакеты CNY по снимкам, сверки, параметры и monitor-issues.parquet
 ├── reports/futures-audit/   # отчеты P1/покрытия по снимкам, исходная сверка спорных строк
 ├── raw/futures_sources/     # списки контрактов FTP и журнал доступности спецификаций/ГО
 ├── raw/futures_rms/         # исходные страницы трех дополнительных архивов RMS
@@ -56,7 +59,7 @@ dividends/                   # соседний проект: F:\Yandex.Disk\FIN
 **Почему данные вне Яндекс.Диска.** При многочасовых выгрузках и частой перезаписи файлов клиент Яндекс.Диска создавал конфликтные копии и подменял файлы старыми серверными версиями — терялись даты (так пострадала история фьючерсов, восстановлена объединением версий). По той же причине `.git` исключен из синхронизации. Повторная загрузка не гарантирует восстановления прежних наблюдений: текущие параметры и карточки у источника меняются. Ночная копия `backups/catalog` содержит каталог PostgreSQL, а не сами Parquet-файлы или исходные JSON.
 
 **Копия на NAS** остается задачей пользователя. Нужен согласованный комплект каталога,
-`lake/` и `raw/`. Копировать следует после подтвержденного завершения обновления
+`lake/` и `raw/`; для сохранения воспроизводимых аудитов и переданных потребителям пакетов — также `reports/`. Копировать следует после подтвержденного завершения обновления
 и при отсутствии писателей/обслуживания, а не в фиксированное время вроде 00:35.
 Для надежного комплекта при остановленных писателях сделайте свежий dump каталога
 и скопируйте его вместе с файлами. Старый dump может ссылаться на уже удаленные
