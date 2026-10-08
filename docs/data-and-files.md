@@ -40,6 +40,7 @@ moex-data/                   # данные: MOEX_DATA_ROOT = F:\moex-data (не
 │                            # ref_renames, ref_delisted, ref_key_rate, ref_sectors, empty_dates, load_state,
 │                            # update_runs, quality_log
 ├── backups/catalog/         # копии каталога хранилища moex_lake-ГГГГММДД-ччммсс.dump (pg_dump), 14 последних
+├── reports/futures-bundles/ # все FORTS, все бессрочные: полные пакеты и сырые свечи, обновление раз в семь дней
 ├── reports/perpetual-audit/ # пакеты CNY по снимкам, сверки, параметры и monitor-issues.parquet
 ├── reports/futures-audit/   # отчеты P1/покрытия по снимкам, исходная сверка спорных строк
 ├── raw/futures_sources/     # списки контрактов FTP и журнал доступности спецификаций/ГО

@@ -34,7 +34,7 @@ from typing import Optional
 import polars as pl
 
 from moexutils import backup, cashflows, contracts, futures_audit, futures_params, futures_rms, history, indices, lake, notify, openpositions, options, quality, rates, refdata, stocks
-from moexutils import perpetual_monitor
+from moexutils import futures_bundle, perpetual_monitor
 
 
 def _warn(warnings: list, msg: str) -> None:
@@ -223,6 +223,11 @@ def main(
             print(f"[OK] Пакет и контроль CNY: {report}; замечаний: {perpetual_issues.height}")
         except Exception as e:
             _warn(warnings, f"Пакет и контроль CNY не выполнены — {e}")
+        try:
+            report = futures_bundle.export_if_due()
+            print(f"[OK] Пакет всех FORTS: {report or 'полная выгрузка пока не требуется (интервал 7 дней)'}")
+        except Exception as e:
+            _warn(warnings, f"Пакет всех FORTS не создан — {e}")
     else:
         print("=== 1e. Фьючерсы — пропуск (--no-futures) ===")
 

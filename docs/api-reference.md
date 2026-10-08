@@ -652,3 +652,14 @@ SWAPRATE/SETTLEPRICE и кандидаты отсутствующих дат в 
 На шаге 1e ошибка дает сбой прогона; замечания объединяются с шагом 3 и журналом качества.
 `--no-futures` отключает создание пакета, `--check` сам по себе этот монитор не вызывает.
 [Эксплуатация и ограничения](perpetual-futures.md#ночной-контроль).
+
+
+## `futures_bundle` — все рынки и бессрочные
+
+`export(compare=True, workers=4, output=None) -> Path`: вся история FORTS, реестр,
+наблюдения карточек/параметров, покрытие и архивы FUSR/FUSC всех подтвержденных бессрочных.
+`read_table(report_dir, table, assets=None) -> pl.DataFrame`: офлайн чтение с SHA-256;
+`assets` только для history/coverage/asset_coverage. Не строит непрерывные ряды и не считает ВМ.
+`export_if_due() -> Path | None`: шаг 1e, через семь дней после успешной полной выгрузки.
+CLI: `python -m moexutils.futures_bundle --workers 4`; `--no-compare` отключает сетевую сверку.
+[Формат, доступные таблицы, результаты и ограничения](all-futures-bundle.md).

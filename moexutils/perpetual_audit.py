@@ -94,16 +94,16 @@ def fetch_candles(board, start, end, root, session=None):
     return frame
 
 
-def compare_funding(history: pl.DataFrame, candles: pl.DataFrame) -> pl.DataFrame:
+def compare_funding(history: pl.DataFrame, candles: pl.DataFrame, *, secid='CNYRUBF') -> pl.DataFrame:
     boards = candles['swap_board'].unique().to_list()
     if len(boards) != 1 or boards[0] not in ('FUSR', 'FUSC'):
         raise ValueError('One known swap board required')
     if candles['date'].n_unique() != candles.height:
         raise ValueError('Duplicate candle dates')
     field = 'SWAPRATE' if boards[0] == 'FUSR' else 'SWAPRATE_CURR'
-    base = history.filter(pl.col('SECID') == 'CNYRUBF').select('date', 'BOARDID', 'SWAPRATE', 'SWAPRATE_CURR')
+    base = history.filter(pl.col('SECID') == secid).select('date', 'BOARDID', 'SWAPRATE', 'SWAPRATE_CURR')
     if base['date'].n_unique() != base.height:
-        raise ValueError('Ambiguous CNYRUBF date/board; select a board explicitly')
+        raise ValueError(f'Ambiguous {secid} date/board; select a board explicitly')
     base = base.with_columns(pl.lit(True).alias('forts_present'))
     candles = candles.with_columns(pl.lit(True).alias('candle_present'))
     return base.join(candles, on='date', how='full', coalesce=True).with_columns(

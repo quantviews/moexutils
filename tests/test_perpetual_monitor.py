@@ -51,6 +51,7 @@ def test_nightly_monitor_reaches_quality_or_error(monkeypatch, tmp_path, failure
     for module in (update_data.futures_params, update_data.futures_rms):
         monkeypatch.setattr(module, 'update', lambda: None)
     monkeypatch.setattr(update_data.futures_audit, 'export', lambda: tmp_path)
+    monkeypatch.setattr(update_data.futures_bundle, 'export_if_due', lambda: None)
     monkeypatch.setattr(update_data.quality, 'data_quality_report', lambda **kw: empty)
     captured = []
     monkeypatch.setattr(update_data, '_finish', lambda *args: captured.append(args))

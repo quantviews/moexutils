@@ -467,3 +467,6 @@ lake.query("""
     FROM lake.futures f JOIN lake.futures_contracts c ON c.secid = f.SECID
     WHERE c.base_secid = 'SiZ5' ORDER BY f.date""")
 ```
+
+
+Пакет [всех фьючерсов](all-futures-bundle.md) хранится вне таблиц в `reports/futures-bundles/`: полный снимок исходных данных FORTS и отдельные архивы FUSR/FUSC всех подтвержденных бессрочных. Не заменяет таблицы или непрерывные ряды.
