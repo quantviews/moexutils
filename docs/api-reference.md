@@ -663,3 +663,8 @@ SWAPRATE/SETTLEPRICE и кандидаты отсутствующих дат в 
 `export_if_due() -> Path | None`: шаг 1e, через семь дней после успешной полной выгрузки.
 CLI: `python -m moexutils.futures_bundle --workers 4`; `--no-compare` отключает сетевую сверку.
 [Формат, доступные таблицы, результаты и ограничения](all-futures-bundle.md).
+
+
+## `foreign_reference` — зарубежные референсы
+
+`download(start=date(1970, 1, 1), end=None, output=None) -> Path` получает шесть явно заданных дневных рядов, сохраняет сырые ответы и происхождение. `read_reference(folder) -> pl.DataFrame` читает завершенный пакет версии 1 с проверкой SHA-256. Единицы исходника не конвертируются. CLI: `python -m moexutils.foreign_reference --end YYYY-MM-DD`. Не включен в ночной pipeline; синтетические котировки строятся в futures-analytics. [Источники, ограничения и примеры](foreign-reference.md).
