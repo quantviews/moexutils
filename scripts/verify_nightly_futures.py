@@ -22,7 +22,7 @@ def check(log_text, not_before):
     result = {'status': 'failed', 'run_started': started.isoformat(), 'exit_code': int(end[1])}
     if int(end[1]) != 0:
         return {**result, 'reason': 'update_failed'}
-    report = re.search(r'^\[OK\].*FORTS: (.+)$', block[:end.start()], re.M)
+    report = re.search(r'^\[OK\] Покрытие параметров и аудит FORTS: (.+)$', block[:end.start()], re.M)
     if report is None:
         return {**result, 'reason': 'audit_success_line_missing'}
     path = Path(report[1].strip())
