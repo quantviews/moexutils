@@ -16,13 +16,14 @@ SYMBOLS = {'KCH26': 'COFFEE', 'KCK26': 'COFFEE', 'OJH26': 'ORANGE',
 FIELDS = ['symbol', 'date', 'open', 'high', 'low', 'close', 'volume', 'open_interest']
 
 
-def parse_capture(capture):
+def parse_capture(capture, expected_symbols=None):
+    expected_symbols = SYMBOLS if expected_symbols is None else expected_symbols
     if capture.get('schema_version') != 1 or capture.get('stopped'):
         raise ValueError('Complete version 1 capture required')
     rows, seen = [], set()
     for response in capture.get('responses', []):
         symbol = response['symbol']
-        if symbol not in SYMBOLS or symbol in seen or response['http_status'] != 200:
+        if symbol not in expected_symbols or symbol in seen or response['http_status'] != 200:
             raise ValueError('Unexpected, duplicate or failed symbol')
         url = urlsplit(response['url'])
         params = parse_qs(url.query)
@@ -45,13 +46,13 @@ def parse_capture(capture):
                 raise ValueError('Invalid volume/open interest')
             rows.append(dict(zip(FIELDS, [symbol, date, *values])))
         seen.add(symbol)
-    if seen != set(SYMBOLS):
-        raise ValueError('All six pilot contracts required')
+    if seen != set(expected_symbols) or not seen:
+        raise ValueError('All expected contracts required')
     frame = pl.DataFrame(rows, schema_overrides={c: pl.Float64 for c in FIELDS[2:]})
     if frame.select('symbol', 'date').is_duplicated().any():
         raise ValueError('Duplicate symbol/date')
     return frame.with_columns(
-        pl.col('symbol').replace_strict(SYMBOLS).alias('asset'),
+        pl.col('symbol').replace_strict(expected_symbols).alias('asset'),
         pl.lit('provider_close_not_verified_settlement').alias('price_kind'),
         pl.lit(False).alias('execution_model_ready'),
     ).sort('symbol', 'date')

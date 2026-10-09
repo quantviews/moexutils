@@ -1,0 +1,271 @@
+{
+  "schema_version": 2,
+  "campaign": "moex-overlap-20261009",
+  "moex_bundle": "F:/moex-data/reports/futures-bundles/20261008T105011980359Z",
+  "contracts": [
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN25",
+      "moex_secid": "KCM5",
+      "moex_first": "2025-05-20",
+      "moex_expiration": "2025-06-20",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU25",
+      "moex_secid": "KCQ5",
+      "moex_first": "2025-05-20",
+      "moex_expiration": "2025-08-21",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCZ25",
+      "moex_secid": "KCX5",
+      "moex_first": "2025-06-11",
+      "moex_expiration": "2025-11-19",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH26",
+      "moex_secid": "KCG6",
+      "moex_first": "2025-08-13",
+      "moex_expiration": "2026-02-19",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCK26",
+      "moex_secid": "KCJ6",
+      "moex_first": "2025-11-11",
+      "moex_expiration": "2026-04-22",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN26",
+      "moex_secid": "KCM6",
+      "moex_first": "2026-02-11",
+      "moex_expiration": "2026-06-22",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU26",
+      "moex_secid": "KCQ6",
+      "moex_first": "2026-04-14",
+      "moex_expiration": "2026-08-21",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN25",
+      "moex_secid": "OJN5",
+      "moex_first": "2025-06-10",
+      "moex_expiration": "2025-07-01",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU25",
+      "moex_secid": "OJU5",
+      "moex_first": "2025-06-10",
+      "moex_expiration": "2025-09-02",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJX25",
+      "moex_secid": "OJX5",
+      "moex_first": "2025-06-23",
+      "moex_expiration": "2025-11-03",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF26",
+      "moex_secid": "OJF6",
+      "moex_first": "2025-08-25",
+      "moex_expiration": "2026-01-05",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH26",
+      "moex_secid": "OJH6",
+      "moex_first": "2025-10-27",
+      "moex_expiration": "2026-03-02",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJK26",
+      "moex_secid": "OJK6",
+      "moex_first": "2025-12-23",
+      "moex_expiration": "2026-05-04",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN26",
+      "moex_secid": "OJN6",
+      "moex_first": "2026-02-19",
+      "moex_expiration": "2026-07-01",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU26",
+      "moex_secid": "OJU6",
+      "moex_first": "2026-04-23",
+      "moex_expiration": "2026-09-01",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK25",
+      "moex_secid": "FFJ5",
+      "moex_first": "2025-04-08",
+      "moex_expiration": "2025-04-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM25",
+      "moex_secid": "FFK5",
+      "moex_first": "2025-04-08",
+      "moex_expiration": "2025-05-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN25",
+      "moex_secid": "FFM5",
+      "moex_first": "2025-04-17",
+      "moex_expiration": "2025-06-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ25",
+      "moex_secid": "FFN5",
+      "moex_first": "2025-05-19",
+      "moex_expiration": "2025-07-31",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU25",
+      "moex_secid": "FFQ5",
+      "moex_first": "2025-06-17",
+      "moex_expiration": "2025-08-29",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV25",
+      "moex_secid": "FFU5",
+      "moex_first": "2025-07-18",
+      "moex_expiration": "2025-09-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGX25",
+      "moex_secid": "FFV5",
+      "moex_first": "2025-08-18",
+      "moex_expiration": "2025-10-31",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGZ25",
+      "moex_secid": "FFX5",
+      "moex_first": "2025-09-17",
+      "moex_expiration": "2025-11-28",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF26",
+      "moex_secid": "FFZ5",
+      "moex_first": "2025-10-20",
+      "moex_expiration": "2025-12-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG26",
+      "moex_secid": "FFF6",
+      "moex_first": "2025-11-17",
+      "moex_expiration": "2026-01-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGH26",
+      "moex_secid": "FFG6",
+      "moex_first": "2025-12-17",
+      "moex_expiration": "2026-02-27",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGJ26",
+      "moex_secid": "FFH6",
+      "moex_first": "2026-01-19",
+      "moex_expiration": "2026-03-31",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK26",
+      "moex_secid": "FFJ6",
+      "moex_first": "2026-02-13",
+      "moex_expiration": "2026-04-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM26",
+      "moex_secid": "FFK6",
+      "moex_first": "2026-03-18",
+      "moex_expiration": "2026-05-29",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN26",
+      "moex_secid": "FFM6",
+      "moex_first": "2026-04-17",
+      "moex_expiration": "2026-06-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ26",
+      "moex_secid": "FFN6",
+      "moex_first": "2026-05-18",
+      "moex_expiration": "2026-07-31",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU26",
+      "moex_secid": "FFQ6",
+      "moex_first": "2026-06-17",
+      "moex_expiration": "2026-08-28",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV26",
+      "moex_secid": "FFU6",
+      "moex_first": "2026-07-20",
+      "moex_expiration": "2026-09-30",
+      "mapping_status": "rule_based_candidate_requires_expiry_check"
+    }
+  ]
+}
