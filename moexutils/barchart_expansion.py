@@ -43,11 +43,21 @@ def inspect_captures(captures, manifest):
         flags = []
         if g.height >= limit or g.height == 640:
             flags.append('possible_record_cap')
-        if first > dt.date.fromisoformat(job['moex_first']):
-            flags.append('starts_after_moex')
-        # Foreign futures can stop before MOEX: this is a review threshold, not an expiry rule.
-        if last < dt.date.fromisoformat(job['moex_expiration']) - dt.timedelta(days=7):
-            flags.append('ends_too_early_for_expiry_check')
+        if manifest.get('purpose') == 'historical_availability_probe':
+            start = dt.date.fromisoformat(job['probe_start'])
+            end = dt.date.fromisoformat(job['probe_end'])
+            if first > start:
+                flags.append('starts_after_probe_window')
+            if last < end:
+                flags.append('ends_before_probe_window')
+            if g.filter(pl.col('date').is_between(start, end)).is_empty():
+                flags.append('no_rows_in_probe_window')
+        else:
+            if first > dt.date.fromisoformat(job['moex_first']):
+                flags.append('starts_after_moex')
+            # A review threshold, not an exchange expiry rule.
+            if last < dt.date.fromisoformat(job['moex_expiration']) - dt.timedelta(days=7):
+                flags.append('ends_too_early_for_expiry_check')
         coverage.append({**job, 'status': 'review' if flags else 'coverage_candidate',
             'flags': flags, 'rows': g.height, 'first': str(first), 'last': str(last),
             'requested_maxrecords': limit, 'null_close': g['close'].null_count(),

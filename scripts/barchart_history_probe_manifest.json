@@ -1,0 +1,127 @@
+{
+  "schema_version": 2,
+  "purpose": "historical_availability_probe",
+  "campaign": "historical-2020-2024-probe-20261009",
+  "contracts": [
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN20",
+      "delivery_month": "2020-07",
+      "probe_start": "2019-07-01",
+      "probe_end": "2020-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN20",
+      "delivery_month": "2020-07",
+      "probe_start": "2019-07-01",
+      "probe_end": "2020-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN20",
+      "delivery_month": "2020-07",
+      "probe_start": "2019-07-01",
+      "probe_end": "2020-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN21",
+      "delivery_month": "2021-07",
+      "probe_start": "2020-07-01",
+      "probe_end": "2021-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN21",
+      "delivery_month": "2021-07",
+      "probe_start": "2020-07-01",
+      "probe_end": "2021-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN21",
+      "delivery_month": "2021-07",
+      "probe_start": "2020-07-01",
+      "probe_end": "2021-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN22",
+      "delivery_month": "2022-07",
+      "probe_start": "2021-07-01",
+      "probe_end": "2022-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN22",
+      "delivery_month": "2022-07",
+      "probe_start": "2021-07-01",
+      "probe_end": "2022-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN22",
+      "delivery_month": "2022-07",
+      "probe_start": "2021-07-01",
+      "probe_end": "2022-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN23",
+      "delivery_month": "2023-07",
+      "probe_start": "2022-07-01",
+      "probe_end": "2023-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN23",
+      "delivery_month": "2023-07",
+      "probe_start": "2022-07-01",
+      "probe_end": "2023-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN23",
+      "delivery_month": "2023-07",
+      "probe_start": "2022-07-01",
+      "probe_end": "2023-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN24",
+      "delivery_month": "2024-07",
+      "probe_start": "2023-07-01",
+      "probe_end": "2024-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN24",
+      "delivery_month": "2024-07",
+      "probe_start": "2023-07-01",
+      "probe_end": "2024-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN24",
+      "delivery_month": "2024-07",
+      "probe_start": "2023-07-01",
+      "probe_end": "2024-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    }
+  ]
+}

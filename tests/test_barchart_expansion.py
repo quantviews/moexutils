@@ -48,3 +48,21 @@ def test_wrong_campaign_rejected():
     c['campaign'] = 'different'
     with pytest.raises(ValueError, match='campaign'):
         inspect_captures([c], m)
+
+
+def test_historical_probe_needs_no_invented_moex_dates():
+    c, m = inputs()
+    m['purpose'] = 'historical_availability_probe'
+    m['contracts'] = [{'symbol': 'KCN25', 'asset': 'COFFEE',
+                       'probe_start': '2025-06-17', 'probe_end': '2025-06-18'}]
+    _, coverage = inspect_captures([c], m)
+    assert coverage[0]['flags'] == []
+
+
+def test_wrong_historical_year_is_flagged():
+    c, m = inputs()
+    m['purpose'] = 'historical_availability_probe'
+    m['contracts'] = [{'symbol': 'KCN25', 'asset': 'COFFEE',
+                       'probe_start': '2020-01-01', 'probe_end': '2020-06-01'}]
+    _, coverage = inspect_captures([c], m)
+    assert 'no_rows_in_probe_window' in coverage[0]['flags']
