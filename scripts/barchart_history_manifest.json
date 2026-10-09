@@ -1,0 +1,927 @@
+{
+  "schema_version": 2,
+  "purpose": "historical_availability_probe",
+  "campaign": "historical-2020-2024-full-20261009",
+  "contracts": [
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH20",
+      "delivery_month": "2020-03",
+      "probe_start": "2019-03-01",
+      "probe_end": "2020-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCK20",
+      "delivery_month": "2020-05",
+      "probe_start": "2019-05-01",
+      "probe_end": "2020-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN20",
+      "delivery_month": "2020-07",
+      "probe_start": "2019-07-01",
+      "probe_end": "2020-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU20",
+      "delivery_month": "2020-09",
+      "probe_start": "2019-09-01",
+      "probe_end": "2020-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCZ20",
+      "delivery_month": "2020-12",
+      "probe_start": "2019-12-01",
+      "probe_end": "2020-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF20",
+      "delivery_month": "2020-01",
+      "probe_start": "2019-01-01",
+      "probe_end": "2019-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH20",
+      "delivery_month": "2020-03",
+      "probe_start": "2019-03-01",
+      "probe_end": "2020-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJK20",
+      "delivery_month": "2020-05",
+      "probe_start": "2019-05-01",
+      "probe_end": "2020-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN20",
+      "delivery_month": "2020-07",
+      "probe_start": "2019-07-01",
+      "probe_end": "2020-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU20",
+      "delivery_month": "2020-09",
+      "probe_start": "2019-09-01",
+      "probe_end": "2020-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJX20",
+      "delivery_month": "2020-11",
+      "probe_start": "2019-11-01",
+      "probe_end": "2020-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF20",
+      "delivery_month": "2020-01",
+      "probe_start": "2019-01-01",
+      "probe_end": "2019-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG20",
+      "delivery_month": "2020-02",
+      "probe_start": "2019-02-01",
+      "probe_end": "2020-01-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGH20",
+      "delivery_month": "2020-03",
+      "probe_start": "2019-03-01",
+      "probe_end": "2020-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGJ20",
+      "delivery_month": "2020-04",
+      "probe_start": "2019-04-01",
+      "probe_end": "2020-03-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK20",
+      "delivery_month": "2020-05",
+      "probe_start": "2019-05-01",
+      "probe_end": "2020-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM20",
+      "delivery_month": "2020-06",
+      "probe_start": "2019-06-01",
+      "probe_end": "2020-05-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN20",
+      "delivery_month": "2020-07",
+      "probe_start": "2019-07-01",
+      "probe_end": "2020-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ20",
+      "delivery_month": "2020-08",
+      "probe_start": "2019-08-01",
+      "probe_end": "2020-07-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU20",
+      "delivery_month": "2020-09",
+      "probe_start": "2019-09-01",
+      "probe_end": "2020-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV20",
+      "delivery_month": "2020-10",
+      "probe_start": "2019-10-01",
+      "probe_end": "2020-09-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGX20",
+      "delivery_month": "2020-11",
+      "probe_start": "2019-11-01",
+      "probe_end": "2020-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGZ20",
+      "delivery_month": "2020-12",
+      "probe_start": "2019-12-01",
+      "probe_end": "2020-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH21",
+      "delivery_month": "2021-03",
+      "probe_start": "2020-03-01",
+      "probe_end": "2021-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCK21",
+      "delivery_month": "2021-05",
+      "probe_start": "2020-05-01",
+      "probe_end": "2021-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN21",
+      "delivery_month": "2021-07",
+      "probe_start": "2020-07-01",
+      "probe_end": "2021-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU21",
+      "delivery_month": "2021-09",
+      "probe_start": "2020-09-01",
+      "probe_end": "2021-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCZ21",
+      "delivery_month": "2021-12",
+      "probe_start": "2020-12-01",
+      "probe_end": "2021-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF21",
+      "delivery_month": "2021-01",
+      "probe_start": "2020-01-01",
+      "probe_end": "2020-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH21",
+      "delivery_month": "2021-03",
+      "probe_start": "2020-03-01",
+      "probe_end": "2021-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJK21",
+      "delivery_month": "2021-05",
+      "probe_start": "2020-05-01",
+      "probe_end": "2021-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN21",
+      "delivery_month": "2021-07",
+      "probe_start": "2020-07-01",
+      "probe_end": "2021-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU21",
+      "delivery_month": "2021-09",
+      "probe_start": "2020-09-01",
+      "probe_end": "2021-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJX21",
+      "delivery_month": "2021-11",
+      "probe_start": "2020-11-01",
+      "probe_end": "2021-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF21",
+      "delivery_month": "2021-01",
+      "probe_start": "2020-01-01",
+      "probe_end": "2020-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG21",
+      "delivery_month": "2021-02",
+      "probe_start": "2020-02-01",
+      "probe_end": "2021-01-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGH21",
+      "delivery_month": "2021-03",
+      "probe_start": "2020-03-01",
+      "probe_end": "2021-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGJ21",
+      "delivery_month": "2021-04",
+      "probe_start": "2020-04-01",
+      "probe_end": "2021-03-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK21",
+      "delivery_month": "2021-05",
+      "probe_start": "2020-05-01",
+      "probe_end": "2021-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM21",
+      "delivery_month": "2021-06",
+      "probe_start": "2020-06-01",
+      "probe_end": "2021-05-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN21",
+      "delivery_month": "2021-07",
+      "probe_start": "2020-07-01",
+      "probe_end": "2021-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ21",
+      "delivery_month": "2021-08",
+      "probe_start": "2020-08-01",
+      "probe_end": "2021-07-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU21",
+      "delivery_month": "2021-09",
+      "probe_start": "2020-09-01",
+      "probe_end": "2021-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV21",
+      "delivery_month": "2021-10",
+      "probe_start": "2020-10-01",
+      "probe_end": "2021-09-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGX21",
+      "delivery_month": "2021-11",
+      "probe_start": "2020-11-01",
+      "probe_end": "2021-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGZ21",
+      "delivery_month": "2021-12",
+      "probe_start": "2020-12-01",
+      "probe_end": "2021-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH22",
+      "delivery_month": "2022-03",
+      "probe_start": "2021-03-01",
+      "probe_end": "2022-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCK22",
+      "delivery_month": "2022-05",
+      "probe_start": "2021-05-01",
+      "probe_end": "2022-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN22",
+      "delivery_month": "2022-07",
+      "probe_start": "2021-07-01",
+      "probe_end": "2022-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU22",
+      "delivery_month": "2022-09",
+      "probe_start": "2021-09-01",
+      "probe_end": "2022-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCZ22",
+      "delivery_month": "2022-12",
+      "probe_start": "2021-12-01",
+      "probe_end": "2022-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF22",
+      "delivery_month": "2022-01",
+      "probe_start": "2021-01-01",
+      "probe_end": "2021-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH22",
+      "delivery_month": "2022-03",
+      "probe_start": "2021-03-01",
+      "probe_end": "2022-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJK22",
+      "delivery_month": "2022-05",
+      "probe_start": "2021-05-01",
+      "probe_end": "2022-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN22",
+      "delivery_month": "2022-07",
+      "probe_start": "2021-07-01",
+      "probe_end": "2022-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU22",
+      "delivery_month": "2022-09",
+      "probe_start": "2021-09-01",
+      "probe_end": "2022-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJX22",
+      "delivery_month": "2022-11",
+      "probe_start": "2021-11-01",
+      "probe_end": "2022-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF22",
+      "delivery_month": "2022-01",
+      "probe_start": "2021-01-01",
+      "probe_end": "2021-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG22",
+      "delivery_month": "2022-02",
+      "probe_start": "2021-02-01",
+      "probe_end": "2022-01-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGH22",
+      "delivery_month": "2022-03",
+      "probe_start": "2021-03-01",
+      "probe_end": "2022-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGJ22",
+      "delivery_month": "2022-04",
+      "probe_start": "2021-04-01",
+      "probe_end": "2022-03-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK22",
+      "delivery_month": "2022-05",
+      "probe_start": "2021-05-01",
+      "probe_end": "2022-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM22",
+      "delivery_month": "2022-06",
+      "probe_start": "2021-06-01",
+      "probe_end": "2022-05-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN22",
+      "delivery_month": "2022-07",
+      "probe_start": "2021-07-01",
+      "probe_end": "2022-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ22",
+      "delivery_month": "2022-08",
+      "probe_start": "2021-08-01",
+      "probe_end": "2022-07-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU22",
+      "delivery_month": "2022-09",
+      "probe_start": "2021-09-01",
+      "probe_end": "2022-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV22",
+      "delivery_month": "2022-10",
+      "probe_start": "2021-10-01",
+      "probe_end": "2022-09-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGX22",
+      "delivery_month": "2022-11",
+      "probe_start": "2021-11-01",
+      "probe_end": "2022-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGZ22",
+      "delivery_month": "2022-12",
+      "probe_start": "2021-12-01",
+      "probe_end": "2022-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH23",
+      "delivery_month": "2023-03",
+      "probe_start": "2022-03-01",
+      "probe_end": "2023-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCK23",
+      "delivery_month": "2023-05",
+      "probe_start": "2022-05-01",
+      "probe_end": "2023-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN23",
+      "delivery_month": "2023-07",
+      "probe_start": "2022-07-01",
+      "probe_end": "2023-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU23",
+      "delivery_month": "2023-09",
+      "probe_start": "2022-09-01",
+      "probe_end": "2023-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCZ23",
+      "delivery_month": "2023-12",
+      "probe_start": "2022-12-01",
+      "probe_end": "2023-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF23",
+      "delivery_month": "2023-01",
+      "probe_start": "2022-01-01",
+      "probe_end": "2022-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH23",
+      "delivery_month": "2023-03",
+      "probe_start": "2022-03-01",
+      "probe_end": "2023-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJK23",
+      "delivery_month": "2023-05",
+      "probe_start": "2022-05-01",
+      "probe_end": "2023-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN23",
+      "delivery_month": "2023-07",
+      "probe_start": "2022-07-01",
+      "probe_end": "2023-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU23",
+      "delivery_month": "2023-09",
+      "probe_start": "2022-09-01",
+      "probe_end": "2023-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJX23",
+      "delivery_month": "2023-11",
+      "probe_start": "2022-11-01",
+      "probe_end": "2023-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF23",
+      "delivery_month": "2023-01",
+      "probe_start": "2022-01-01",
+      "probe_end": "2022-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG23",
+      "delivery_month": "2023-02",
+      "probe_start": "2022-02-01",
+      "probe_end": "2023-01-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGH23",
+      "delivery_month": "2023-03",
+      "probe_start": "2022-03-01",
+      "probe_end": "2023-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGJ23",
+      "delivery_month": "2023-04",
+      "probe_start": "2022-04-01",
+      "probe_end": "2023-03-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK23",
+      "delivery_month": "2023-05",
+      "probe_start": "2022-05-01",
+      "probe_end": "2023-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM23",
+      "delivery_month": "2023-06",
+      "probe_start": "2022-06-01",
+      "probe_end": "2023-05-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN23",
+      "delivery_month": "2023-07",
+      "probe_start": "2022-07-01",
+      "probe_end": "2023-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ23",
+      "delivery_month": "2023-08",
+      "probe_start": "2022-08-01",
+      "probe_end": "2023-07-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU23",
+      "delivery_month": "2023-09",
+      "probe_start": "2022-09-01",
+      "probe_end": "2023-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV23",
+      "delivery_month": "2023-10",
+      "probe_start": "2022-10-01",
+      "probe_end": "2023-09-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGX23",
+      "delivery_month": "2023-11",
+      "probe_start": "2022-11-01",
+      "probe_end": "2023-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGZ23",
+      "delivery_month": "2023-12",
+      "probe_start": "2022-12-01",
+      "probe_end": "2023-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH24",
+      "delivery_month": "2024-03",
+      "probe_start": "2023-03-01",
+      "probe_end": "2024-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCK24",
+      "delivery_month": "2024-05",
+      "probe_start": "2023-05-01",
+      "probe_end": "2024-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCN24",
+      "delivery_month": "2024-07",
+      "probe_start": "2023-07-01",
+      "probe_end": "2024-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCU24",
+      "delivery_month": "2024-09",
+      "probe_start": "2023-09-01",
+      "probe_end": "2024-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "COFFEE",
+      "symbol": "KCZ24",
+      "delivery_month": "2024-12",
+      "probe_start": "2023-12-01",
+      "probe_end": "2024-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF24",
+      "delivery_month": "2024-01",
+      "probe_start": "2023-01-01",
+      "probe_end": "2023-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH24",
+      "delivery_month": "2024-03",
+      "probe_start": "2023-03-01",
+      "probe_end": "2024-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJK24",
+      "delivery_month": "2024-05",
+      "probe_start": "2023-05-01",
+      "probe_end": "2024-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJN24",
+      "delivery_month": "2024-07",
+      "probe_start": "2023-07-01",
+      "probe_end": "2024-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJU24",
+      "delivery_month": "2024-09",
+      "probe_start": "2023-09-01",
+      "probe_end": "2024-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJX24",
+      "delivery_month": "2024-11",
+      "probe_start": "2023-11-01",
+      "probe_end": "2024-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF24",
+      "delivery_month": "2024-01",
+      "probe_start": "2023-01-01",
+      "probe_end": "2023-12-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG24",
+      "delivery_month": "2024-02",
+      "probe_start": "2023-02-01",
+      "probe_end": "2024-01-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGH24",
+      "delivery_month": "2024-03",
+      "probe_start": "2023-03-01",
+      "probe_end": "2024-02-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGJ24",
+      "delivery_month": "2024-04",
+      "probe_start": "2023-04-01",
+      "probe_end": "2024-03-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGK24",
+      "delivery_month": "2024-05",
+      "probe_start": "2023-05-01",
+      "probe_end": "2024-04-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGM24",
+      "delivery_month": "2024-06",
+      "probe_start": "2023-06-01",
+      "probe_end": "2024-05-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGN24",
+      "delivery_month": "2024-07",
+      "probe_start": "2023-07-01",
+      "probe_end": "2024-06-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGQ24",
+      "delivery_month": "2024-08",
+      "probe_start": "2023-08-01",
+      "probe_end": "2024-07-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGU24",
+      "delivery_month": "2024-09",
+      "probe_start": "2023-09-01",
+      "probe_end": "2024-08-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGV24",
+      "delivery_month": "2024-10",
+      "probe_start": "2023-10-01",
+      "probe_end": "2024-09-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGX24",
+      "delivery_month": "2024-11",
+      "probe_start": "2023-11-01",
+      "probe_end": "2024-10-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGZ24",
+      "delivery_month": "2024-12",
+      "probe_start": "2023-12-01",
+      "probe_end": "2024-11-01",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    }
+  ]
+}
