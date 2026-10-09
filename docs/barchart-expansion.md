@@ -108,3 +108,10 @@ python -m moexutils.barchart_audit --package F:/moex-data/reference/barchart/exp
 
 Артефакты аудита: expiry_anchors.parquet, coverage.parquet, date_checks.parquet,
 summary.json с контрольными суммами входных манифестов, кода и результатов.
+
+09.10.2026 пакет использован в `futures-analytics`: выполнены сравнение всех 33 серий
+с Yahoo и синтетика v2 с явным календарным роллом за семь дней до экспирации.
+[Методика, результаты и границы](../../futures-analytics/docs/synthetic-v2.md).
+Итоговый каталог соседнего проекта: `outputs/synthetic-v2-20261009-verified`.
+Для старых лет цепочка ближайших экспираций пока не восстановлена; выгрузка дальних
+контрактов сама по себе её не заменяет. Расчёты остаются в аналитическом проекте.
