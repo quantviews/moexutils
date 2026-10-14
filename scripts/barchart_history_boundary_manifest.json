@@ -1,0 +1,47 @@
+{
+  "schema_version": 2,
+  "purpose": "historical_availability_probe",
+  "campaign": "historical-2024-boundary-20261014",
+  "contracts": [
+    {
+      "asset": "COFFEE",
+      "symbol": "KCH25",
+      "delivery_month": "2025-03",
+      "probe_start": "2024-10-01",
+      "probe_end": "2024-12-31",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJF25",
+      "delivery_month": "2025-01",
+      "probe_start": "2024-10-01",
+      "probe_end": "2024-12-14",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "ORANGE",
+      "symbol": "OJH25",
+      "delivery_month": "2025-03",
+      "probe_start": "2024-10-01",
+      "probe_end": "2024-12-31",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGF25",
+      "delivery_month": "2025-01",
+      "probe_start": "2024-10-01",
+      "probe_end": "2024-12-14",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "asset": "TTF",
+      "symbol": "TGG25",
+      "delivery_month": "2025-02",
+      "probe_start": "2024-10-01",
+      "probe_end": "2024-12-31",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    }
+  ]
+}

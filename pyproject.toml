@@ -23,6 +23,7 @@ dependencies = [
 # ноутбук обзора данных marimo/bond-market.py
 notebooks = ["marimo", "plotly"]
 dev = ["pytest", "ruff"]
+reference = ["holidays>=0.102"]
 
 [tool.setuptools]
 packages = ["moexutils"]
