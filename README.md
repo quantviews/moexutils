@@ -8,6 +8,8 @@
 
 Для исследования прошлых периодов загружены [зарубежные референсы шести рынков](docs/foreign-reference.md); синтетические котировки строятся отдельно в futures-analytics.
 
+[Синтетические фьючерсы — документация](docs/synthetic-futures.md): архив 120 зарубежных контрактов COFFEE/ORANGE/TTF, непрерывные ряды 2020–2024 и подключение к историческому бэктесту. Эти исследовательские пакеты хранятся отдельно от DuckLake в `F:/moex-data/reference/`.
+
 ## Что есть в данных
 
 | Рынок | Что хранится | Глубина |
@@ -31,7 +33,7 @@
 
 Дивиденды берутся из соседнего проекта `../dividends` (сайт закрытияреестров.рф). Опционы выгружаются за 2025–2026 годы; страйки, Call/Put, экспирации, базовые активы и размер лота серии доступны через `options.read_contracts()` (`options_series`, `options_contracts`).
 
-**Хранение.** Все рыночные данные — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL; реестры корпоративных событий копируются туда же (`ref_*`). Модель таблиц — [docs/data-model.md](docs/data-model.md), гарантии для потребителей — [docs/data-contract.md](docs/data-contract.md), все поля биржи по рынкам — [docs/iss-columns.md](docs/iss-columns.md). Весь код — на polars, pandas в проекте не используется; прежние Jupyter-ноутбуки на pandas — в архиве [legacy/](legacy/README.md).
+**Хранение.** Основные данные MOEX и ЦБ — в хранилище DuckLake (каталог PostgreSQL, файлы Parquet в `F:\moex-data\lake`), читаются как polars DataFrame или SQL; реестры корпоративных событий копируются туда же (`ref_*`). Модель таблиц — [docs/data-model.md](docs/data-model.md), гарантии для потребителей — [docs/data-contract.md](docs/data-contract.md), все поля биржи по рынкам — [docs/iss-columns.md](docs/iss-columns.md). Весь код — на polars, pandas в проекте не используется; прежние Jupyter-ноутбуки на pandas — в архиве [legacy/](legacy/README.md).
 
 ## Установка
 
