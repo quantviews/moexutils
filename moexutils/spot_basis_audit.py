@@ -9,6 +9,7 @@ import datetime as dt
 import hashlib
 import json
 from pathlib import Path
+import re
 
 import polars as pl
 import requests
@@ -17,6 +18,7 @@ from moexutils import lake, specification_editions
 
 ASSETS = {"SBRF": "SBER", "GAZR": "GAZP", "LKOH": "LKOH"}
 TRANSITION = dt.date(2026, 3, 23)
+OUTRIGHT = re.compile(r"^(?:SR|GZ|LK)[HMUZ]\d{1,2}$")
 
 
 def read_package(folder):
@@ -147,6 +149,8 @@ def export(output, start=dt.date(2023, 1, 1), end=dt.date(2026, 10, 5)):
             AND f.date BETWEEN ? AND ?""",
             [start, end],
         ).pl()
+        excluded = contracts.filter(~pl.col("secid").str.contains(OUTRIGHT.pattern))
+        contracts = contracts.filter(pl.col("secid").str.contains(OUTRIGHT.pattern))
         con.register("chosen", contracts)
         descriptions = con.execute("""SELECT d.* FROM lake.futures_description_observations d
             JOIN chosen c ON d.secid=c.secid""").pl()
@@ -174,6 +178,7 @@ def export(output, start=dt.date(2023, 1, 1), end=dt.date(2026, 10, 5)):
             raise ValueError("Duplicate input keys")
     tables = dict(
         contracts=contracts,
+        excluded_non_outright=excluded,
         descriptions=descriptions,
         parameters=parameters,
         shares=shares,

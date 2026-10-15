@@ -702,3 +702,18 @@ CLI: `python -m moexutils.futures_bundle --workers 4`; `--no-compare` отклю
 `timing_report(shares, futures)` разделяет режимы на границе 23.03.2026;
 `contract_coverage(contracts, descriptions, parameters)` не выводит периоды
 применимости из observed_at. [Результат и ограничения](spot-basis-data.md).
+
+
+## `spot_basis_intraday` и `specification_capture`
+
+`spot_basis_intraday.run(package, output, workers=3)` архивирует минутные свечи
+SBER/GAZP/LKOH и обычных квартальных SR/GZ/LK из пакета аудита. Календарные спреды
+и технические инструменты исключаются. Сохраняет все страницы ISS, OHLCV,
+контрольный срез одинаковой минуты 18:45 и покрытие. Допускает 1–4 потока;
+незавершённая загрузка возобновляется, завершённый manifest запрещает перезапись.
+Срез не переносит цены между минутами и не подтверждает точную одновременность.
+
+`specification_capture.import_captures(sources, output)` принимает JSON браузерного
+сниппета архива MOEX 4979. Проверяет хеши и типы, сохраняет оригиналы с происхождением,
+фиксирует конфликты по URL. Требует нового каталога. Импорт не подтверждает
+историческую применимость или полноту архива. [Инструкции](spot-basis-data.md).
