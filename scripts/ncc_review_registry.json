@@ -1,0 +1,248 @@
+{
+  "review_date": "2026-10-15",
+  "scope": "SBRF/GAZR/LKOH 2023-01-01..2026-10-05",
+  "catalog_url": "https://www.nationalclearingcentre.ru/catalog/020415/93",
+  "decisions_catalog_url": "https://www.nationalclearingcentre.ru/catalog/0204/248",
+  "historical_known_at_verified": false,
+  "absence_of_all_exceptions_proven": false,
+  "notes": [
+    "Dates are current catalog assertions; no historical publication timestamp verification.",
+    "Web text review is not a downloaded original and has no original-file SHA-256.",
+    "Open effective_to means end not established, not proof the decision is still in force.",
+    "31.10–31.12 and 32.14–32.15 excluded in editions effective before 2024-09-23; paragraph numbers must not be carried between editions.",
+    "June/September 2025 editions defer article 37 and a subparagraph cited by catalog as 20.20.1/20.2.1, retaining February 2025 wording; numbering discrepancy retained as unresolved."
+  ],
+  "never_effective_editions": [
+    {
+      "approved_date": "2024-01-31",
+      "reason": "Catalog explicitly states not put into effect"
+    }
+  ],
+  "decisions": [
+    {
+      "sha256_prefix": "549cc37a313d",
+      "number": "НКЦ-Р-2026-584",
+      "approved_date": "2026-06-19",
+      "effective_from": "2026-06-22",
+      "effective_to": null,
+      "review_method": "text",
+      "classification": "general_operations",
+      "finding": "Ограничения операций с брокерскими фирмами и расчётными кодами."
+    },
+    {
+      "sha256_prefix": "0c77aed90dc5",
+      "number": "НКЦ-Р-2025-446",
+      "approved_date": "2025-05-30",
+      "effective_from": "2025-05-31",
+      "effective_to": null,
+      "review_method": "text",
+      "classification": "participant_admission",
+      "finding": "Допуск отдельных категорий нерезидентов; не изменение параметров целевых контрактов."
+    },
+    {
+      "sha256_prefix": "2bb48e6eb2e1",
+      "number": "01-02/1117",
+      "approved_date": "2023-10-27",
+      "effective_from": "2023-10-30",
+      "effective_to": null,
+      "review_method": "visual",
+      "classification": "other_underlying",
+      "finding": "Отмена распоряжения №570 по передаче профилей активов в золоте."
+    },
+    {
+      "sha256_prefix": "b6b2886a21e2",
+      "number": "01-02/203",
+      "approved_date": "2023-03-20",
+      "effective_from": "2023-03-21",
+      "effective_to": null,
+      "review_method": "text",
+      "classification": "clearing_time_cancellation",
+      "finding": "Отмена распоряжения №182 с 21.03.2023."
+    },
+    {
+      "sha256_prefix": "aec8ed11ad61",
+      "number": "01-02/182",
+      "approved_date": "2023-03-13",
+      "effective_from": "2023-03-13",
+      "effective_to": "2023-03-20",
+      "review_method": "text",
+      "classification": "general_clearing_time",
+      "finding": "Окончание вечернего клиринга не позднее Tc+25 минут; первоначальный конец 24.03 сокращён распоряжением №203."
+    },
+    {
+      "sha256_prefix": "062ea7ce02ba",
+      "number": "01-02/1286",
+      "approved_date": "2022-12-02",
+      "effective_from": "2022-12-05",
+      "effective_to": null,
+      "review_method": "text",
+      "classification": "general_margin_deadline",
+      "finding": "Исполнение маржинальных требований до 12:30 после вечернего и до 17:30 после дневного клиринга."
+    },
+    {
+      "sha256_prefix": "bea170a21732",
+      "number": "01-02/124",
+      "approved_date": "2022-02-28",
+      "effective_from": "2022-02-28",
+      "effective_to": "2022-02-28",
+      "review_method": "text",
+      "classification": "outside_period",
+      "finding": "Разовые часы клиринга и отчётности 28.02.2022."
+    },
+    {
+      "sha256_prefix": "aa8797e6d11f",
+      "number": "01-02/522",
+      "approved_date": "2020-10-08",
+      "effective_from": "2020-12-16",
+      "effective_to": "2020-12-21",
+      "review_method": "visual",
+      "classification": "other_underlying",
+      "finding": "GMKN: ограничение передачи профилей с 19:00 16.12 до 19:00 21.12.2020."
+    },
+    {
+      "sha256_prefix": "61d41cf63acc",
+      "number": "01-02/76",
+      "approved_date": "2020-02-13",
+      "effective_from": "2020-02-17",
+      "effective_to": "2020-02-17",
+      "review_method": "visual",
+      "classification": "outside_period",
+      "finding": "Окончание вечернего клиринга 17.02.2020 не позднее 19:05."
+    },
+    {
+      "sha256_prefix": "7f322519ebc0",
+      "number": "01-02/306-1",
+      "approved_date": "2016-07-18",
+      "effective_from": "2016-07-18",
+      "effective_to": null,
+      "review_method": "visual",
+      "classification": "general_cash_cutoff",
+      "finding": "Зачисление денежных средств: граница 21:00 для текущего расчётного дня; актуальность на 2023–2026 отдельно не подтверждена."
+    },
+    {
+      "sha256_prefix": "bae72fd64f0f",
+      "number": "01-02/353",
+      "approved_date": "2015-09-02",
+      "effective_from": "2015-09-02",
+      "effective_to": null,
+      "review_method": "visual",
+      "classification": "general_risk_operations",
+      "finding": "Окна подачи риск-поручений: 10:00–13:58, 14:04–18:43, 19:00–23:50; при исполнении опционов с 19:05. Актуальность на 2023–2026 отдельно не подтверждена."
+    },
+    {
+      "sha256_prefix": "629b5b78221c",
+      "number": "01-02/347",
+      "approved_date": "2015-08-31",
+      "effective_from": "2015-08-31",
+      "effective_to": "2015-08-31",
+      "review_method": "visual",
+      "classification": "outside_period",
+      "finding": "Разовый срок формирования отчётов вечернего клиринга 19:00–20:48."
+    }
+  ],
+  "editions": [
+    {
+      "approved_date": "2022-11-21",
+      "effective_from": "2022-12-26",
+      "effective_to": "2023-04-09",
+      "body_evidence": "unavailable",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2023-03-01",
+      "source_url": "https://www.nationalclearingcentre.ru/connector?_t=1680074395&cmd=file&target=B_XENsZWFyaW5nXNCf0YDQsNCy0LjQu9CwINC60LvQuNGA0LjQvdCz0LBc0KfQsNGB0YLRjCBJViDQodGA0L7Rh9C90YvQuVw0LTEuINCd0JrQpiDQn9GA0LDQstC40LvQsCDQutC70LjRgNC40L3Qs9CwLiDQndCwINGB0YDQvtGH0L3QvtC8INGA0YvQvdC60LUgKDEt0Y8g0YDQtdC00LDQutGG0LjRjyAyMDIzKV_SQsdC10Lcg0L_SRgNCw0LLQvtC6XzIucGRm",
+      "reviewed_pdf_pages": [62,63],
+      "review_scope": "Selected delivery/profile clauses only, not full edition audit",
+      "effective_from": "2023-04-10",
+      "effective_to": "2023-07-30",
+      "body_evidence": "web_text_reviewed",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2023-06-23",
+      "source_url": "https://www.nationalclearingcentre.ru/connector?_t=1689872068&cmd=file&target=B_XENsZWFyaW5nXNCf0YDQsNCy0LjQu9CwINC60LvQuNGA0LjQvdCz0LBc0KfQsNGB0YLRjCBJViDQodGA0L7Rh9C90YvQuVwxLTMuINCd0JrQpiDQn9GA0LDQstC40LvQsCDQutC70LjRgNC40L3Qs9CwLiDQndCwINGB0YDQvtGH0L3QvtC8INGA0YvQvdC60LUgKDIt0Y8g0YDQtdC00LDQutGG0LjRjyAyMDIzKV_SQsdC10Lcg0L_SRgNCw0LLQvtC6LnBkZg_E_E",
+      "reviewed_pdf_pages": [62,63],
+      "review_scope": "Selected delivery/profile clauses only, not full edition audit",
+      "effective_from": "2023-07-31",
+      "effective_to": "2023-09-24",
+      "body_evidence": "web_text_reviewed",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2023-08-28",
+      "source_url": "https://nationalclearingcentre.ru/connector?_t=1695148059&cmd=file&target=B_XENsZWFyaW5nXNCf0YDQsNCy0LjQu9CwINC60LvQuNGA0LjQvdCz0LBc0KfQsNGB0YLRjCBJViDQodGA0L7Rh9C90YvQuVw0LiDQndCa0KYg0J_SRgNCw0LLQuNC70LAg0LrQu9C40YDQuNC90LPQsC4g0J3QsCDRgdGA0L7Rh9C90L7QvCDRgNGL0L3QutC1ICgzLdGPINGA0LXQtNCw0LrRhtC40Y8gMjAyMylf0LjQt9GK0Y_SRgtC40Y8ucGRm",
+      "reviewed_pdf_pages": [64],
+      "review_scope": "Selected delivery/profile clauses only, not full edition audit",
+      "effective_from": "2023-09-25",
+      "effective_to": "2024-06-16",
+      "body_evidence": "web_annotated_text_reviewed",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2024-04-25",
+      "effective_from": "2024-06-17",
+      "effective_to": "2024-09-22",
+      "body_evidence": "unavailable",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2024-07-31",
+      "effective_from": "2024-09-23",
+      "effective_to": "2024-12-08",
+      "body_evidence": "unavailable",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2024-10-31",
+      "effective_from": "2024-12-09",
+      "effective_to": "2025-03-23",
+      "body_evidence": "unavailable",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2025-02-11",
+      "effective_from": "2025-03-24",
+      "effective_to": "2025-06-22",
+      "body_evidence": "unavailable",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2025-04-24",
+      "source_url": "https://www.nationalclearingcentre.ru/connector?_t=1750173339&cmd=file&target=B_XENsZWFyaW5nXNCf0YDQsNCy0LjQu9CwINC60LvQuNGA0LjQvdCz0LBc0KfQsNGB0YLRjCBJViDQodGA0L7Rh9C90YvQuVw0LiDQndCa0KYg0J_SRgNCw0LLQuNC70LAg0LrQu9C40YDQuNC90LPQsC4g0J3QsCDRgdGA0L7Rh9C90L7QvCDRgNGL0L3QutC1ICgyLdGPINGA0LXQtNCw0LrRhtC40Y8gMjAyNSkucGRm",
+      "reviewed_pdf_pages": [64,65,66],
+      "review_scope": "Selected delivery/profile clauses only, not full edition audit",
+      "effective_from": "2025-06-23",
+      "effective_to": "2025-09-21",
+      "body_evidence": "web_text_reviewed",
+      "sha256_prefix": null
+    },
+    {
+      "approved_date": "2025-07-31",
+      "effective_from": "2025-09-22",
+      "effective_to": "2026-03-22",
+      "body_evidence": "local_original",
+      "sha256_prefix": "6e7a4c48e47f"
+    },
+    {
+      "approved_date": "2025-10-30",
+      "effective_from": "2026-03-23",
+      "effective_to": "2026-04-14",
+      "body_evidence": "local_original",
+      "sha256_prefix": "5667c8ce0d5e"
+    },
+    {
+      "approved_date": "2026-02-26",
+      "effective_from": "2026-04-15",
+      "effective_to": "2026-06-21",
+      "body_evidence": "local_original",
+      "sha256_prefix": "ac0e81f6df25"
+    },
+    {
+      "approved_date": "2026-04-28",
+      "effective_from": "2026-06-22",
+      "effective_to": null,
+      "body_evidence": "local_original",
+      "sha256_prefix": "eaa23c120451"
+    }
+  ]
+}

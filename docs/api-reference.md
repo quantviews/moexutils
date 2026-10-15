@@ -1,5 +1,14 @@
 # Справочник API
 
+## Версионируемые метаданные
+
+`moexutils.reference_metadata`: `build(config, data_root, destination=None)` создаёт
+выпуск с проверкой хешей; `publish(package)` атомарно добавляет его в DuckLake
+(False при повторе); `read(table, version_id)` читает закреплённую версию;
+`verify_package(root, manifest_name='manifest.json')` проверяет все файлы.
+Команда: `python -m scripts.import_reference_metadata --publish`.
+Схемы, ограничения и обновление — в [справочнике метаданных](reference-metadata.md).
+
 Проверено по коду 06.10.2026. Поля источника и глубина наблюдений параметров
 фьючерсов описаны отдельно в [futures-parameters.md](futures-parameters.md).
 

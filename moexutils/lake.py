@@ -90,6 +90,15 @@ TABLE_KEYS = {
     'ref_delisted': ['ticker'],
     'ref_key_rate': ['date'],
     'ref_sectors': ['ticker'],
+    # Выпуски публикуются атомарно через reference_metadata.publish, без MERGE.
+    'meta_versions': ['version_id'],
+    **{name: ['version_id', 'record_id'] for name in (
+        'meta_artifacts', 'meta_calendar_entries', 'meta_calendar_observations',
+        'meta_calendar_rules', 'meta_planned_settlements', 'meta_settlement_trace',
+        'meta_series_calendar', 'meta_series_editions', 'meta_series_gaps',
+        'meta_moex_decisions', 'meta_ncc_decisions', 'meta_ncc_editions',
+        'meta_delivery_editions', 'meta_specification_parameters',
+        'meta_ncc_documents', 'meta_moex_documents')},
 }
 
 # Представления хранилища: имя -> (SELECT, таблицы, без которых его не создать)

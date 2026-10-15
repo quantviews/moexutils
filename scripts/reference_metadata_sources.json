@@ -1,0 +1,144 @@
+{
+  "scope": "SBRF/GAZR/LKOH 2023-01-01..2026-10-05; NCC calendar observations 2020..2026; review 2026-10-15",
+  "packages": {
+    "calendar": {
+      "path": "specifications/settlement-audit-20261015-v2"
+    },
+    "settlements": {
+      "path": "specifications/speq-planned-settlements-20261015"
+    },
+    "series": {
+      "path": "specifications/series-review-20261015"
+    },
+    "ncc_review": {
+      "path": "specifications/ncc-applicability-20261015"
+    },
+    "ncc_originals": {
+      "path": "specifications/ncc-review-20261015-archive"
+    },
+    "moex_originals": {
+      "path": "specifications/originals-20261015-all"
+    },
+    "moex_review": {
+      "path": "specifications/review-20261015-all",
+      "manifest": "summary.json"
+    }
+  },
+  "tables": {
+    "meta_calendar_entries": {
+      "package": "calendar",
+      "artifact": "calendar_entries.parquet",
+      "key": [
+        "tradedate",
+        "currencyid"
+      ]
+    },
+    "meta_calendar_observations": {
+      "package": "calendar",
+      "artifact": "observations.json",
+      "key": [
+        "url"
+      ]
+    },
+    "meta_calendar_rules": {
+      "package": "calendar",
+      "artifact": "rule_sources.json",
+      "key": [
+        "url"
+      ]
+    },
+    "meta_planned_settlements": {
+      "package": "settlements",
+      "artifact": "planned_settlements.parquet",
+      "key": [
+        "secid"
+      ]
+    },
+    "meta_settlement_trace": {
+      "package": "settlements",
+      "artifact": "calculation_trace.parquet",
+      "key": [
+        "secid",
+        "date"
+      ]
+    },
+    "meta_series_calendar": {
+      "package": "series",
+      "artifact": "series_calendar.parquet",
+      "key": [
+        "secid"
+      ]
+    },
+    "meta_series_editions": {
+      "package": "series",
+      "artifact": "series_editions.parquet",
+      "key": [
+        "secid",
+        "document_sha256",
+        "candidate_from"
+      ]
+    },
+    "meta_series_gaps": {
+      "package": "series",
+      "artifact": "missing_fields.parquet",
+      "key": [
+        "secid",
+        "missing_field"
+      ]
+    },
+    "meta_moex_decisions": {
+      "package": "series",
+      "artifact": "reviewed_notices.parquet",
+      "key": [
+        "id"
+      ]
+    },
+    "meta_ncc_decisions": {
+      "package": "ncc_review",
+      "artifact": "decisions.json",
+      "key": [
+        "document_sha256"
+      ]
+    },
+    "meta_ncc_editions": {
+      "package": "ncc_review",
+      "artifact": "editions.json",
+      "key": [
+        "approved_date"
+      ]
+    },
+    "meta_delivery_editions": {
+      "package": "ncc_review",
+      "artifact": "series_delivery_edition.parquet",
+      "key": [
+        "secid"
+      ]
+    },
+    "meta_specification_parameters": {
+      "package": "moex_review",
+      "artifact": "appendix_parameters.parquet",
+      "key": [
+        "asset",
+        "document_sha256"
+      ]
+    },
+    "meta_ncc_documents": {
+      "package": "ncc_originals",
+      "artifact": "documents.json",
+      "key": [
+        "source_capture",
+        "sha256",
+        "url"
+      ]
+    },
+    "meta_moex_documents": {
+      "package": "moex_originals",
+      "artifact": "documents.json",
+      "key": [
+        "sha256",
+        "url",
+        "capture"
+      ]
+    }
+  }
+}
