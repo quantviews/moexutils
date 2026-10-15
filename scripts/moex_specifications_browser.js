@@ -8,7 +8,7 @@
   const title = "Фьючерсные контракты на акции российских эмитентов";
   const links = [...document.querySelectorAll("a[href]")].filter(a => {
     const url = new URL(a.href, location.href);
-    return a.textContent.includes(title) && url.origin === location.origin && url.pathname.startsWith("/files/");
+    return a.getClientRects().length > 0 && a.textContent.includes(title) && url.origin === location.origin && url.pathname.startsWith("/files/");
   });
   const jobs = [...new Map(links.map(a => [a.href, a])).values()];
   if (!jobs.length) throw new Error("No specification links found on this page; nothing downloaded");
@@ -49,11 +49,16 @@
     }
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
+  const dates = result.documents.flatMap(d => [...(d.context || "").matchAll(/(\d{2})\.(\d{2})\.(\d{4})/g)]
+    .map(m => `${m[3]}-${m[2]}-${m[1]}`)).sort();
+  result.visible_document_count = jobs.length;
+  result.earliest_context_date = dates[0] || null;
+  console.log(`Visible documents: ${jobs.length}; earliest context date: ${result.earliest_context_date}`);
   const blob = new Blob([JSON.stringify(result)], {type: "application/json"});
   const url = URL.createObjectURL(blob);
   const download = document.createElement("a");
   download.href = url;
-  download.download = `moex-specifications-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  download.download = `moex-specifications-${dates[0] || "unknown"}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
   download.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
   console.log("Save this JSON. Select the next archive page in MOEX UI and run again.");
