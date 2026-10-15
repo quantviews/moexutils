@@ -1,6 +1,6 @@
 import pytest
 
-from moexutils.specification_review import appendix_rows
+from moexutils.specification_review import appendix_rows, source_dates
 
 
 def xml(rows):
@@ -37,3 +37,27 @@ def test_changed_units_or_missing_asset_require_review():
         appendix_rows(xml(source))
     with pytest.raises(ValueError, match="exactly"):
         appendix_rows(xml(rows()[:2]))
+
+
+def test_legacy_alternative_codes_do_not_shift_units_or_time():
+    source = rows()
+    for row, alias in zip(source, ["SBRx", "GAZx", "LKOx"]):
+        row.pop()
+        row.insert(3, alias)
+    result = appendix_rows(xml(source))
+    assert [r["lot_shares"] for r in result] == [100, 100, 10]
+    assert all(r["trading_end_msk"] is None for r in result)
+    source[0][3] = "UNKNOWN"
+    with pytest.raises(ValueError, match="format"):
+        appendix_rows(xml(source))
+
+
+def test_source_interval_ignores_dates_of_separate_amendments():
+    start, end = source_dates("Период действия:с 01.07.2015 по 08.11.2022\nИзменения от 20.10.2016")
+    assert str(start) == "2015-07-01"
+    assert str(end) == "2022-11-08"
+    start, end = source_dates("Вступает в силу 25.03.2025 с момента начала вечерней клиринговой сессии")
+    assert str(start) == "2025-03-25"
+    assert end is None
+    with pytest.raises(ValueError, match="explicit"):
+        source_dates("Загружено 15.10.2026")
