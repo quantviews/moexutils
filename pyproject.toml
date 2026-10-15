@@ -31,7 +31,7 @@ reference = ["holidays>=0.102"]
 packages = ["moexutils"]
 
 [tool.setuptools.package-data]
-moexutils = ["specification_sources.json"]
+moexutils = ["specification_sources.json", "specification_decisions.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

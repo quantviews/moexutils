@@ -1,0 +1,26 @@
+{
+  "review_date": "2026-10-15",
+  "scope": "SBRF/GAZR/LKOH quarterly contracts; 2023-01-01 through 2026-10-05",
+  "absence_of_all_exceptions_proven": false,
+  "decisions": [
+    {"id": 56493, "classification": "general_settlement_cycle", "effective_date": "2023-07-31", "finding": "Announcement of T+1 securities settlement, explicitly including stock futures delivery; do not equate a delivery trade with final settlement."},
+    {"id": 62684, "classification": "general_settlement_cycle", "effective_date": "2023-07-31", "finding": "Actual transition of the securities market from T+2 to T+1 confirmed."},
+    {"id": 98363, "classification": "general_session_change", "effective_date": "2026-03-23", "finding": "Evening session becomes current trading day; clearing 23:50-00:30; delivery trades on next trading day. Relevant to all three families."},
+    {"id": 92172, "classification": "spot_lot_only", "effective_date": "2025-08-01", "finding": "SBER/SBERP standard stock lot changes 10 to 1; this is not a change to SBRF futures lot."},
+    {"id": 98111, "classification": "test_environment_only", "effective_date": "2026-03-05", "finding": "LKOH-3.26 expiration on March 5 is a test T1 environment event, not a production series exception."},
+    {"id": 93056, "classification": "perpetual_only", "effective_date": "2025-08-29", "finding": "Perpetual exercise mechanism and September instruction date change; does not postpone ordinary quarterly SBRF/GAZR expiration."},
+    {"id": 73437, "classification": "perpetual_only", "effective_date": "2024-10-01", "finding": "Launch of SBERF/GAZPF; their per-share quote and 0.01 tick must not replace quarterly contract terms."},
+    {"id": 99759, "classification": "spot_price_limit_only", "effective_date": "2026-05-04", "finding": "Dividend-related stock LKOH price-limit reference adjustment, not a futures lot or delivery exception."},
+    {"id": 77982, "classification": "other_underlying", "effective_date": "2025-03-25", "finding": "PLZL split: 10 to 100 stock lot in futures, outside target families."},
+    {"id": 88786, "classification": "other_underlying", "effective_date": "2025-03-25", "finding": "PLZL changes at evening clearing; expressly says other derivatives trade unchanged."},
+    {"id": 99128, "classification": "other_underlying", "effective_date": "2026-04-16", "finding": "T-Technologies stock conversion, outside target families."},
+    {"id": 65686, "classification": "other_underlying", "effective_date": null, "finding": "TRNF early expiration; no target series."},
+    {"id": 67186, "classification": "other_underlying", "effective_date": null, "finding": "GMKN planned early expiration, superseded by later GMKN notice; no target series."},
+    {"id": 67392, "classification": "other_underlying", "effective_date": null, "finding": "TCSI early expiration; no target series."},
+    {"id": 68486, "classification": "other_underlying", "effective_date": null, "finding": "Revised GMKN expiration; no target series."},
+    {"id": 68700, "classification": "other_underlying", "effective_date": null, "finding": "FIVE early expiration; no target series."},
+    {"id": 69532, "classification": "other_underlying", "effective_date": null, "finding": "YNDX early expiration; no target series."},
+    {"id": 70217, "classification": "other_underlying", "effective_date": null, "finding": "VTBR early expiration; no target series."},
+    {"id": 71737, "classification": "other_underlying", "effective_date": null, "finding": "BELU early expiration; no target series."}
+  ]
+}
