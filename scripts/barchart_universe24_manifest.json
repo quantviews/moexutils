@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "purpose": "historical_availability_probe",
+  "campaign": "universe24-bridge-20261015",
+  "snapshot_end": "2026-10-05",
+  "buffer_calendar_days": 10,
+  "download_scope": "all_available_daily_contract_history",
+  "price_kind": "provider_close_not_verified_settlement",
+  "publication_time_status": "unknown_received_at_is_not_publication",
+  "base_packages": [
+    "history-2020-2024-extended-20261014",
+    "expansion-20261009"
+  ],
+  "contracts": [
+    {
+      "priority": 1,
+      "asset": "COFFEE",
+      "symbol": "KCK25",
+      "delivery_month": "2025-05",
+      "chain_start": "2025-02-15",
+      "chain_end": "2025-04-14",
+      "probe_start": "2025-02-05",
+      "probe_end": "2025-04-24",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "priority": 1,
+      "asset": "ORANGE",
+      "symbol": "OJK25",
+      "delivery_month": "2025-05",
+      "chain_start": "2025-02-15",
+      "chain_end": "2025-04-14",
+      "probe_start": "2025-02-05",
+      "probe_end": "2025-04-24",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "priority": 1,
+      "asset": "TTF",
+      "symbol": "TGH25",
+      "delivery_month": "2025-03",
+      "chain_start": "2025-01-15",
+      "chain_end": "2025-02-14",
+      "probe_start": "2025-01-05",
+      "probe_end": "2025-02-24",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "priority": 1,
+      "asset": "TTF",
+      "symbol": "TGJ25",
+      "delivery_month": "2025-04",
+      "chain_start": "2025-02-15",
+      "chain_end": "2025-03-14",
+      "probe_start": "2025-02-05",
+      "probe_end": "2025-03-24",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "priority": 2,
+      "asset": "COFFEE",
+      "symbol": "KCZ26",
+      "delivery_month": "2026-12",
+      "chain_start": "2026-08-15",
+      "chain_end": "2026-10-05",
+      "probe_start": "2026-08-05",
+      "probe_end": "2026-10-15",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "priority": 2,
+      "asset": "ORANGE",
+      "symbol": "OJX26",
+      "delivery_month": "2026-11",
+      "chain_start": "2026-08-15",
+      "chain_end": "2026-10-05",
+      "probe_start": "2026-08-05",
+      "probe_end": "2026-10-15",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    },
+    {
+      "priority": 2,
+      "asset": "TTF",
+      "symbol": "TGX26",
+      "delivery_month": "2026-11",
+      "chain_start": "2026-09-15",
+      "chain_end": "2026-10-05",
+      "probe_start": "2026-09-05",
+      "probe_end": "2026-10-15",
+      "calendar_status": "delivery_month_candidate_expiry_unverified"
+    }
+  ]
+}
