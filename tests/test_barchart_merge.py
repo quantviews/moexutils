@@ -4,7 +4,7 @@ import json
 import pytest
 
 from moexutils.barchart_expansion import import_captures
-from moexutils.barchart_merge import merge_packages
+from moexutils.barchart_merge import merge_packages, normalize_contract
 from moexutils.barchart_pilot import read_contracts
 
 
@@ -16,7 +16,7 @@ def package(tmp_path, symbol):
             dict(
                 symbol=symbol,
                 asset="COFFEE",
-                delivery_month="2025-03",
+                delivery_month="2025-03" if symbol == "KCH25" else "2025-05",
                 probe_start="2024-12-30",
                 probe_end="2024-12-31",
             )
@@ -60,3 +60,16 @@ def test_tampered_manifest_is_rejected_before_writing(tmp_path):
     with pytest.raises(ValueError, match="Checksum"):
         merge_packages([a], tmp_path / "merged")
     assert not (tmp_path / "merged").exists()
+
+
+def test_delivery_metadata_and_snapshot(tmp_path):
+    assert normalize_contract(dict(symbol="TGX26", asset="TTF"))["delivery_month"] == "2026-11"
+    for extra in [dict(asset="ORANGE"), dict(delivery_month="2025-04")]:
+        with pytest.raises(ValueError, match="mismatch"):
+            normalize_contract(dict(dict(symbol="KCK25", asset="COFFEE"), **extra))
+    a = package(tmp_path, "KCH25")
+    out = tmp_path / "snapshot"
+    merge_packages([a], out, "2024-12-30")
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["snapshot_end"] == "2024-12-30"
+    assert read_contracts(out).height == 2  # Raw bars after cutoff remain intact.

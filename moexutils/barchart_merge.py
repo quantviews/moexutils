@@ -1,8 +1,10 @@
 """Combine disjoint, verified Barchart packages without changing source captures."""
 
 import argparse
+import datetime as dt
 import hashlib
 import json
+import re
 from pathlib import Path
 
 import polars as pl
@@ -10,7 +12,27 @@ import polars as pl
 from moexutils.barchart_pilot import read_contracts
 
 
-def merge_packages(packages, output):
+def normalize_contract(job):
+    """Delivery month from explicit provider symbol, never an inferred expiry."""
+    match = re.fullmatch(r"(KC|OJ|TG)([FGHJKMNQUVXZ])(\d{2})", job["symbol"])
+    if match is None:
+        raise ValueError("Unsupported contract symbol")
+    prefix, month, year = match.groups()
+    if job["asset"] != {"KC": "COFFEE", "OJ": "ORANGE", "TG": "TTF"}[prefix]:
+        raise ValueError("Symbol/asset mismatch")
+    delivery = f"{2000 + int(year):04d}-{'FGHJKMNQUVXZ'.index(month) + 1:02d}"
+    if job.get("delivery_month", delivery) != delivery:
+        raise ValueError("Symbol/delivery month mismatch")
+    return {
+        **job,
+        "delivery_month": delivery,
+        "calendar_status": job.get("calendar_status", "delivery_month_candidate_expiry_unverified"),
+    }
+
+
+def merge_packages(packages, output, snapshot_end=None):
+    if snapshot_end is not None:
+        snapshot_end = dt.date.fromisoformat(str(snapshot_end)).isoformat()
     frames, jobs, coverage, inputs, copies = [], [], [], [], {}
     for index, package in enumerate(packages, 1):
         root = Path(package).resolve()
@@ -35,8 +57,8 @@ def merge_packages(packages, output):
         if expected != set(frame["symbol"]):
             raise ValueError("Manifest and series differ")
         frames.append(frame)
-        jobs.extend(manifest["contracts"])
-        coverage.extend(meta["coverage"])
+        jobs.extend(normalize_contract(j) for j in manifest["contracts"])
+        coverage.extend(normalize_contract(j) for j in meta["coverage"])
         inputs.append(dict(package=str(root), summary_sha256=hashlib.sha256(summary).hexdigest()))
     if not frames:
         raise ValueError("No packages")
@@ -54,12 +76,16 @@ def merge_packages(packages, output):
     manifest = dict(
         schema_version=2, purpose="historical_availability_probe", campaign="merged_verified_packages", contracts=jobs
     )
+    if snapshot_end is not None:
+        manifest["snapshot_end"] = snapshot_end
+        manifest["snapshot_policy"] = "consumer_cutoff_raw_history_preserved"
     (output / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     frame.write_parquet(output / "contracts.parquet")
     meta = dict(
         schema_version=1,
         status="parsed_not_execution_validated",
         full_history_verified=False,
+        snapshot_end=snapshot_end,
         coverage=coverage,
         inputs=inputs,
         rows=frame.height,
@@ -78,6 +104,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--packages", nargs="+", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--snapshot-end", type=dt.date.fromisoformat)
     args = parser.parse_args()
-    result = merge_packages(args.packages, args.output)
+    result = merge_packages(args.packages, args.output, args.snapshot_end)
     print(json.dumps(dict(rows=result["rows"], contracts=len(result["coverage"]))))
