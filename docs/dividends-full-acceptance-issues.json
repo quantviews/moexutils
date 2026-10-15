@@ -1,0 +1,509 @@
+{
+  "package_id": "dividends-72b865ea11b444dd44b012f4",
+  "manifest_sha256": "3ae60701a69c90f4346bd3e02c1fdc9cdc6b6ba6c80f0414b74677bd1409787b",
+  "audit_path": "F:\\moex-data\\reports\\dividends-acceptance-20261015-72b865ea",
+  "audit_manifest_sha256": "85b6c8019045487542357e085f782d9d56553c540982ebaa10b16cd848d50251",
+  "snapshot_at": "2026-10-05T23:59:59.999999+03:00",
+  "note": "Observed issues, not independently verified event values; preserve originals and trace all corrections.",
+  "issues": [
+    {
+      "ticker": "SBER",
+      "check": "coverage_not_complete",
+      "detail": "Needs a documented target-specific coverage review for 2023-01-01..2026-10-05"
+    },
+    {
+      "ticker": "SBER",
+      "check": "missing_share_basis_date",
+      "detail": "event:1c16978658398c3b1d3f3aa4b52607eb"
+    },
+    {
+      "ticker": "SBER",
+      "check": "missing_share_basis_date",
+      "detail": "event:2d795c4378fe691d8d1937c207b3db19"
+    },
+    {
+      "ticker": "SBER",
+      "check": "missing_share_basis_date",
+      "detail": "event:f9aa5f0b174f1573219125546b7f8330"
+    },
+    {
+      "ticker": "SBER",
+      "check": "missing_share_basis_date",
+      "detail": "event:02d02052b0655a06e0c95c480e04afbb"
+    },
+    {
+      "ticker": "GAZP",
+      "check": "coverage_not_complete",
+      "detail": "Needs a documented target-specific coverage review for 2023-01-01..2026-10-05"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "coverage_not_complete",
+      "detail": "Needs a documented target-specific coverage review for 2023-01-01..2026-10-05"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:eadc4de5a901ffe590c2d0e67bd13484"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "historical_evidence_missing",
+      "detail": "event:642878e6d2eb5e6d0c55fee54329fa0b"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_published_at",
+      "detail": "event:642878e6d2eb5e6d0c55fee54329fa0b"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_publication_evidence",
+      "detail": "event:642878e6d2eb5e6d0c55fee54329fa0b"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_edition_evidence",
+      "detail": "event:642878e6d2eb5e6d0c55fee54329fa0b"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_public_available_at",
+      "detail": "event:642878e6d2eb5e6d0c55fee54329fa0b"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:642878e6d2eb5e6d0c55fee54329fa0b"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:cda12c3e4df5ef9e0d97ae0415679f1e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:4c56336ebc2b78aa1b7fe908a33d4b51"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "historical_evidence_missing",
+      "detail": "event:cf31c70f6f2c5c08621c2094d1ccf79e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_published_at",
+      "detail": "event:cf31c70f6f2c5c08621c2094d1ccf79e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_publication_evidence",
+      "detail": "event:cf31c70f6f2c5c08621c2094d1ccf79e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_edition_evidence",
+      "detail": "event:cf31c70f6f2c5c08621c2094d1ccf79e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_public_available_at",
+      "detail": "event:cf31c70f6f2c5c08621c2094d1ccf79e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:cf31c70f6f2c5c08621c2094d1ccf79e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "historical_evidence_missing",
+      "detail": "event:95cb22c595b642c49427538494a9fb69"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_published_at",
+      "detail": "event:95cb22c595b642c49427538494a9fb69"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_publication_evidence",
+      "detail": "event:95cb22c595b642c49427538494a9fb69"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_edition_evidence",
+      "detail": "event:95cb22c595b642c49427538494a9fb69"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_public_available_at",
+      "detail": "event:95cb22c595b642c49427538494a9fb69"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:95cb22c595b642c49427538494a9fb69"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "historical_evidence_missing",
+      "detail": "event:c20a12fcd844f49779b5bf528aab826c"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_published_at",
+      "detail": "event:c20a12fcd844f49779b5bf528aab826c"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_publication_evidence",
+      "detail": "event:c20a12fcd844f49779b5bf528aab826c"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_edition_evidence",
+      "detail": "event:c20a12fcd844f49779b5bf528aab826c"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_public_available_at",
+      "detail": "event:c20a12fcd844f49779b5bf528aab826c"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:c20a12fcd844f49779b5bf528aab826c"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "historical_evidence_missing",
+      "detail": "event:ff10558b3c40ee323c913dd32cdd55bd"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_published_at",
+      "detail": "event:ff10558b3c40ee323c913dd32cdd55bd"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_publication_evidence",
+      "detail": "event:ff10558b3c40ee323c913dd32cdd55bd"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_edition_evidence",
+      "detail": "event:ff10558b3c40ee323c913dd32cdd55bd"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_public_available_at",
+      "detail": "event:ff10558b3c40ee323c913dd32cdd55bd"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:ff10558b3c40ee323c913dd32cdd55bd"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "historical_evidence_missing",
+      "detail": "event:560a1b510f5ad168b3b7b96e3b84d73e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_published_at",
+      "detail": "event:560a1b510f5ad168b3b7b96e3b84d73e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_publication_evidence",
+      "detail": "event:560a1b510f5ad168b3b7b96e3b84d73e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_edition_evidence",
+      "detail": "event:560a1b510f5ad168b3b7b96e3b84d73e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_public_available_at",
+      "detail": "event:560a1b510f5ad168b3b7b96e3b84d73e"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_share_basis_date",
+      "detail": "event:560a1b510f5ad168b3b7b96e3b84d73e"
+    },
+    {
+      "ticker": "GAZP",
+      "check": "missing_causal_example",
+      "detail": "2023"
+    },
+    {
+      "ticker": "GAZP",
+      "check": "missing_causal_example",
+      "detail": "2024"
+    },
+    {
+      "ticker": "GAZP",
+      "check": "missing_causal_example",
+      "detail": "2025"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_causal_example",
+      "detail": "2023"
+    },
+    {
+      "ticker": "LKOH",
+      "check": "missing_causal_example",
+      "detail": "2024"
+    }
+  ],
+  "affected_events": [
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:95cb22c595b642c49427538494a9fb69",
+      "dividend_id": "dividend:bd573fa3fb68ce49959ebd78c21de404",
+      "event_type": "approval",
+      "amount": "438",
+      "currency": "RUB",
+      "record_date": "2023-06-05",
+      "published_at": null,
+      "share_basis_date": null,
+      "historical_availability": "unproven",
+      "source_url": "https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends",
+      "sha256": "b3ef52c1286b8e85b48829f67b679a5103ad0cbefb60559c76cb725975d43daa"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:c20a12fcd844f49779b5bf528aab826c",
+      "dividend_id": "dividend:f67d3d63573d21206ca87ea8d394487c",
+      "event_type": "approval",
+      "amount": "447",
+      "currency": "RUB",
+      "record_date": "2023-12-17",
+      "published_at": null,
+      "share_basis_date": null,
+      "historical_availability": "unproven",
+      "source_url": "https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends",
+      "sha256": "b3ef52c1286b8e85b48829f67b679a5103ad0cbefb60559c76cb725975d43daa"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:ff10558b3c40ee323c913dd32cdd55bd",
+      "dividend_id": "dividend:4c86ed39e6b5bc54913e54cd9edd4ec4",
+      "event_type": "approval",
+      "amount": "498",
+      "currency": "RUB",
+      "record_date": "2024-05-07",
+      "published_at": null,
+      "share_basis_date": null,
+      "historical_availability": "unproven",
+      "source_url": "https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends",
+      "sha256": "b3ef52c1286b8e85b48829f67b679a5103ad0cbefb60559c76cb725975d43daa"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:560a1b510f5ad168b3b7b96e3b84d73e",
+      "dividend_id": "dividend:a2a0d0bf3f455776710d02a3840f4db8",
+      "event_type": "approval",
+      "amount": "541",
+      "currency": "RUB",
+      "record_date": "2025-06-03",
+      "published_at": null,
+      "share_basis_date": null,
+      "historical_availability": "unproven",
+      "source_url": "https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends",
+      "sha256": "b3ef52c1286b8e85b48829f67b679a5103ad0cbefb60559c76cb725975d43daa"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:4c56336ebc2b78aa1b7fe908a33d4b51",
+      "dividend_id": "dividend:978bc45c94b481e9b3a7353f7254caeb",
+      "event_type": "approval",
+      "amount": "397",
+      "currency": "RUB",
+      "record_date": "2026-01-12",
+      "published_at": "2025-12-30T12:30:43+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.skrin.ru/ShowMessage.asp?id=36&eid=3703034&agency=3",
+      "sha256": "cc11e848c11d3fed6aeeb3e7cc84e208c2799daab89c7c4d30dc7cec4f1c6ba5"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:cda12c3e4df5ef9e0d97ae0415679f1e",
+      "dividend_id": "dividend:59ac779f9ba071f94edecb32da9b48a0",
+      "event_type": "recommendation",
+      "amount": "397",
+      "currency": "RUB",
+      "record_date": "2026-01-12",
+      "published_at": "2025-11-21T11:25:47+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.skrin.ru/ShowMessage.asp?id=36&eid=3688640&agency=3",
+      "sha256": "7e373a2be3cabde09bd0d623423054a2fee45b0fddd2cba5386aaac096cfda75"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:cf31c70f6f2c5c08621c2094d1ccf79e",
+      "dividend_id": "dividend:d578b9831e2f9cfec041d52b301b78a0",
+      "event_type": "approval",
+      "amount": "397",
+      "currency": "RUB",
+      "record_date": "2026-01-12",
+      "published_at": null,
+      "share_basis_date": null,
+      "historical_availability": "unproven",
+      "source_url": "https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends",
+      "sha256": "b3ef52c1286b8e85b48829f67b679a5103ad0cbefb60559c76cb725975d43daa"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:642878e6d2eb5e6d0c55fee54329fa0b",
+      "dividend_id": "dividend:64c43d92bf3368afba49b8b5348941e3",
+      "event_type": "approval",
+      "amount": "278",
+      "currency": "RUB",
+      "record_date": "2026-05-04",
+      "published_at": null,
+      "share_basis_date": null,
+      "historical_availability": "unproven",
+      "source_url": "https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends",
+      "sha256": "b3ef52c1286b8e85b48829f67b679a5103ad0cbefb60559c76cb725975d43daa"
+    },
+    {
+      "ticker": "LKOH",
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "event_id": "event:eadc4de5a901ffe590c2d0e67bd13484",
+      "dividend_id": "dividend:929303dfcec09b8677a799eb6c06c585",
+      "event_type": "recommendation",
+      "amount": "278",
+      "currency": "RUB",
+      "record_date": "2026-05-04",
+      "published_at": "2026-03-20T10:00:47+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.skrin.ru/ShowMessage.asp?id=36&eid=3729900&agency=3",
+      "sha256": "e3a1d2cf0ee412de52d54d2c1ccc0856bceed982c9aadf4ed39566c1d4372b3f"
+    },
+    {
+      "ticker": "SBER",
+      "security_id": "security:19fcb72b26f7709d06b8a8472b2a5954",
+      "event_id": "event:1c16978658398c3b1d3f3aa4b52607eb",
+      "dividend_id": "dividend:106920728ede788f2349e70b6dba619b",
+      "event_type": "recommendation",
+      "amount": "25.00",
+      "currency": "RUB",
+      "record_date": "2023-05-11",
+      "published_at": "2023-03-17T14:35:00+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.1prime.ru/news/-12/{527C85DE-69C7-4E1B-AEB3-5250E5566075}.uif",
+      "sha256": "88aad2d849a97cd3331d75c95afbe5b42d94d30f8eb1bd570047dbb71bb18930"
+    },
+    {
+      "ticker": "SBER",
+      "security_id": "security:19fcb72b26f7709d06b8a8472b2a5954",
+      "event_id": "event:2d795c4378fe691d8d1937c207b3db19",
+      "dividend_id": "dividend:a774eec77a324363b5e0589c3a40975b",
+      "event_type": "recommendation",
+      "amount": "33.30",
+      "currency": "RUB",
+      "record_date": "2024-07-11",
+      "published_at": "2024-04-23T13:17:00+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.1prime.ru/news/-12/{5CD39A5D-FAEC-4E4B-BC00-5E7C35F2EA98}.uif",
+      "sha256": "bdacbb676ecf219d3a00f1e6d2ef3c7061fb3de287d874af41d2e5b5440e992e"
+    },
+    {
+      "ticker": "SBER",
+      "security_id": "security:19fcb72b26f7709d06b8a8472b2a5954",
+      "event_id": "event:f9aa5f0b174f1573219125546b7f8330",
+      "dividend_id": "dividend:41010140b38b332c6d068f6ec17ce705",
+      "event_type": "recommendation",
+      "amount": "34.84",
+      "currency": "RUB",
+      "record_date": "2025-07-18",
+      "published_at": "2025-04-22T13:31:00+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.1prime.ru/news/-12/{CCA5847C-E68E-4329-B8E7-1D74DB789739}.uif",
+      "sha256": "8ea115680887124bdbd550eb587f4249568f398314396f0cc14856791ec50d5f"
+    },
+    {
+      "ticker": "SBER",
+      "security_id": "security:19fcb72b26f7709d06b8a8472b2a5954",
+      "event_id": "event:02d02052b0655a06e0c95c480e04afbb",
+      "dividend_id": "dividend:64ac6564c6c19ca2db2e00a750de75ff",
+      "event_type": "recommendation",
+      "amount": "37.64",
+      "currency": "RUB",
+      "record_date": "2026-07-20",
+      "published_at": "2026-04-21T13:51:00+03:00",
+      "share_basis_date": null,
+      "historical_availability": "proven",
+      "source_url": "https://disclosure.1prime.ru/news/-12/{0F33D40C-5BBB-4502-A589-0AF3D5186A74}.uif",
+      "sha256": "38c05ff0011858e5ba77b53a66cf6dbb2f50a165299e63f9eb39cb7b2c19ddb3"
+    }
+  ],
+  "coverage": [
+    {
+      "security_id": "security:19fcb72b26f7709d06b8a8472b2a5954",
+      "ticker": "SBER",
+      "status": "partial",
+      "requested_from": "2023-01-01",
+      "requested_to": "2026-10-05",
+      "checked_at": "2026-10-15T10:49:59.158547+00:00",
+      "available_from": "2023-03-17",
+      "available_to": "2026-04-21",
+      "source_ids_json": "[\"source:0028a6f5a97cde1015f7481c293b5b8a\", \"source:0161dce304419aaf77775f33416700d7\", \"source:18739c6f54b9277ce2beb188acc472e1\", \"source:1ab2b7b7f79cd60f96f541126ad33c48\", \"source:1cdc30f23b23ad3a4bc2d6e4c77af037\", \"source:2745c8083f14ba37b5547a6d8dd01a42\", \"source:2772690c801e64999969b0f095fa77db\", \"source:37a29c5b193313716c88d75e1d401cdc\", \"source:39bd1e4f634fc3f79a98f91539b90e04\", \"source:3b6816ffdd623b6b0d9db62ccbe6d0d5\", \"source:4224f84d65a1d7f03aad7c9fc6a68cb6\", \"source:4a2ee970f835485d4c655fe444f45b0b\", \"source:59b24d86b04c83f289a1c2db83c35b90\", \"source:5e72cf66dcace7195329922f246bcae5\", \"source:6041074b1ea3223bcc3072e95cddd05e\", \"source:638169b26e8f7631afd26f27c545835a\", \"source:638c30e8aa24e64ce6df35c04a6df0de\", \"source:6731a0dbbaca5db07b14799b1f378b1d\", \"source:778c8f91a08024186d03c50c33682d31\", \"source:7b01cf1a4b1ab1f453f3b4eba1bb1405\", \"source:850dd95e69d4281c21628462b34ecc49\", \"source:8dc3522128d8f56f440b482108572095\", \"source:97f9c4e377db6d51b57ea6093bbe6920\", \"source:9afb7d6d47b00d59508f8af70103d6f3\", \"source:9f72a4cd390e0121538402a8ce606711\", \"source:a34ebf841e6c249b65fb86fc4b469177\", \"source:a3747fb4e217e15e955d167c607b42d6\", \"source:a798872e999e4dd2a6578cc701b45c37\", \"source:adc38f171435dca9cef25790fcebc3f3\", \"source:aec1bfaf21ead489476760779b3f0fd8\", \"source:b3b7d76fa14c53426f9a1565eea91a6d\", \"source:b898e73ad3c4be9ab4460631f91c895b\", \"source:c64d29029efb67ad2f16830c5287d171\", \"source:c6e221700af5815f3632757ba0a28509\", \"source:c9d82dc2584872bed29ee16aaa1cd5ef\", \"source:caa6389e1d39c088be43ca7d3e5a2c08\", \"source:cbcfd4167ea71121ff3edb9dbe3e6fc3\", \"source:cfb82b100b10d0e5ae984fa5a6ca300a\", \"source:d9930ea81815bb75d7e8783e09e91981\", \"source:e4f72c65d63bfca4617600d9dbdba819\", \"source:ee50441493e0273965014af34e7068ac\", \"source:eff098e6e256f25ff07f4d4d2312606f\", \"source:f1e62c86dd2989d7b8c0b002f610d800\", \"source:f28a3cd706b9ab3a054ce79e868bcd6e\", \"source:f3d996df04fb38fd6e9787cab1d04aed\", \"source:f6b1e26ac5c3acf27a9584fc325a008b\"]",
+      "event_counts_json": "{\"reference\": 28, \"recommendation\": 4}",
+      "missing_fields_json": "[\"actual_payment_date\", \"share_basis_date\", \"dividend_episode_link\"]",
+      "reasons_json": "[\"moex_dividends:ValueError:missing_table:dividends\", \"official:PermissionError:source_unavailable: cached HTTP 403; source:f6b1e26ac5c3acf27a9584fc325a008b\", \"historical_archive_coverage_not_proven\", \"jurisdiction_and_share_basis_require_verification\", {\"source\": \"skrin_regulated_archive\", \"status\": \"indexed\", \"documents_indexed\": 1152, \"documents_pending\": 1074, \"documents_not_selected\": 0, \"review_counts\": {\"needs_review\": 78}, \"error\": null, \"history_scope\": \"rolling_year_search_not_full_requested_interval\", \"available_date_kind\": \"record_date_only\", \"missing_field_counts\": {\"published_at\": 0, \"edition_evidence\": 0, \"actual_payment_date\": 0, \"share_basis_date\": 0, \"record_date\": 0}, \"unresolved_episode_links\": 0}, {\"source\": \"prime_regulated_archive\", \"status\": \"not_checked\", \"documents_indexed\": null, \"documents_pending\": null, \"documents_not_selected\": null, \"review_counts\": {\"parsed\": 4}, \"error\": null, \"history_scope\": null, \"available_date_kind\": \"publication_date\", \"missing_field_counts\": {\"published_at\": 0, \"edition_evidence\": 0, \"actual_payment_date\": 4, \"share_basis_date\": 4, \"record_date\": 0}, \"unresolved_episode_links\": 3}]",
+      "source_statuses_json": "{\"moex_dividends\": \"source_unavailable\", \"aggregator\": \"reference_only\", \"https://www.e-disclosure.ru/portal/company.aspx?id=3043\": \"source_unavailable\", \"skrin_regulated_archive\": \"indexed\", \"prime_regulated_archive\": \"not_checked\"}"
+    },
+    {
+      "security_id": "security:f50459a64a57828482b40df151e706da",
+      "ticker": "LKOH",
+      "status": "partial",
+      "requested_from": "2023-01-01",
+      "requested_to": "2026-10-05",
+      "checked_at": "2026-10-15T10:49:59.417263+00:00",
+      "available_from": "2025-11-21",
+      "available_to": "2026-10-09",
+      "source_ids_json": "[\"source:4d6503d6cdc998ceebae821382365e6c\", \"source:521f70adf940c6305fd42dece9316034\", \"source:5606bef3ea6a8fb6fd342c2ae7fe8082\", \"source:777d9467ace5155d8b55dea91a909e75\", \"source:9d884154a38c94d594479611c8742612\", \"source:bec52ce1773f4576e7caa8b731828fa5\", \"source:f6aeed1c4d375f18c35055bd11c56580\", \"source:f84508cb2283e56931739758fcfc2e2e\"]",
+      "event_counts_json": "{\"reference\": 39, \"approval\": 15, \"recommendation\": 3}",
+      "missing_fields_json": "[\"published_at\", \"edition_evidence\", \"actual_payment_date\", \"share_basis_date\", \"record_date\", \"dividend_episode_link\"]",
+      "reasons_json": "[\"moex_dividends:ValueError:missing_table:dividends\", \"historical_archive_coverage_not_proven\", \"jurisdiction_and_share_basis_require_verification\", {\"source\": \"skrin_regulated_archive\", \"status\": \"indexed\", \"documents_indexed\": 25, \"documents_pending\": 0, \"documents_not_selected\": 0, \"review_counts\": {\"not_dividend\": 14, \"parsed\": 4, \"needs_review\": 7}, \"error\": null, \"history_scope\": \"rolling_year_search_not_full_requested_interval\", \"available_date_kind\": \"publication_date\", \"missing_field_counts\": {\"published_at\": 14, \"edition_evidence\": 14, \"actual_payment_date\": 18, \"share_basis_date\": 18, \"record_date\": 4}, \"unresolved_episode_links\": 3}, {\"source\": \"prime_regulated_archive\", \"status\": \"not_checked\", \"documents_indexed\": null, \"documents_pending\": null, \"documents_not_selected\": null, \"review_counts\": {}, \"error\": null, \"history_scope\": null, \"available_date_kind\": \"publication_date\", \"missing_field_counts\": {\"published_at\": 14, \"edition_evidence\": 14, \"actual_payment_date\": 18, \"share_basis_date\": 18, \"record_date\": 4}, \"unresolved_episode_links\": 3}]",
+      "source_statuses_json": "{\"moex_dividends\": \"source_unavailable\", \"aggregator\": \"reference_only\", \"https://lukoil.ru/InvestorAndShareholderCenter/Securities/Dividends\": \"current_facts_verified_historical_edition_unproven\", \"skrin_regulated_archive\": \"indexed\", \"prime_regulated_archive\": \"not_checked\"}"
+    },
+    {
+      "security_id": "security:3b320217b0662c96b1d82642cee108b0",
+      "ticker": "GAZP",
+      "status": "partial",
+      "requested_from": "2023-01-01",
+      "requested_to": "2026-10-05",
+      "checked_at": "2026-10-15T10:50:05.853320+00:00",
+      "available_from": "2026-05-20",
+      "available_to": "2026-06-29",
+      "source_ids_json": "[\"source:2b757f9942ef5038ce13ee968b6f56ea\", \"source:91378d56e6ac60c6f9884f22bb9c44e0\", \"source:a64e1535f2121d41d2808df39d57197a\", \"source:c105c0ff48ff21c00391bead10508ded\", \"source:ed7a834fd216f1cd22678a49672eb8a1\"]",
+      "event_counts_json": "{\"recommendation\": 1, \"no_dividend\": 1, \"reference\": 28}",
+      "missing_fields_json": "[\"actual_payment_date\", \"share_basis_date\", \"record_date\", \"dividend_episode_link\"]",
+      "reasons_json": "[\"moex_dividends:ValueError:missing_table:dividends\", \"official:RuntimeError:offline_cache_miss\", \"historical_archive_coverage_not_proven\", \"jurisdiction_and_share_basis_require_verification\", {\"source\": \"skrin_regulated_archive\", \"status\": \"indexed\", \"documents_indexed\": 28, \"documents_pending\": 0, \"documents_not_selected\": 0, \"review_counts\": {\"not_dividend\": 26, \"parsed\": 2}, \"error\": null, \"history_scope\": \"rolling_year_search_not_full_requested_interval\", \"available_date_kind\": \"publication_date\", \"missing_field_counts\": {\"published_at\": 0, \"edition_evidence\": 0, \"actual_payment_date\": 2, \"share_basis_date\": 2, \"record_date\": 2}, \"unresolved_episode_links\": 2}, {\"source\": \"prime_regulated_archive\", \"status\": \"not_checked\", \"documents_indexed\": null, \"documents_pending\": null, \"documents_not_selected\": null, \"review_counts\": {}, \"error\": null, \"history_scope\": null, \"available_date_kind\": \"publication_date\", \"missing_field_counts\": {\"published_at\": 0, \"edition_evidence\": 0, \"actual_payment_date\": 2, \"share_basis_date\": 2, \"record_date\": 2}, \"unresolved_episode_links\": 2}]",
+      "source_statuses_json": "{\"moex_dividends\": \"source_unavailable\", \"aggregator\": \"reference_only\", \"https://www.gazprom.ru/press/news/2024/june/article574627/\": \"source_unavailable\", \"skrin_regulated_archive\": \"indexed\", \"prime_regulated_archive\": \"not_checked\"}"
+    }
+  ]
+}
