@@ -11,12 +11,14 @@ license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
     "requests",
-    "pyarrow",
+    "tzdata",
+    # Keep Arrow on the tested NumPy 1.x-compatible release line.
+    "pyarrow>=19,<20",
     "openpyxl",
     "lxml",
-    "numpy<2",
+    "numpy>=1.26,<2",
     "duckdb>=1.5",
-    "polars>=1.44",
+    "polars>=1.44,<2",
 ]
 
 [project.optional-dependencies]

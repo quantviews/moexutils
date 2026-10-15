@@ -47,6 +47,13 @@ pip install -e ".[dev]"          # + pytest и ruff
 
 Другие проекты ставят его так же: `pip install -e F:\Yandex.Disk\FINANCE\moexutils`.
 
+Совместимые линии зависимостей: NumPy `>=1.26,<2`, PyArrow `>=19,<20`,
+Polars `>=1.44,<2`. Arrow ограничен проверенной линией 19.x для NumPy 1.x;
+переход на NumPy 2 / новые основные версии Arrow и Polars проверяется отдельно.
+CI устанавливает пакет в чистом окружении Python 3.11 и 3.12 с extras
+`dev,reference`, выполняет `pip check`, проверку импортов, Ruff и полный pytest.
+Часовые пояса обеспечиваются явной зависимостью `tzdata`, в том числе на Windows.
+
 ## Быстрый старт
 
 ```python

@@ -87,5 +87,5 @@ ruff check . && pytest -q        # линтер и тесты
 
 - **requests** — ISS MOEX и cbr.ru; **lxml** — HTML-таблицы cbr.ru (ключевая ставка, RUONIA); **openpyxl** — Excel с числом акций
 - **polars**, **duckdb** ≥ 1.5 (с расширениями ducklake, postgres) — данные и хранилище
-- **pyarrow** — обмен данными DuckDB ↔ polars; **numpy** < 2 — совместимость со сборками пакетов окружения под NumPy 1.x
+- **pyarrow** ≥ 19, < 20 — проверенная линия обмена DuckDB ↔ polars для **numpy** ≥ 1.26, < 2; **polars** ≥ 1.44, < 2. Обновление основных версий требует отдельной проверки совместимости. CI проверяет чистые окружения Python 3.11/3.12, включая extra `reference`.
 - extras: `notebooks` — **marimo**, **plotly**; `dev` — **pytest**, **ruff**
