@@ -16,7 +16,7 @@ from urllib.parse import urlparse, parse_qs
 def review(sources, output):
     import pymupdf
 
-    originals, documents, captures, pages = {}, [], [], []
+    originals, documents, captures, pages, failures, capture_status = {}, [], [], [], [], []
     for source in sources:
         raw = Path(source).read_bytes()
         capture = json.loads(raw)
@@ -24,12 +24,17 @@ def review(sources, output):
         if capture.get("kind") != "ncc_clearing_browser_capture" or page.scheme != "https" or page.netloc != "www.nationalclearingcentre.ru":
             raise ValueError("Unexpected capture origin/schema")
         captures.append(raw)
+        capture_status.append(dict(source=Path(source).name, stopped=capture.get("stopped"),
+                                   document_link_count=capture.get("document_link_count"),
+                                   received_rows=len(capture["documents"])))
         for row in capture["documents"]:
-            if row.get("error"):
-                raise ValueError("Incomplete capture requires separate review")
             url = urlparse(row["url"])
             if url.scheme != "https" or url.netloc != page.netloc or url.path != "/connector" or parse_qs(url.query).get("cmd") != ["file"]:
                 raise ValueError("Unexpected document URL")
+            if row.get("error"):
+                failures.append({k: v for k, v in row.items() if k != "base64"} |
+                                dict(source_capture=len(captures)))
+                continue
             body = base64.b64decode(row["base64"], validate=True)
             sha = hashlib.sha256(body).hexdigest()
             if sha != row["sha256"] or not body.startswith(b"%PDF-"):
@@ -54,8 +59,11 @@ def review(sources, output):
         (out / f"capture-{i}.json").write_bytes(body)
     (out / "documents.json").write_text(json.dumps(documents, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "pages.json").write_text(json.dumps(pages, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "failures.json").write_text(json.dumps(failures, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out / "capture_status.json").write_text(json.dumps(capture_status, indent=2), encoding="utf-8")
     (out / "reviewer.py").write_bytes(Path(__file__).read_bytes())
     summary = dict(documents=len(originals), pages=len(pages), captures=len(captures),
+                   failed_downloads=len(failures), stopped_captures=sum(bool(c["stopped"]) for c in capture_status),
                    pages_without_text=sum(not p["text"].strip() for p in pages),
                    status="originals_validated_applicability_requires_review",
                    historical_archive_complete=False, settlement_calendar_received=False,

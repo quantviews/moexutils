@@ -42,37 +42,20 @@
       ["fetch", "xmlhttprequest"].includes(e.initiatorType) && /settle|calendar|\/rates\//i.test(e.name));
     const urls = [...new Set(resources.map(e => safeUrl(e.name)).filter(Boolean))];
     result.calendar_diagnostics.resource_urls = urls;
-    for (const url of urls.filter(u => new URL(u).origin === location.origin).slice(0, 10)) {
-      const row = {url, observed_at: new Date().toISOString()};
-      try {
-        const response = await fetch(url, {credentials: "same-origin"});
-        row.status = response.status;
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        row.content_type = response.headers.get("content-type");
-        const body = await response.arrayBuffer();
-        if (body.byteLength > 4 * 1024 * 1024) throw new Error("Response exceeds 4 MiB; not included");
-        row.sha256 = hex(await crypto.subtle.digest("SHA-256", body));
-        let binary = "";
-        const bytes = new Uint8Array(body);
-        for (let pos = 0; pos < bytes.length; pos += 8192) binary += String.fromCharCode(...bytes.subarray(pos, pos + 8192));
-        row.base64 = btoa(binary);
-      } catch (error) { row.error = String(error); }
-      result.calendar_diagnostics.responses.push(row);
-      if (row.status === 403 || row.status === 429) break;
-    }
+    // Diagnostics are synchronous: do not wait for calendar endpoints to respond.
     result.calendar_status = result.tables.length || result.calendar_diagnostics.grids.length
       ? "visible_data_pending_review" : "diagnostic_capture_not_calendar_data";
   } else if (!jobs.length) {
     result.warning = "No document links in DOM; expand archive using the page UI and repeat";
   }
   let total = 0;
-  for (const a of jobs) {
+  for (const a of (location.pathname === "/rates/settleDates" ? [] : jobs)) {
     let parent = a.parentElement;
     for (let i = 0; i < 3 && parent.parentElement && parent.innerText.length < 200; i++) parent = parent.parentElement;
     const row = {url: a.href, title: a.textContent.trim(), visible: visible(a),
       context: (parent.innerText || parent.textContent).slice(0, 16000), context_scope: "requires_manual_association"};
     try {
-      const response = await fetch(a.href, {credentials: "same-origin"});
+      const response = await fetch(a.href, {credentials: "same-origin", signal: AbortSignal.timeout(30000)});
       row.status = response.status;
       row.received_at = new Date().toISOString();
       row.content_type = response.headers.get("content-type");
@@ -95,8 +78,10 @@
     } catch (error) {
       row.error = String(error);
       result.documents.push(row);
-      result.stopped = row.error;
-      break;
+      if (![404, 410].includes(row.status)) {
+        result.stopped = row.error;
+        break;
+      }
     }
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
@@ -104,7 +89,11 @@
   const a = document.createElement("a");
   a.href = url;
   a.download = `ncc-clearing-${location.pathname.split("/").pop()}-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+  a.textContent = "Сохранить JSON НКЦ (если автоматическая загрузка не началась)";
+  a.style.cssText = "position:fixed;top:16px;left:16px;z-index:2147483647;background:white;color:blue;padding:20px;border:2px solid blue";
+  document.body.appendChild(a);
+  globalThis.nccCaptureResult = result;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  // Keep the download link available until the page is closed/reloaded.
   console.log("Save JSON to F:/moex-data/specifications/incoming. Document links present in DOM are included; calendar may contain diagnostics only.");
 })();
