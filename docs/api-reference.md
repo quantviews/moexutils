@@ -668,3 +668,24 @@ CLI: `python -m moexutils.futures_bundle --workers 4`; `--no-compare` отклю
 ## `foreign_reference` — зарубежные референсы
 
 `download(start=date(1970, 1, 1), end=None, output=None) -> Path` получает шесть явно заданных дневных рядов, сохраняет сырые ответы и происхождение. `read_reference(folder) -> pl.DataFrame` читает завершенный пакет версии 1 с проверкой SHA-256. Единицы исходника не конвертируются. CLI: `python -m moexutils.foreign_reference --end YYYY-MM-DD`. Не включен в ночной pipeline; синтетические котировки строятся в futures-analytics. [Источники, ограничения и примеры](foreign-reference.md).
+
+## Barchart — импорт, объединение и проверка покрытия
+
+Эти модули обслуживают ручные JSON/Parquet-пакеты вне DuckLake и ночного
+пайплайна. [Текущий пакет и команды](barchart-universe24.md).
+
+- `barchart_expansion.import_captures(sources, output, manifest)` импортирует
+  браузерные ответы одной кампании в новый каталог с исходниками и SHA-256.
+- `barchart_merge.merge_packages(packages, output, snapshot_end=None)` проверяет
+  входные контрольные суммы, объединяет непересекающиеся серии и сохраняет
+  происхождение. Пересечение символов отклоняется для явной сверки версий.
+  Для KC/OJ/TG добавляет месяц поставки из символа, проверяя существующее значение.
+  `snapshot_end` — метаданные ограничения потребителя, а не фильтр сырых баров.
+- `barchart_history_audit.read_package(folder)` возвращает `(frame, manifest)`
+  после проверки статуса и контрольных сумм. Нужна группа зависимостей `reference`.
+- `barchart_chain_audit.run(package, output, start, end)` проверяет выбор серии
+  по правилу 15-го числа месяца перед поставкой, не заменяя отсутствующую ближнюю
+  дальней. Сохраняет `coverage_dates.parquet`, `roll_marks.parquet`, `summary.json`
+  в новом каталоге. `end` задаётся явно; автоматического ограничения по manifest нет.
+  Отсутствие баров у всех соседей помечается `no_peer_session_unverified`.
+  Проверка не вычисляет доходность, не подтверждает официальный календарь и settlement.

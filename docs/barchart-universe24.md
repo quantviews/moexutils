@@ -126,6 +126,12 @@ KCZ26 и OJX26 заканчиваются 14.10.2026: до правой гран
 `snapshot_end=2026-10-05` из manifest; физически пакет ими не обрезан.
 Нулевые объёмы сохранены и не являются подтверждением исполнимости сделки.
 
+Объединение воспроизводится в новом каталоге:
+
+```powershell
+python -m moexutils.barchart_merge --packages F:/moex-data/reference/barchart/history-2020-2024-extended-20261014 F:/moex-data/reference/barchart/expansion-20261009 F:/moex-data/reference/barchart/universe24-bridge-20261015 --output F:/moex-data/reference/barchart/NEW_MERGED_PACKAGE --snapshot-end 2026-10-05
+```
+
 Повторение проверки (нужна зависимость `moexutils[reference]` и новый каталог):
 
 ```powershell
