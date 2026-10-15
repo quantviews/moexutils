@@ -11,10 +11,10 @@
       "path": "specifications/series-review-20261015"
     },
     "ncc_review": {
-      "path": "specifications/ncc-applicability-20261015"
+      "path": "specifications/ncc-applicability-20261015-v2"
     },
     "ncc_originals": {
-      "path": "specifications/ncc-review-20261015-archive"
+      "path": "specifications/ncc-review-20261015-expanded"
     },
     "moex_originals": {
       "path": "specifications/originals-20261015-all"

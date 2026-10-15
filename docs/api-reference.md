@@ -1,5 +1,10 @@
 # Справочник API
 
+`python -m moexutils.dividends_acceptance --project <dividends> --handoff <json>
+--output <новая папка>` — предварительная приёмка истории SBER/GAZP/LKOH:
+хеши, валидатор поставщика, целевое покрытие и примеры причинности.
+[Контракт и результат](dividends-acceptance.md).
+
 ## Версионируемые метаданные
 
 `moexutils.reference_metadata`: `build(config, data_root, destination=None)` создаёт

@@ -196,15 +196,21 @@
       "approved_date": "2024-10-31",
       "effective_from": "2024-12-09",
       "effective_to": "2025-03-23",
-      "body_evidence": "unavailable",
-      "sha256_prefix": null
+      "body_evidence": "local_original",
+      "sha256_prefix": "dea3273ce9af",
+      "reviewed_pdf_pages": [1, 62, 63, 64],
+      "review_scope": "Title and clauses 31.6–31.12; not a full edition audit",
+      "finding": "Delivery quantity is lot times contracts; equity rules determine settlement deadline. Nn/Yn depends on collateral method. Participant default/balancing trades are separate from ordinary settlement; no target-series lot/expiry change identified in reviewed clauses."
     },
     {
       "approved_date": "2025-02-11",
       "effective_from": "2025-03-24",
       "effective_to": "2025-06-22",
-      "body_evidence": "unavailable",
-      "sha256_prefix": null
+      "body_evidence": "local_original",
+      "sha256_prefix": "6558081a1b54",
+      "reviewed_pdf_pages": [1, 63, 64, 65],
+      "review_scope": "Title and clauses 31.6–31.12; not a full edition audit",
+      "finding": "Delivery quantity is lot times contracts; equity rules determine settlement deadline. Nn/Yn depends on collateral method. Participant default/balancing trades are separate from ordinary settlement; no target-series lot/expiry change identified in reviewed clauses."
     },
     {
       "approved_date": "2025-04-24",
