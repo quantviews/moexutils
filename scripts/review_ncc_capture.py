@@ -37,7 +37,9 @@ def review(sources, output):
             pdf = pymupdf.open(stream=body, filetype="pdf")
             if sha not in originals:
                 for number, pdf_page in enumerate(pdf, 1):
-                    pages.append(dict(document_sha256=sha, page=number, text=pdf_page.get_text()))
+                    text = pdf_page.get_text()
+                    pages.append(dict(document_sha256=sha, page=number, text=text,
+                                      requires_visual_review=not text.strip()))
             originals[sha] = body
             documents.append({k: v for k, v in row.items() if k != "base64"} | dict(
                 pages=len(pdf), source_capture=len(captures), artifact=f"documents/{sha}.pdf",
@@ -54,6 +56,7 @@ def review(sources, output):
     (out / "pages.json").write_text(json.dumps(pages, ensure_ascii=False, indent=2), encoding="utf-8")
     (out / "reviewer.py").write_bytes(Path(__file__).read_bytes())
     summary = dict(documents=len(originals), pages=len(pages), captures=len(captures),
+                   pages_without_text=sum(not p["text"].strip() for p in pages),
                    status="originals_validated_applicability_requires_review",
                    historical_archive_complete=False, settlement_calendar_received=False,
                    extractor="PyMuPDF " + pymupdf.VersionBind)
