@@ -689,3 +689,16 @@ CLI: `python -m moexutils.futures_bundle --workers 4`; `--no-compare` отклю
   в новом каталоге. `end` задаётся явно; автоматического ограничения по manifest нет.
   Отсутствие баров у всех соседей помечается `no_peer_session_unverified`.
   Проверка не вычисляет доходность, не подтверждает официальный календарь и settlement.
+
+## `spot_basis_audit` — спецификации и время CLOSE
+
+`export(output, start=date(2023, 1, 1), end=date(2026, 10, 5))` читает единый
+снимок DuckLake и сохраняет отдельный пакет наблюдений для SBRF/GAZR/LKOH.
+Каталог должен быть новым. Экспорт также запрашивает определения ISS и источники
+спецификаций, сохраняя ошибки явно; хранилище не изменяется.
+
+`read_package(folder) -> (tables, manifest)` проверяет SHA-256 всех артефактов
+и число строк, возвращает таблицы Polars. Не повышает частичный статус до полного.
+`timing_report(shares, futures)` разделяет режимы на границе 23.03.2026;
+`contract_coverage(contracts, descriptions, parameters)` не выводит периоды
+применимости из observed_at. [Результат и ограничения](spot-basis-data.md).
