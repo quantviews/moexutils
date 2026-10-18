@@ -11,6 +11,7 @@ from urllib.parse import quote
 import polars as pl
 
 from moexutils import iss, lake
+from moexutils import position_versions as versions
 
 logger = logging.getLogger('moexutils')
 TABLES = {'forts': 'futures_open_positions', 'options': 'options_open_positions'}
@@ -47,11 +48,18 @@ def fetch_assets(market, session=None):
             .rename({'asset_code': 'asset'}).with_columns(pl.lit(market).alias('market')))
 
 
-def fetch_positions(market, asset, start, end):
+def fetch_positions(market, asset, start, end, capture=None):
     """The ISS asset endpoint returns the complete requested range without a cursor."""
     with iss.make_session() as session:
-        frame = _block(session.get(f'{_url(market)}/{quote(asset, safe="")}.json',
-                                   params={'from': str(start), 'till': str(end)}), 'open_positions')
+        response = session.get(f'{_url(market)}/{quote(asset, safe="")}.json',
+                               params={'from': str(start), 'till': str(end)})
+        if capture is not None:
+            response.raise_for_status()
+            (capture/'response.json').write_bytes(response.content)
+            versions.save_json(capture/'observation.json', dict(url=response.url,
+                observed_at=dt.datetime.now(dt.timezone.utc).isoformat(), published_at=None,
+                start=start, end=end, asset=asset, market=market))
+        frame = _block(response, 'open_positions')
     if frame.is_empty():
         return frame
     required = {'tradedate', 'asset', 'is_fiz', *COUNTERS}
@@ -89,11 +97,12 @@ def diagnostics(market='forts', start=None, end=None):
             (pl.col('long') - pl.col('short')).alias('balance_difference'))
 
 
-def update(start=None, end=None, workers=4, force=False):
-    """Resumable 2025+ backfill; nightly refresh includes a seven-day overlap.
+def update(start=None, end=None, workers=4, force=False, assets=None, markets=None):
+    """Resumable backfill (default 2025+); refresh has a seven-day overlap.
 
     Each asset is checkpointed only after its complete range has been saved.
     Failures preserve successful assets and raise an ExceptionGroup.
+    All observations and row changes are archived outside DuckLake retention.
     """
     if not 1 <= workers <= 8:
         raise ValueError('workers must be 1..8')
@@ -101,7 +110,16 @@ def update(start=None, end=None, workers=4, force=False):
     end = dt.date.fromisoformat(str(end)[:10]) if end is not None else dt.date.today() - dt.timedelta(days=1)
     if first > end or end >= dt.date.today():
         raise ValueError('Require start <= end < today')
-    assets = pl.concat([fetch_assets(market) for market in TABLES])
+    markets = list(TABLES) if markets is None else list(markets)
+    if not markets or any(m not in TABLES for m in markets):
+        raise ValueError('Invalid markets')
+    wanted = [assets] if isinstance(assets, str) else assets
+    assets = pl.concat([fetch_assets(market) for market in markets])
+    if wanted is not None:
+        missing = set(wanted)-set(assets['asset'].to_list())
+        if missing:
+            raise ValueError(f'Unknown positions assets: {missing}')
+        assets = assets.filter(pl.col('asset').is_in(wanted))
     if assets.select('market', 'asset').null_count().sum_horizontal()[0]:
         raise ValueError('ISS: missing positions asset identity')
     tables = set(lake.tables())
@@ -121,36 +139,57 @@ def update(start=None, end=None, workers=4, force=False):
             begin = max(begin, done - dt.timedelta(days=6))
         jobs.append((row['market'], row['asset'], begin, till, name))
     written, deleted, completed, errors = 0, 0, 0, []
+    run = versions.new_run()
+    assets.write_parquet(run/'registry.parquet')
+    for market in markets:
+        if TABLES[market] in tables:
+            lake.query(f'SELECT * FROM lake.{TABLES[market]}').write_parquet(run/f'{market}-before.parquet')
+    captures = {}
+    for i, job in enumerate(jobs):
+        capture = run / f'observation-{i:04d}'
+        capture.mkdir()
+        captures[job[4]] = capture
     logger.info(f'[INFO] Open positions: {len(jobs)} pending assets')
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        pending = {pool.submit(fetch_positions, *job[:4]): job for job in jobs}
+        pending = {pool.submit(fetch_positions, *job[:4], capture=captures[job[4]]): job for job in jobs}
         for future in as_completed(pending):
             market, asset, begin, till, name = pending[future]
             try:
                 frame = future.result()
                 table = TABLES[market]
                 stale = None
+                old = frame.clear()
                 if table in lake.tables():
                     old = lake.query(f'SELECT * FROM lake.{table} WHERE asset=? AND date BETWEEN ? AND ?',
                                      [asset, begin, till])
                     if frame.is_empty() and old.height:
                         raise ValueError('ISS: unexpectedly empty previously populated positions range')
+                capture = captures[name]
+                old.write_parquet(capture/'before.parquet')
+                frame.write_parquet(capture/'after.parquet')
+                versions.save_json(capture/'changes.json', versions.changes(old, frame, lake.TABLE_KEYS[table]))
+                if table in tables:
                     if frame.height:
                         key = lake.TABLE_KEYS[table]
                         stale = old.select(key).join(frame.select(key), on=key, how='anti')
                         frame = lake.changed_rows(old, frame, lake.TABLE_KEYS[table])
                 written += lake.write(table, frame, delete=stale)
                 deleted += 0 if stale is None else stale.height
-                lake.write('load_state', pl.DataFrame({'name': [name], 'date': [till]}))
+                lake.write('load_state', pl.DataFrame({'name': [name], 'date': [max(till, state.get(name, till))]}))
+                versions.save_json(capture/'applied.json', dict(applied_at=dt.datetime.now(dt.timezone.utc).isoformat()))
                 completed += 1
                 if completed % 20 == 0 or completed == len(jobs):
                     logger.info(f'[INFO] Open positions: {completed}/{len(jobs)} assets, {written} rows, {deleted} deleted')
             except Exception as error:
                 logger.warning(f'[WARN] Open positions {market}/{asset}: {error}')
                 errors.append(error)
+    for market in markets:
+        if TABLES[market] in lake.tables():
+            lake.query(f'SELECT * FROM lake.{TABLES[market]}').write_parquet(run/f'{market}-snapshot.parquet')
+    versions.finish(run, errors)
     if errors:
         raise ExceptionGroup('Open positions incomplete; rerun to resume', errors)
-    return {'assets_processed': completed, 'rows_written': written, 'rows_deleted': deleted}
+    return {'assets_processed': completed, 'rows_written': written, 'rows_deleted': deleted, 'version_path': str(run)}
 
 
 def read(market='forts', assets=None, start=None, end=None, is_fiz=None, as_of=None):

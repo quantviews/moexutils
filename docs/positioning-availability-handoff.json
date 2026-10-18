@@ -1,0 +1,16 @@
+{
+  "package": "F:/moex-data/reports/positioning-availability-20261016-v2",
+  "manifest_sha256": "1fdfde30ff8291358e8cb48a9f9d485ed5390795a809eec90bf6555756af95b9",
+  "status": "audited_with_publication_and_historical_membership_unknowns",
+  "universe_assets": 24,
+  "pre2025_source_history_confirmed": 21,
+  "orange_missing_group_dates_reproduced": 12,
+  "orange_source_comparison_rows": 662,
+  "orange_differences": 0,
+  "daily_snapshot_comparisons": 12,
+  "existing_row_revisions_observed": 0,
+  "contract_oi_checks": 69,
+  "contract_oi_matches": 69,
+  "two_session_lag_historically_guaranteed": false,
+  "backfill_performed": false
+}

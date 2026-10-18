@@ -269,10 +269,16 @@ history.read_securities(dataset='bonds', as_of=None) -> pl.DataFrame
 
 ```python
 from moexutils import openpositions
-openpositions.update(start=None, end=None, workers=4, force=False) -> dict
+openpositions.update(start=None, end=None, workers=4, force=False, assets=None, markets=None) -> dict
 openpositions.read(market='forts', assets=None, start=None, end=None, is_fiz=None, as_of=None) -> pl.DataFrame
 openpositions.diagnostics(market='forts', start=None, end=None) -> pl.DataFrame
 ```
+
+Для `update` фильтр `assets` принимает строку или список кодов, `markets` —
+список `['forts']`, `['options']` или оба рынка (по умолчанию).
+Каждый запуск сохраняет постоянные ответы, снимки и журнал изменений;
+возвращаемый `version_path` указывает каталог версии вне срока хранения DuckLake.
+Подробности и результат дозагрузки universe24: [история позиционирования](positioning-history.md).
 
 Первичная загрузка: `openpositions.update('2025-01-01', '2026-09-30', workers=8)` или `python update_data.py --history-init open_positions --history-start 2025-01-01`. По умолчанию — с 01.01.2025 по вчерашний день, 1–8 сетевых потоков, записи последовательные. Действующие и архивные активы определяются справочником ISS; каждый актив сохраняется целиком и получает отметку прогресса. Повторный запуск пропускает завершенные активы, ошибки возвращаются после сохранения успешных. `force=True` перечитывает заданный диапазон (в том числе для расширения истории назад). Записываются только изменения. В перечитанном диапазоне удаляются группы и классы, отсутствующие в полной выдаче; история вне диапазона сохраняется. Неожиданно пустая выдача для ранее заполненного диапазона вызывает ошибку без удаления данных и продвижения отметки.
 

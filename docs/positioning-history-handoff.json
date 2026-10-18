@@ -1,0 +1,17 @@
+{
+  "package": "F:/moex-data/reports/positioning-universe24-backfill-20261018-v2",
+  "manifest_sha256": "2d2be53dd968a82af9d148dacd3b0a1535d2054576e3b3896fc843b8774ae133",
+  "verified_files": 158,
+  "assets": 24,
+  "rows": 91962,
+  "first_date": "2012-10-01",
+  "last_date": "2026-10-16",
+  "inserted": 70672,
+  "updated": 0,
+  "deleted": 0,
+  "incomplete_asset_dates": 576,
+  "null_asset_dates": 1,
+  "historical_publication_times_known": false,
+  "permanent_local_versions_since": "2026-10-18",
+  "documentation": "docs/positioning-history.md"
+}

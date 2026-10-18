@@ -1,4 +1,7 @@
 import datetime as dt
+import hashlib
+import json
+from pathlib import Path
 
 import polars as pl
 import pytest
@@ -6,6 +9,11 @@ import pytest
 from moexutils import lake, openpositions as oi
 
 DAY = dt.date(2025, 1, 3)
+
+
+@pytest.fixture(autouse=True)
+def archive_root(tmp_path, monkeypatch):
+    monkeypatch.setattr(lake, 'DATA_ROOT', str(tmp_path))
 
 
 @pytest.fixture
@@ -34,7 +42,7 @@ def test_backfill_resume_and_read_filters(env, monkeypatch):
     monkeypatch.setattr(oi, 'fetch_assets', assets)
     calls = []
 
-    def fetch(market, asset, start, end):
+    def fetch(market, asset, start, end, **kwargs):
         calls.append(market)
         return frame(market)
 
@@ -51,7 +59,7 @@ def test_backfill_resume_and_read_filters(env, monkeypatch):
 def test_failure_does_not_checkpoint_failed_asset(env, monkeypatch):
     monkeypatch.setattr(oi, 'fetch_assets', assets)
 
-    def fetch(market, *args):
+    def fetch(market, *args, **kwargs):
         if market == 'options':
             raise ConnectionError('ISS failed')
         return frame(market)
@@ -61,7 +69,7 @@ def test_failure_does_not_checkpoint_failed_asset(env, monkeypatch):
         oi.update(DAY, DAY)
     state = lake.query('SELECT name FROM lake.load_state')['name'].to_list()
     assert state == ['futures_open_positions:A']
-    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args: frame(market))
+    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args, **kwargs: frame(market))
     assert oi.update(DAY, DAY)['assets_processed'] == 1
 
 
@@ -101,7 +109,7 @@ def test_nightly_hook(monkeypatch):
     import update_data
     calls = []
     monkeypatch.setattr(update_data, '_lake_tables', lambda warnings: ['open_position_assets'])
-    monkeypatch.setattr(update_data, '_update_dataset', lambda *args: None)
+    monkeypatch.setattr(update_data, '_update_dataset', lambda *args, **kwargs: None)
     monkeypatch.setattr(update_data.openpositions, 'update', lambda: calls.append('oi'))
     assert update_data.main(do_update=False, do_indexes=False, do_bonds=False, do_key_rate=False,
                             do_futures=False, do_markets=True, do_rates=False,
@@ -112,11 +120,11 @@ def test_nightly_hook(monkeypatch):
 
 def test_refresh_removes_only_unpublished_groups_in_requested_scope(env, monkeypatch):
     monkeypatch.setattr(oi, 'fetch_assets', assets)
-    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args: frame(market))
+    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args, **kwargs: frame(market))
     oi.update(DAY, DAY)
     older = frame('forts').with_columns(pl.lit(DAY-dt.timedelta(days=1)).alias('date'))
     lake.write('futures_open_positions', older)
-    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args: frame(market).filter(pl.col('is_fiz')==1))
+    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args, **kwargs: frame(market).filter(pl.col('is_fiz')==1))
     assert oi.update(DAY, DAY, force=True)['rows_deleted'] == 2
     assert oi.read('forts', start=DAY).height == 1
     assert oi.read('forts', end=DAY-dt.timedelta(days=1)).height == 2
@@ -124,11 +132,30 @@ def test_refresh_removes_only_unpublished_groups_in_requested_scope(env, monkeyp
 
 def test_unexpected_empty_refresh_preserves_saved_data_and_checkpoint(env, monkeypatch):
     monkeypatch.setattr(oi, 'fetch_assets', assets)
-    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args: frame(market))
+    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args, **kwargs: frame(market))
     oi.update(DAY, DAY)
     before = lake.query('SELECT * FROM lake.load_state').sort('name')
-    monkeypatch.setattr(oi, 'fetch_positions', lambda *args: pl.DataFrame())
+    monkeypatch.setattr(oi, 'fetch_positions', lambda *args, **kwargs: pl.DataFrame())
     with pytest.raises(ExceptionGroup):
         oi.update(DAY, DAY, force=True)
     assert oi.read().height == 2
     assert lake.query('SELECT * FROM lake.load_state').sort('name').equals(before)
+
+
+def test_permanent_versions_keep_corrections_and_checkpoint(env, monkeypatch):
+    monkeypatch.setattr(oi, 'fetch_assets', assets)
+    monkeypatch.setattr(oi, 'fetch_positions', lambda market, *args, **kwargs: frame(market))
+    first = oi.update(DAY, DAY, markets=['forts'], assets=['A'])
+    future = DAY + dt.timedelta(days=10)
+    lake.write('load_state', pl.DataFrame({'name': ['futures_open_positions:A'], 'date': [future]}))
+    revised = frame('forts').filter(pl.col('is_fiz') == 1).with_columns(pl.lit(71, dtype=pl.Int64).alias('open_position_long'))
+    monkeypatch.setattr(oi, 'fetch_positions', lambda *args, **kwargs: revised)
+    second = oi.update(DAY, DAY, force=True, markets=['forts'], assets=['A'])
+    path = Path(second['version_path'])
+    journal = json.loads((path/'observation-0000/changes.json').read_text())
+    assert sorted(r['operation'] for r in journal) == ['delete', 'update']
+    assert pl.read_parquet(Path(first['version_path'])/'forts-snapshot.parquet').height == 2
+    assert lake.query('SELECT date FROM lake.load_state').item() == future
+    for name, expected in json.loads((path/'manifest.json').read_text())['artifacts'].items():
+        assert hashlib.sha256((path/name).read_bytes()).hexdigest() == expected
+    assert (path/'observation-0000/applied.json').exists()
