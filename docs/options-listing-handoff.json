@@ -1,0 +1,12 @@
+{
+  "package_path": "F:/moex-data/reports/options-listing-20261015-final",
+  "manifest_sha256": "36c41e213a3d7153e5ae52d80e147f02d7151df3d07bd42ee7ce53503f4b5f53",
+  "checked_at": "2026-10-15T15:28:22.934923+00:00",
+  "history_as_of": "2026-10-14",
+  "status": "research_with_limitations",
+  "priority": 1,
+  "files_verified": 121,
+  "historical_listing_complete": false,
+  "execution_ready": false,
+  "report": "docs/options-listing-result.md"
+}
