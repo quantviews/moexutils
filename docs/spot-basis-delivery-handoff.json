@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "package_path": "F:\\moex-data\\reports\\futures-analytics-spot-basis-20261015",
+  "manifest_sha256": "b77a895f18667a51b82822c852aa4c3edfd591ebab6e0119c8ba5adb04c62ba1",
+  "status": "accepted_with_limitations",
+  "snapshot_at": "2026-10-05T23:59:59.999999+03:00",
+  "history_complete": false,
+  "execution_ready": false,
+  "full_backtest_ready": false,
+  "report": "docs/spot-basis-delivery.md"
+}

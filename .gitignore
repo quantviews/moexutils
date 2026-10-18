@@ -24,3 +24,6 @@ futures/
 # сборка пакета
 *.egg-info/
 build/
+
+# Local GPB report exports (keep files outside version control)
+/.pdf-export-gpb/

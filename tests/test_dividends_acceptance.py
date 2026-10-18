@@ -3,7 +3,7 @@ import json
 import polars as pl
 import pytest
 
-from moexutils.dividends_acceptance import TARGETS, assess, audit, timestamp
+from moexutils.dividends_acceptance import TARGETS, assess, audit, timestamp, classify_issues
 
 
 def inputs():
@@ -46,3 +46,11 @@ def test_handoff_hash_mismatch_stops_before_import(tmp_path):
 def test_timezone_required():
     with pytest.raises(ValueError, match="Timezone"):
         timestamp("2023-03-17T14:35:00")
+
+
+def test_disclosed_gaps_do_not_override_real_errors():
+    issues = classify_issues([dict(check=c) for c in (
+        "coverage_not_complete", "missing_share_basis_date", "historical_evidence_missing",
+        "missing_actual_payment_date", "missing_causal_example", "identity",
+        "producer_not_ready", "unresolved_conflict", "causality_failed")])
+    assert [r["severity"] for r in issues] == ["limitation"] * 5 + ["blocking"] * 4

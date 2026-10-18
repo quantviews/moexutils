@@ -1,7 +1,7 @@
 """Read-only acceptance audit of a pinned dividends handoff for the spot-basis request.
 
 Uses the producer's schema/evidence validator; records its exact code hashes.
-Passing structural checks never overrides integration_ready=false or missing coverage.
+Passing structural checks never overrides integration_ready=false; disclosed gaps are limitations.
 """
 import argparse
 from datetime import datetime, timedelta
@@ -15,6 +15,11 @@ import polars as pl
 from .reference_metadata import sha256
 
 TARGETS = {"SBER": "RU0009029540", "GAZP": "RU0007661625", "LKOH": "RU0009024277"}
+BLOCKING_CHECKS = {"producer_not_ready", "identity", "unresolved_conflict", "causality_failed", "no_causal_examples"}
+
+
+def classify_issues(issues):
+    return [r | {"severity": "blocking" if r["check"] in BLOCKING_CHECKS else "limitation"} for r in issues]
 
 
 def timestamp(value):
@@ -25,7 +30,7 @@ def timestamp(value):
 
 
 def assess(handoff, securities, coverage, conflicts, events):
-    """Return explicit blocking issues; absent rows never imply no dividends."""
+    """Report errors and disclosed gaps separately; absent rows never imply no dividends."""
     issues = []
 
     def issue(ticker, check, detail):
@@ -117,6 +122,10 @@ def audit(project, handoff, output):
                 source_url=event["source_url"], sha256=event["sha256"]))
             if not passed:
                 issues.append(dict(ticker=ticker, check="causality_failed", detail=event["event_id"]))
+    if not examples:
+        issues.append(dict(ticker="ALL", check="no_causal_examples", detail="Original request requires real causal examples"))
+    issues = classify_issues(issues)
+    blockers = [r for r in issues if r["severity"] == "blocking"]
     output.mkdir(parents=True, exist_ok=False)
     for name, f in subset.items():
         f.write_parquet(output / (name + ".parquet"))
@@ -129,7 +138,10 @@ def audit(project, handoff, output):
     (output / "input_manifest.json").write_bytes((package / "manifest.json").read_bytes())
     (output / "auditor.py").write_bytes(Path(__file__).read_bytes())
     summary = dict(package_id=transfer["package_id"], package_path=str(package),
-        manifest_sha256=transfer["manifest_sha256"], target_acceptance_complete=not issues,
+        manifest_sha256=transfer["manifest_sha256"], target_acceptance_complete=not blockers,
+        acceptance_policy="original_request_disclosed_gaps_v2",
+        acceptance_status="blocked" if blockers else "accepted_with_limitations" if issues else "accepted",
+        history_complete=False, blocking_count=len(blockers), limitation_count=len(issues)-len(blockers),
         integration_ready=transfer.get("integration_ready") is True,
         issue_count=len(issues), public_as_of_rows=selected.height,
         strict_counts={t: selected.filter(pl.col("ticker") == t).height for t in TARGETS},
@@ -137,7 +149,7 @@ def audit(project, handoff, output):
         scope="SBER/GAZP/LKOH 2023-01-01..2026-10-05; exports retain earlier/later history",
         producer_code_sha256={p.name: sha256(p) for p in (project / "dividend_events").glob("*.py")},
         limitations=["Producer validation proves structural/evidence consistency, not completeness or parser correctness",
-                     "No automatic acceptance while target coverage is partial",
+                     "Acceptance permits disclosed gaps; it does not assert complete history or execution readiness",
                      "No ex-date/last-buy derivation or share-basis normalization in this preflight",
                      "Raw documents remain in the pinned producer package; this is an audit, not a replacement data package"])
     (output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

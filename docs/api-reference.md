@@ -1,5 +1,10 @@
 # Справочник API
 
+`moexutils.spot_basis_delivery.read_dividends(package, at)` — причинное чтение
+проверенного пакета, at с часовым поясом, не позднее закреплённого снимка.
+`python -m moexutils.spot_basis_delivery --help` — сборка поставки из проверенных
+входов. [Контракт пакета](spot-basis-delivery.md).
+
 `python -m moexutils.dividends_acceptance --project <dividends> --handoff <json>
 --output <новая папка>` — предварительная приёмка истории SBER/GAZP/LKOH:
 хеши, валидатор поставщика, целевое покрытие и примеры причинности.
