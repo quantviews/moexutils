@@ -1,0 +1,9 @@
+{
+  "package": "F:/moex-data/reports/cny-cash-ncc-accepted-20261015",
+  "manifest_sha256": "83e955062b567f5f1367b387060e36b0941f9b2b556b75f6cbacd1a47d3a110b",
+  "status": "NCC_originals_accepted_other_gaps_remain",
+  "originals_verified": 3,
+  "replaces_initial_package": false,
+  "base_package": "F:/moex-data/reports/cny-cash-audit-20261015",
+  "coefficient_supplement": "F:/moex-data/reports/cny-cash-followup-20261015-v1"
+}

@@ -1,0 +1,8 @@
+{
+  "package": "F:\\moex-data\\reports\\cny-cash-followup-20261015-v1",
+  "manifest_sha256": "db60cf11fab24640a5c62ba5cc2aa07212dd8e8778ee02e3b7d9e6b5ad8f72bd",
+  "status": "partial_followup",
+  "replaces_initial_package": false,
+  "confirmed_opening_fees": 0,
+  "coefficients_found": 8
+}

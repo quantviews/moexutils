@@ -1,0 +1,11 @@
+{
+  "package": "F:/moex-data/reports/cny-cash-confirmed-rules-20261015",
+  "manifest_sha256": "62e513402f042eee3d5bf91e9e61a082fb3c784771e92570f25860b4e3299e27",
+  "status": "rule_confirmed_premium_and_calendar_PriceRub_missing",
+  "premium_inputs_confirmed_by_methodology": 8,
+  "planned_settlement_dates": 4,
+  "historical_PriceRub_confirmed": 0,
+  "exact_opening_fees_confirmed": 0,
+  "actual_cash_events_confirmed": 0,
+  "original_packages_preserved": true
+}

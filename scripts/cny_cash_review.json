@@ -1,0 +1,56 @@
+{
+  "reviewed_on": "2026-10-15",
+  "specification": {
+    "source_id": "spec.docx",
+    "approved": "2026-03-12",
+    "order": "МБ-П-2026-893",
+    "valid_from": "2026-03-23",
+    "valid_to": null,
+    "applicability_source": "https://www.moex.com/ru/documents/25666",
+    "sections": ["2.1.2", "2.2.2", "2.2.3", "2.2.4", "2.2.5", "Приложение 1, CNY"],
+    "multiplier": 100,
+    "lot_coeff": 1,
+    "minstep": "0.001",
+    "stepprice": "0.1",
+    "fixing": "CNYFIXME",
+    "end_of_trading": "14:00:00+03:00",
+    "rounding": "Mathematical rounding: W/R to five decimals, cash per contract to two decimals"
+  },
+  "fixing_method": {
+    "source_id": "fixing-method.docx",
+    "valid_from": "2026-03-23",
+    "applicability_source": "https://www.moex.com/ru/documents/3971",
+    "reference_time": "12:30:00+03:00",
+    "observation_window": "12:15:01–12:30:00 Moscow",
+    "historical_actual_publication_timestamp": null
+  },
+  "exchange_tariff": {
+    "source_id": "moex-march.docx",
+    "valid_from": "2026-03-23",
+    "valid_to": "2026-09-07",
+    "sections": ["III.3.3", "III.3.4"],
+    "taker_rate_percent": "0.69",
+    "negotiated_rate_percent": "0.23",
+    "taker_cap_percent": "0.006",
+    "negotiated_cap_percent": "0.002",
+    "minimum_rubles": "0.01",
+    "maker": "Included in participant subscription; do not assign an unverified zero customer fee"
+  },
+  "ncc_tariffs": [
+    {"source_id":"ncc-march.pdf", "valid_from":"2026-03-23", "valid_to":"2026-05-31", "published_at":"2026-03-17T18:00:00+03:00", "reviewed_pages":"52–54,57–58", "original_saved":false},
+    {"source_id":"ncc-june.pdf", "valid_from":"2026-06-01", "valid_to":"2026-06-30", "published_at":"2026-05-27T17:00:00+03:00", "reviewed_pages":"57–58", "original_saved":false},
+    {"source_id":"ncc-july.pdf", "valid_from":"2026-07-01", "valid_to":"2026-09-20", "published_at":"2026-06-24T13:00:00+03:00", "reviewed_pages":"52–54,57–58", "original_saved":false}
+  ],
+  "ncc_review": {
+    "applicability_source":"https://www.nationalclearingcentre.ru/catalog/0204/106",
+    "evidence":"Official PDF text read through web reader; direct download HTTP 403. Review notes are not original PDF copies.",
+    "opening":"Section V.6: min(cap, rounded theoretical premium times rate), rounded to kopecks; minimum 0.01 RUB, category A excluded.",
+    "taker_rate_percent":"0.51",
+    "negotiated_rate_percent":"0.17",
+    "taker_cap_percent":"0.006",
+    "negotiated_cap_percent":"0.002",
+    "maker":"V.7: participant quarterly charge 1000 RUB, category A exception; allocation to client unknown.",
+    "exercise":"V.11: rounded absolute strike times rounded W/R times 0.004%, rounded to kopecks; minimum 0.01 RUB, category A excluded.",
+    "otm":"No exercise obligation under specification; zero standard exercise fee is a rule-derived inference, not an invoice observation."
+  }
+}

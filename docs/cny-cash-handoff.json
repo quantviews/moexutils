@@ -1,0 +1,11 @@
+{
+  "package_path": "F:/moex-data/reports/cny-cash-audit-20261015",
+  "manifest_sha256": "e33291c28c66cdbfbb9075bc684c62b84cd7415114e9bfa358803e6a35d6aecb",
+  "observed_at": "2026-10-15T16:33:02.644619+00:00",
+  "consumer_as_of": "2026-10-14",
+  "status": "partial_cash_acceptance",
+  "spec_and_fixing_confirmed": true,
+  "opening_fees_confirmed": false,
+  "execution_ready": false,
+  "report": "docs/cny-cash-audit.md"
+}
