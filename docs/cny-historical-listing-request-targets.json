@@ -1,0 +1,377 @@
+{
+  "prepared_on": "2026-10-19",
+  "sent": false,
+  "source_manifest_sha256": "36c41e213a3d7153e5ae52d80e147f02d7151df3d07bd42ee7ce53503f4b5f53",
+  "source_files_sha256": {
+    "consumer_coverage.json": "76a377d4456fe8318cf5e16b61035d88a2ed4b190c885116e5c0036bbd980930",
+    "listing_matrix.parquet": "736e12f6f2cdc90655056372cd18f536b178dcc640c6639019ea751cb3f85bc0"
+  },
+  "series_queries": [
+    {
+      "signal_date": "2025-01-03",
+      "expiry_from": "2025-01-31",
+      "expiry_to": "2025-02-14",
+      "candidates": [
+        {
+          "series_name": "CNYP060225XE",
+          "expiry": "2025-02-06",
+          "declared_series_start_date": "2025-01-22"
+        },
+        {
+          "series_name": "CNYP130225XE",
+          "expiry": "2025-02-13",
+          "declared_series_start_date": "2025-01-29"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-02-03",
+      "expiry_from": "2025-03-03",
+      "expiry_to": "2025-03-17",
+      "candidates": [
+        {
+          "series_name": "CNYP060325XE",
+          "expiry": "2025-03-06",
+          "declared_series_start_date": "2025-02-12"
+        },
+        {
+          "series_name": "CNYP130325XE",
+          "expiry": "2025-03-13",
+          "declared_series_start_date": "2025-02-26"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-03-03",
+      "expiry_from": "2025-03-31",
+      "expiry_to": "2025-04-14",
+      "candidates": [
+        {
+          "series_name": "CNYP030425XE",
+          "expiry": "2025-04-03",
+          "declared_series_start_date": "2025-03-12"
+        },
+        {
+          "series_name": "CNYP100425XE",
+          "expiry": "2025-04-10",
+          "declared_series_start_date": "2025-03-26"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-04-01",
+      "expiry_from": "2025-04-29",
+      "expiry_to": "2025-05-13",
+      "candidates": [
+        {
+          "series_name": "CNYP300425XE",
+          "expiry": "2025-04-30",
+          "declared_series_start_date": "2025-04-09"
+        },
+        {
+          "series_name": "CNYP080525XE",
+          "expiry": "2025-05-08",
+          "declared_series_start_date": "2025-04-23"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-05-02",
+      "expiry_from": "2025-05-30",
+      "expiry_to": "2025-06-13",
+      "candidates": [
+        {
+          "series_name": "CNYP050625XE",
+          "expiry": "2025-06-05",
+          "declared_series_start_date": "2025-05-21"
+        },
+        {
+          "series_name": "CNYP110625XE",
+          "expiry": "2025-06-11",
+          "declared_series_start_date": "2025-05-28"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-06-02",
+      "expiry_from": "2025-06-30",
+      "expiry_to": "2025-07-14",
+      "candidates": [
+        {
+          "series_name": "CNYP030725XE",
+          "expiry": "2025-07-03",
+          "declared_series_start_date": "2025-06-10"
+        },
+        {
+          "series_name": "CNYP100725XE",
+          "expiry": "2025-07-10",
+          "declared_series_start_date": "2025-06-25"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-07-01",
+      "expiry_from": "2025-07-29",
+      "expiry_to": "2025-08-12",
+      "candidates": [
+        {
+          "series_name": "CNYP310725XE",
+          "expiry": "2025-07-31",
+          "declared_series_start_date": "2025-07-09"
+        },
+        {
+          "series_name": "CNYP070825XE",
+          "expiry": "2025-08-07",
+          "declared_series_start_date": "2025-07-23"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-08-01",
+      "expiry_from": "2025-08-29",
+      "expiry_to": "2025-09-12",
+      "candidates": [
+        {
+          "series_name": "CNYP040925XE",
+          "expiry": "2025-09-04",
+          "declared_series_start_date": "2025-08-13"
+        },
+        {
+          "series_name": "CNYP110925XE",
+          "expiry": "2025-09-11",
+          "declared_series_start_date": "2025-08-27"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-09-01",
+      "expiry_from": "2025-09-29",
+      "expiry_to": "2025-10-13",
+      "candidates": [
+        {
+          "series_name": "CNYP021025XE",
+          "expiry": "2025-10-02",
+          "declared_series_start_date": "2025-09-10"
+        },
+        {
+          "series_name": "CNYP091025XE",
+          "expiry": "2025-10-09",
+          "declared_series_start_date": "2025-09-24"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-10-01",
+      "expiry_from": "2025-10-29",
+      "expiry_to": "2025-11-12",
+      "candidates": [
+        {
+          "series_name": "CNYP301025XE",
+          "expiry": "2025-10-30",
+          "declared_series_start_date": "2025-10-08"
+        },
+        {
+          "series_name": "CNYP061125XE",
+          "expiry": "2025-11-06",
+          "declared_series_start_date": "2025-10-22"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-11-01",
+      "expiry_from": "2025-11-29",
+      "expiry_to": "2025-12-13",
+      "candidates": [
+        {
+          "series_name": "CNYP041225XE",
+          "expiry": "2025-12-04",
+          "declared_series_start_date": "2025-11-12"
+        },
+        {
+          "series_name": "CNYP111225XE",
+          "expiry": "2025-12-11",
+          "declared_series_start_date": "2025-11-26"
+        }
+      ]
+    },
+    {
+      "signal_date": "2025-12-01",
+      "expiry_from": "2025-12-29",
+      "expiry_to": "2026-01-12",
+      "candidates": [
+        {
+          "series_name": "CNYP301225XE",
+          "expiry": "2025-12-30",
+          "declared_series_start_date": "2025-12-10"
+        },
+        {
+          "series_name": "CNYP080126XE",
+          "expiry": "2026-01-08",
+          "declared_series_start_date": "2025-12-24"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-01-05",
+      "expiry_from": "2026-02-02",
+      "expiry_to": "2026-02-16",
+      "candidates": [
+        {
+          "series_name": "CNYP050226XE",
+          "expiry": "2026-02-05",
+          "declared_series_start_date": "2026-01-21"
+        },
+        {
+          "series_name": "CNYP120226XE",
+          "expiry": "2026-02-12",
+          "declared_series_start_date": "2026-01-28"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-02-02",
+      "expiry_from": "2026-03-02",
+      "expiry_to": "2026-03-16",
+      "candidates": [
+        {
+          "series_name": "CNYP050326XE",
+          "expiry": "2026-03-05",
+          "declared_series_start_date": "2026-02-11"
+        },
+        {
+          "series_name": "CNYP120326XE",
+          "expiry": "2026-03-12",
+          "declared_series_start_date": "2026-02-25"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-03-02",
+      "expiry_from": "2026-03-30",
+      "expiry_to": "2026-04-13",
+      "candidates": [
+        {
+          "series_name": "CNYP020426XE",
+          "expiry": "2026-04-02",
+          "declared_series_start_date": "2026-03-11"
+        },
+        {
+          "series_name": "CNYP090426XE",
+          "expiry": "2026-04-09",
+          "declared_series_start_date": "2026-03-25"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-04-01",
+      "expiry_from": "2026-04-29",
+      "expiry_to": "2026-05-13",
+      "candidates": [
+        {
+          "series_name": "CNYP300426XE",
+          "expiry": "2026-04-30",
+          "declared_series_start_date": "2026-04-08"
+        },
+        {
+          "series_name": "CNYP070526XE",
+          "expiry": "2026-05-07",
+          "declared_series_start_date": "2026-04-22"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-05-04",
+      "expiry_from": "2026-06-01",
+      "expiry_to": "2026-06-15",
+      "candidates": [
+        {
+          "series_name": "CNYP040626XE",
+          "expiry": "2026-06-04",
+          "declared_series_start_date": "2026-05-13"
+        },
+        {
+          "series_name": "CNYP110626XE",
+          "expiry": "2026-06-11",
+          "declared_series_start_date": "2026-05-27"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-06-01",
+      "expiry_from": "2026-06-29",
+      "expiry_to": "2026-07-13",
+      "candidates": [
+        {
+          "series_name": "CNYP020726XE",
+          "expiry": "2026-07-02",
+          "declared_series_start_date": "2026-06-10"
+        },
+        {
+          "series_name": "CNYP090726XE",
+          "expiry": "2026-07-09",
+          "declared_series_start_date": "2026-06-24"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-07-01",
+      "expiry_from": "2026-07-29",
+      "expiry_to": "2026-08-12",
+      "candidates": [
+        {
+          "series_name": "CNYP300726XE",
+          "expiry": "2026-07-30",
+          "declared_series_start_date": "2026-07-08"
+        },
+        {
+          "series_name": "CNYP060826XE",
+          "expiry": "2026-08-06",
+          "declared_series_start_date": "2026-07-22"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-08-03",
+      "expiry_from": "2026-08-31",
+      "expiry_to": "2026-09-14",
+      "candidates": [
+        {
+          "series_name": "CNYP030926XE",
+          "expiry": "2026-09-03",
+          "declared_series_start_date": "2026-08-12"
+        },
+        {
+          "series_name": "CNYP100926XE",
+          "expiry": "2026-09-10",
+          "declared_series_start_date": "2026-08-26"
+        }
+      ]
+    },
+    {
+      "signal_date": "2026-09-01",
+      "expiry_from": "2026-09-29",
+      "expiry_to": "2026-10-13",
+      "candidates": [
+        {
+          "series_name": "CNYP011026XE",
+          "expiry": "2026-10-01",
+          "declared_series_start_date": "2026-09-09"
+        },
+        {
+          "series_name": "CNYP081026XE",
+          "expiry": "2026-10-08",
+          "declared_series_start_date": "2026-09-09"
+        }
+      ]
+    }
+  ],
+  "strike_query": {
+    "signal_date": "2026-10-01",
+    "series_name": "CNYP051126XE",
+    "expiry": "2026-11-05",
+    "put_strike_max": "11.4961382",
+    "call_strike_min": "13.4051447",
+    "history_cutoff": "2026-10-14",
+    "intraday_changes_requested": true
+  }
+}
