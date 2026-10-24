@@ -1,0 +1,22 @@
+{
+  "package": "F:/moex-data/reports/mxi-monitor-start-20261024",
+  "manifest_sha256": "3ac6afcb6de9275dedad9ddf503362644a8f9d40907c1b49cbf988e41e157ee0",
+  "verified_files": 35,
+  "monitoring_root": "F:/moex-data/observations/mxi-20261024",
+  "started_at": "2026-10-24T12:01:57.683489+00:00",
+  "ends_at": "2026-11-23T12:01:57.683489+00:00",
+  "task_name": "MOEX MXI observations 30d",
+  "task_logon_type": "Interactive",
+  "requires_user_signed_in": true,
+  "first_scheduler_run": "2026-10-24T15:11:28+03:00",
+  "first_scheduler_exit_code": 0,
+  "bootstrap_rows": 3090,
+  "position_request_limit": 425,
+  "separate_market_data_request_limit": 30,
+  "forward_pointer": "F:/moex-data/reports/mxi-forward-input/latest.json",
+  "forward_status": "F:/moex-data/reports/mxi-forward-input/status.json",
+  "ready_on_start": false,
+  "next_possible_session": "2026-10-26",
+  "historical_publication_proven": false,
+  "questions_sent": false
+}

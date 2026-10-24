@@ -10,6 +10,7 @@
   "deletes": 0,
   "physical_sign_revisions": 0,
   "historical_publication_proven": false,
-  "monitoring_started": false,
+  "monitoring_started": true,
+  "monitoring_handoff": "docs/mxi-monitoring-handoff.json",
   "questions_sent": false
 }
