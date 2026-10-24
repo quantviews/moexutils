@@ -1,0 +1,15 @@
+{
+  "package": "F:\\moex-data\\reports\\mxi-publication-20261021-final-v2",
+  "manifest_sha256": "83e2b5673b5408fc86e0ff60e3dccedf9695424a8eac1c15dbbb025bc059d88c",
+  "verified_files": 96,
+  "source_observations": 7,
+  "table_snapshots_checked": 3196,
+  "snapshot_errors": 0,
+  "archived_copies_checked": 36,
+  "updates": 0,
+  "deletes": 0,
+  "physical_sign_revisions": 0,
+  "historical_publication_proven": false,
+  "monitoring_started": false,
+  "questions_sent": false
+}
