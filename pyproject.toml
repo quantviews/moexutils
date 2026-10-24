@@ -17,7 +17,8 @@ dependencies = [
     "openpyxl",
     "lxml",
     "numpy>=1.26,<2",
-    "duckdb>=1.5",
+    # DuckDB 2 removes the connection .pl() API used by the data layer.
+    "duckdb>=1.5,<2",
     "polars>=1.44,<2",
 ]
 

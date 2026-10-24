@@ -29,6 +29,7 @@ jobs:
         run: |
           python -m pip check
           python -c "import numpy, pyarrow, polars, duckdb; print({m.__name__: m.__version__ for m in (numpy, pyarrow, polars, duckdb)})"
+          python -c "import duckdb; con = duckdb.connect(); assert con.execute('SELECT 1 AS value').pl().item() == 1; con.close()"
           python -c "from zoneinfo import ZoneInfo, reset_tzpath; reset_tzpath([]); print([str(ZoneInfo(z)) for z in ('UTC', 'Europe/Moscow', 'America/New_York')])"
       - name: Lint
         run: ruff check .
