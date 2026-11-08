@@ -114,3 +114,5 @@ ruff check . && pytest -q        # линтер и тесты
 - **polars**, **duckdb** ≥ 1.5 и < 2 (с расширениями ducklake, postgres) — данные и хранилище. DuckDB 2 не поддерживается: код использует API соединения `.pl()`.
 - **pyarrow** ≥ 19, < 20 — проверенная линия обмена DuckDB ↔ polars для **numpy** ≥ 1.26, < 2; **polars** ≥ 1.44, < 2. Обновление основных версий требует отдельной проверки совместимости. CI проверяет чистые окружения Python 3.11/3.12, включая extra `reference`.
 - extras: `notebooks` — **marimo**, **plotly**; `dev` — **pytest**, **ruff**
+
+- [Приёмка BSPB/BSPBP за 1П 2026](dividends-bspb-acceptance.md) — официальные дополнения CSV и исправление дивидендного гэпа BSPB.
