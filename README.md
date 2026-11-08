@@ -107,7 +107,7 @@ python update_data.py          # полный цикл: акции → инде�
 python update_data.py --check  # только проверка данных за год
 ```
 
-На Windows — `update_data.bat` (сам находит нужный интерпретатор). Каждую ночь вт–сб в 00:30 задача планировщика `MOEX data nightly` запускает `scheduled_update.cmd`; пропущенный запуск догоняется после включения компьютера и входа в Windows; лог — `logs/update.log`, в конце — строка «Проверка данных: …». Сбой шага или новые замечания к данным — уведомление Windows; итоги прогонов — в таблице `lake.update_runs`, копии каталога хранилища — в `F:\moex-data\backups\catalog`.
+На Windows — `update_data.bat` (сам находит нужный интерпретатор). Каждую ночь вт–сб в 00:30 задача планировщика `MOEX data nightly` запускает `scheduled_update.cmd`; пропущенный запуск догоняется после включения компьютера (с 08.11.2026 — S4U, вход в Windows не требуется); лог — `logs/update.log`, в конце — строка «Проверка данных: …». Сбой шага или новые замечания к данным — уведомление Windows; итоги прогонов — в таблице `lake.update_runs`, копии каталога хранилища — в `F:\moex-data\backups\catalog`.
 
 ```powershell
 Start-ScheduledTask -TaskName 'MOEX data nightly'     # запустить вручную

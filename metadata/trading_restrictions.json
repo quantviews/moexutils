@@ -1,0 +1,11 @@
+[
+  {
+    "ticker": "PIKK",
+    "last_price_date": "2026-10-15",
+    "no_regular_prices_from": "2026-10-16",
+    "review_through": "2026-11-30",
+    "reviewed_on": "2026-11-08",
+    "reason": "Последний день стакана T+1 — 15.10.2026; с 20.10 торги приостановлены в связи с принудительным выкупом. В ISS за 16.10–06.11 CLOSE=null и NUMTRADES=0. Это не объявление делистинга.",
+    "sources": ["https://www.moex.com/n104027", "https://www.moex.com/n105083"]
+  }
+]

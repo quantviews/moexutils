@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import json
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -23,6 +25,19 @@ from moexutils import stocks
 logger = logging.getLogger("moexutils")
 
 ISSUE_SCHEMA = {'check': pl.Utf8, 'object': pl.Utf8, 'detail': pl.Utf8}
+
+
+def trading_restriction(ticker, last, as_of, path=None):
+    """Only classify a reviewed no-price interval; resumed prices revoke it."""
+    path = Path(path) if path else Path(stocks.BASE_DIR)/'metadata/trading_restrictions.json'
+    if not path.exists():
+        return None
+    for row in json.loads(path.read_text(encoding='utf-8')):
+        if (row['ticker'] == ticker and last == dt.date.fromisoformat(row['last_price_date'])
+                and dt.date.fromisoformat(row['no_regular_prices_from']) <= as_of
+                <= dt.date.fromisoformat(row['review_through'])):
+            return row['reason'] + ' Источники: ' + ', '.join(row['sources'])
+    return None
 
 
 def _returns(values: np.ndarray) -> np.ndarray:
@@ -235,7 +250,10 @@ def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = No
         dates = df['date'].to_list()
         last = dates[-1]
         lag = int((cal_arr > np.datetime64(last, 'D')).sum())
-        if lag >= 20:
+        restriction = trading_restriction(t, last, last_day) if lag else None
+        if restriction:
+            add('stock_trading_restricted', t, restriction)
+        elif lag >= 20:
             detail = (f"нет данных {lag} торговых дней (последняя дата {last:%Y-%m-%d}); "
                       f"если бумага снята с торгов — внесите в metadata/delisted.csv")
             if check_iss:
@@ -245,7 +263,7 @@ def data_quality_report(days: Optional[int] = 30, div_folder: Optional[str] = No
                     detail += f"; ISS недоступен ({e})"
             add('stock_stale', t, detail)
             continue
-        if lag > 0:
+        elif lag > 0:
             add('stock_stale', t, f"отстает на {lag} торг. дн. (последняя дата {last:%Y-%m-%d})")
 
         have = set(dates)
